@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "agent"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -3727,7 +3727,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-fs"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mcp-fs-core",
  "reqwest",
@@ -3738,7 +3738,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-fs-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "adobe-cmap-parser",
  "aes 0.8.4",
@@ -3814,7 +3814,6 @@ dependencies = [
  "tree-sitter-typescript",
  "unrar",
  "url",
- "utoipa",
  "utoipa-swagger-ui",
  "uuid",
  "weezl",
@@ -6474,7 +6473,6 @@ checksum = "d935f1c83fdf8b88f09bbe050d0cea78ea4afee6d7b0317403228c1200b2c8ab"
 dependencies = [
  "proc-macro2",
  "quote",
- "regex",
  "syn 3.0.6",
 ]
 

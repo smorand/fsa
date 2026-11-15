@@ -235,6 +235,19 @@ fn utoipa_and_swagger_ui_are_on_the_zip_9_majors() {
     assert!(utoipa.len() == 1 && utoipa[0].starts_with("6."), "utoipa: {utoipa:?}");
 }
 
+/// BL-0159: `utoipa` is only a transitive dependency of `utoipa-swagger-ui`;
+/// no manifest declares it directly, since no source uses it.
+#[test]
+fn utoipa_is_not_a_direct_dependency() {
+    for file in ["Cargo.toml", "crates/core/Cargo.toml"] {
+        let raw = fs::read_to_string(repo_root().join(file)).expect(file);
+        assert!(
+            !raw.lines().any(|l| l.trim_start().starts_with("utoipa =")),
+            "{file} still declares utoipa directly"
+        );
+    }
+}
+
 fn rust_and_doc_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in fs::read_dir(dir).expect("read_dir").flatten() {
         let path = entry.path();

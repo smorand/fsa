@@ -82,7 +82,6 @@ base64 = { workspace = true }
 
 reqwest = { workspace = true }
 
-utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 
 clap = { workspace = true }
