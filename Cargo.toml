@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/mcp-fs", "crates/core", "crates/agent"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.94.1"
 license = "MIT"
@@ -110,8 +110,8 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 
 # ── openapi ────────────────────────────────────────────────────────────────────
-utoipa = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa = { version = "6", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "10", features = ["axum"] }
 
 # ── terminal ui (agent) ────────────────────────────────────────────────────────
 crossterm = "0.29"

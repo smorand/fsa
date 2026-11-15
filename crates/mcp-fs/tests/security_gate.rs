@@ -153,15 +153,7 @@ fn accepted_advisories_are_recorded_once_with_a_reason() {
     let mut ids: Vec<&str> =
         raw.lines().filter_map(|l| l.trim().strip_prefix('"')?.split('"').next()).collect();
     ids.sort_unstable();
-    let mut expected = [
-        "RUSTSEC-2023-0071",
-        "RUSTSEC-2026-0192",
-        "RUSTSEC-2026-0367",
-        "RUSTSEC-2026-0368",
-        "RUSTSEC-2026-0369",
-        "RUSTSEC-2026-0429",
-        "RUSTSEC-2026-0441",
-    ];
+    let mut expected = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0192", "RUSTSEC-2026-0441"];
     expected.sort_unstable();
     assert_eq!(ids, expected);
     for id in expected {
@@ -176,15 +168,13 @@ fn accepted_advisories_are_recorded_once_with_a_reason() {
     assert!(make.contains("\tcargo audit\n"));
 }
 
-/// SPEC-0036/DT-030: zip 9 is the only zip among normal dependencies; 3.0.0
-/// stays as a build dependency, read from the lockfile then the graph.
+/// SPEC-0036/DT-030, SPEC-0095/DR-002: zip 9 is the only zip in the lock and in
+/// the normal graph (utoipa-swagger-ui 10 builds with zip 9, no 3.0.0 is left).
 #[test]
 fn lockfile_and_graph_carry_zip_9_only_for_normal_dependencies() {
-    let mut zips = lock_packages("zip");
-    zips.sort_unstable();
-    assert_eq!(zips.len(), 2, "exactly two zip packages: {zips:?}");
-    assert_eq!(zips[0], "3.0.0", "{zips:?}");
-    assert!(zips[1].starts_with("9."), "zip must be 9.x, got {zips:?}");
+    let zips = lock_packages("zip");
+    assert_eq!(zips.len(), 1, "exactly one zip package: {zips:?}");
+    assert!(zips[0].starts_with("9."), "zip must be 9.x, got {zips:?}");
 
     let old = Command::new("cargo")
         .args(["tree", "-i", "zip@2.4.2", "--all-features"])
@@ -217,24 +207,32 @@ fn archive_rs_cites_no_zip_2_4_2_source() {
     assert!(!raw.contains("zip-2.4.2"), "stale zip-2.4.2 citation in archive.rs");
 }
 
-/// SPEC-0036/DT-036: the four zip ids stay accepted only for the build time
-/// zip 3.0.0 of utoipa-swagger-ui, tracked by BL-0059.
+/// SPEC-0095/DT-002: no zip advisory is accepted any more, and nothing points
+/// at BL-0059, which this change closed.
 #[test]
-fn zip_acceptances_name_the_build_time_copy() {
+fn no_zip_acceptance_is_left() {
     for file in [".cargo/audit.toml", "deny.toml"] {
         let raw = fs::read_to_string(repo_root().join(file)).expect(file);
-        assert!(!raw.contains("BL-0058"), "{file} still names BL-0058");
-        for id in
-            ["RUSTSEC-2026-0367", "RUSTSEC-2026-0368", "RUSTSEC-2026-0369", "RUSTSEC-2026-0429"]
-        {
-            let line =
-                raw.lines().find(|l| l.contains(id)).unwrap_or_else(|| panic!("{file} lacks {id}"));
-            assert!(
-                line.contains("utoipa-swagger-ui") && line.contains("BL-0059"),
-                "{file}: {line}"
-            );
+        for needle in [
+            "RUSTSEC-2026-0367",
+            "RUSTSEC-2026-0368",
+            "RUSTSEC-2026-0369",
+            "RUSTSEC-2026-0429",
+            "BL-0059",
+        ] {
+            assert!(!raw.contains(needle), "{file} still names {needle}");
         }
     }
+}
+
+/// SPEC-0095/DT-001: utoipa-swagger-ui is on 10.x (zip 9 as build dependency)
+/// and utoipa on 6.x, with no 5.x left beside it.
+#[test]
+fn utoipa_and_swagger_ui_are_on_the_zip_9_majors() {
+    let ui = lock_packages("utoipa-swagger-ui");
+    assert!(ui.len() == 1 && ui[0].starts_with("10."), "utoipa-swagger-ui: {ui:?}");
+    let utoipa = lock_packages("utoipa");
+    assert!(utoipa.len() == 1 && utoipa[0].starts_with("6."), "utoipa: {utoipa:?}");
 }
 
 fn rust_and_doc_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
