@@ -608,12 +608,155 @@ async fn e2e_0084_041_zip_over_the_remaining_storage_uncha() {
     assert!(!exists(&f, "/uploads/pack").await);
 }
 
+/// SPEC-0096/E2E-MOD-001 (was SPEC-0084/E2E-042): `.tbz2` is a bzip2 tar, no longer refused.
 #[tokio::test]
-async fn e2e_0084_042_tbz2_still_unsupported() {
+async fn e2e_0096_mod_001_tbz2_extracts() {
     let f = fixture().await;
     seed(&f, "/uploads/pack.tbz2", &bz2(&tar())).await;
     let v = extract(&f, "/uploads/pack.tbz2", None, false, None).await;
+    extracted_one_file(&v, "/uploads/pack");
+    assert_hello(&f).await;
+}
+
+#[tokio::test]
+async fn e2e_0096_001_tbz2_extracts() {
+    let f = fixture().await;
+    seed(&f, "/uploads/pack.tbz2", &bz2(&tar())).await;
+    let v = extract(&f, "/uploads/pack.tbz2", None, false, None).await;
+    extracted_one_file(&v, "/uploads/pack");
+    assert_hello(&f).await;
+}
+
+#[tokio::test]
+async fn e2e_0096_002_tbz_and_letter_case() {
+    let f = fixture().await;
+    for (path, dest) in [
+        ("/uploads/pack.tbz", "/uploads/pack"),
+        ("/u2/PACK.TBZ2", "/u2/PACK"),
+        ("/u3/Pack.Tbz", "/u3/Pack"),
+    ] {
+        seed(&f, path, &bz2(&tar())).await;
+        let v = extract(&f, path, None, false, None).await;
+        extracted_one_file(&v, dest);
+        let a = format!("{dest}/a.txt");
+        assert_eq!(read(&f, &a).await.as_deref(), Some(&b"hello"[..]), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn e2e_0096_003_explicit_destination() {
+    let f = fixture().await;
+    seed(&f, "/uploads/pack.tbz2", &bz2(&tar())).await;
+    let v = extract(&f, "/uploads/pack.tbz2", Some("/out/here"), false, None).await;
+    extracted_one_file(&v, "/out/here");
+    assert_eq!(read(&f, "/out/here/a.txt").await.as_deref(), Some(&b"hello"[..]));
+    assert!(!exists(&f, "/uploads/pack").await);
+}
+
+#[tokio::test]
+async fn e2e_0096_005_tbz2_bomb_against_the_session_allowance() {
+    let f = fixture_allowance(1000).await;
+    seed_bomb(&f, "/uploads/bomb.tbz2", bz2(&tar_bomb())).await;
+    held_reset();
+    let v = extract(&f, "/uploads/bomb.tbz2", None, false, None).await;
+    session_refusal(&v, 1000);
+    held_at_most(1_049_576);
+    assert!(!exists(&f, "/uploads/bomb").await);
+    let c = f.state.stores.client(super::archive_testkit::MOUNT).await.unwrap();
+    let w = crate::core::fs_ops::write_bytes(
+        &c,
+        &f.state.safety,
+        super::archive_testkit::OWNER,
+        super::archive_testkit::MOUNT,
+        "/uploads/small.bin",
+        &[7u8; 1000],
+        false,
+        true,
+    )
+    .await;
+    assert!(w.is_ok(), "{w:?}");
+}
+
+#[tokio::test]
+async fn e2e_0096_006_tbz_bomb_against_the_storage_limit() {
+    let f = fixture().await;
+    seed_bomb(&f, "/uploads/bomb.tbz", bz2(&tar_bomb())).await;
+    limit_remaining(&f, 1000).await;
+    held_reset();
+    let v = extract(&f, "/uploads/bomb.tbz", None, false, None).await;
+    project_refusal(&v);
+    held_at_most(1_049_576);
+    assert!(!exists(&f, "/uploads/bomb").await);
+    assert_eq!(remaining(&f).await, 1000);
+}
+
+#[tokio::test]
+async fn e2e_0096_007_junk_named_tbz2() {
+    let f = fixture().await;
+    seed(&f, "/uploads/junk.tbz2", b"this is not bzip two").await;
+    let v = extract(&f, "/uploads/junk.tbz2", None, false, None).await;
+    corrupt_refusal(&v, "tar.bz2");
+    assert!(!exists(&f, "/uploads/junk").await);
+}
+
+#[tokio::test]
+async fn e2e_0096_008_password_on_tbz2() {
+    let f = fixture().await;
+    seed(&f, "/uploads/pack.tbz2", &bz2(&tar())).await;
+    let v = extract(&f, "/uploads/pack.tbz2", None, false, Some("secret")).await;
     let e = v.as_ref().expect_err("refused");
-    assert_eq!(e.code, crate::errors::code::NOT_SUPPORTED, "{e:?}");
-    assert_eq!(e.message, "unsupported archive extension: '.tbz2'");
+    assert_eq!(e.code, crate::errors::code::INVALID_ARGUMENT, "{e:?}");
+    assert_eq!(e.message, "password is not applicable to this archive format");
+    assert!(!exists(&f, "/uploads/pack").await);
+}
+
+#[tokio::test]
+async fn e2e_0096_009_collision_on_tbz2() {
+    let f = fixture().await;
+    seed(&f, "/uploads/pack.tbz2", &bz2(&tar())).await;
+    seed(&f, "/uploads/pack/a.txt", b"old").await;
+    let v = extract(&f, "/uploads/pack.tbz2", None, false, None).await;
+    let e = v.as_ref().expect_err("refused");
+    assert_eq!(e.code, crate::errors::code::NO_CLOBBER, "{e:?}");
+    assert_eq!(
+        e.message,
+        "'/uploads/pack/a.txt' already exists; pass overwrite=true to replace it"
+    );
+    assert_eq!(read(&f, "/uploads/pack/a.txt").await.as_deref(), Some(&b"old"[..]));
+    let v = extract(&f, "/uploads/pack.tbz2", None, true, None).await;
+    assert_eq!(
+        v.as_ref().ok().map(|j| (&j["files_written"], &j["bytes_written"])),
+        Some((&json!(1), &json!(5))),
+        "{v:?}"
+    );
+    assert_hello(&f).await;
+}
+
+#[tokio::test]
+async fn e2e_0096_010_close_names_are_still_refused() {
+    let f = fixture().await;
+    for ext in [".tbz3", ".tb", ".tbz2x"] {
+        let path = format!("/uploads/pack{ext}");
+        seed(&f, &path, &bz2(&tar())).await;
+        let v = extract(&f, &path, None, false, None).await;
+        let e = v.as_ref().expect_err("refused");
+        assert_eq!(e.code, crate::errors::code::NOT_SUPPORTED, "{e:?}");
+        assert_eq!(e.message, format!("unsupported archive extension: '{ext}'"));
+        assert!(!exists(&f, "/uploads/pack").await, "{ext}");
+    }
+}
+
+#[tokio::test]
+async fn e2e_0096_011_other_bzip2_names_unchanged() {
+    let f = fixture().await;
+    seed(&f, "/uploads/pack.tar.bz2", &bz2(&tar())).await;
+    seed(&f, "/u2/PACK.TB2", &bz2(&tar())).await;
+    seed(&f, "/u3/note.txt.bz2", &bz2(b"hello")).await;
+    let v = extract(&f, "/uploads/pack.tar.bz2", None, false, None).await;
+    extracted_one_file(&v, "/uploads/pack");
+    let v = extract(&f, "/u2/PACK.TB2", None, false, None).await;
+    extracted_one_file(&v, "/u2/PACK");
+    let v = extract(&f, "/u3/note.txt.bz2", None, false, None).await;
+    assert!(v.is_ok(), "{v:?}");
+    assert_eq!(read(&f, "/u3/note.txt").await.as_deref(), Some(&b"hello"[..]));
 }

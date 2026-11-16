@@ -244,3 +244,4 @@
 | US-0242 | SPEC-0094 | keep the damage note on the stored text copy | US-0241 | 1 | landed |  |  |
 | US-0243 | SPEC-0094 | other formats and replaced files stay as they are, and the documentation | US-0242 | 2 | landed |  |  |
 | US-0244 | SPEC-0095 | bump utoipa-swagger-ui to 10 and drop the zip acceptances | main | 2 | landed |  |  |
+| US-0245 | SPEC-0096 | recognize .tbz2 and .tbz as bzip2 compressed tar archives | main | 2 | landed |  |  |

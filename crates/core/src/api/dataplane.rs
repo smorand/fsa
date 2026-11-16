@@ -3475,6 +3475,43 @@ mod tests {
         assert_eq!(c.read_bytes("/uploads/report/sub/b.txt").await.unwrap(), b"world");
     }
 
+    /// SPEC-0096/E2E-004: a `.tbz2` through the REST door answers like a `.tar.bz2`.
+    #[tokio::test]
+    async fn e2e_0096_004_tbz2_through_the_http_api() {
+        let h = Harness::new().await;
+        let c = h.state.stores.client(MOUNT).await.unwrap();
+        let tar_bz2 = {
+            let mut tar = Vec::new();
+            {
+                let mut b = tar::Builder::new(&mut tar);
+                let mut hd = tar::Header::new_gnu();
+                hd.set_path("a.txt").unwrap();
+                hd.set_size(5);
+                hd.set_cksum();
+                b.append(&hd, &b"hello"[..]).unwrap();
+                b.finish().unwrap();
+            }
+            let mut enc = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            std::io::Write::write_all(&mut enc, &tar).unwrap();
+            enc.finish().unwrap()
+        };
+        c.write_bytes_atomic("/uploads/pack.tbz2", &tar_bz2).await.unwrap();
+        c.write_bytes_atomic("/uploads/other.tar.bz2", &tar_bz2).await.unwrap();
+        let (s1, mut v1) =
+            h.post(&u("extract-archive"), json!({"path": "/uploads/pack.tbz2"})).await;
+        let (s2, mut v2) =
+            h.post(&u("extract-archive"), json!({"path": "/uploads/other.tar.bz2"})).await;
+        assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{v1} {v2}");
+        assert_eq!(v1["destination"], "/uploads/pack");
+        assert_eq!(v1["files_written"], 1);
+        assert_eq!(v1["bytes_written"], 5);
+        assert_eq!(v2["destination"], "/uploads/other");
+        v1["destination"] = json!(null);
+        v2["destination"] = json!(null);
+        assert_eq!(v1, v2);
+        assert_eq!(c.read_bytes("/uploads/pack/a.txt").await.unwrap(), b"hello");
+    }
+
     /// SPEC-0080/E2E-071: a missing `.rar` is the shared not found refusal through the
     /// REST door, whether or not the build has RAR support (the check runs first).
     #[tokio::test]

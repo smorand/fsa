@@ -291,7 +291,7 @@ is already stored in the project, with no download and re upload through the cli
 # -> {"destination": "/uploads/report", "files_written": 2, "dirs_created": 1, "bytes_written": 10}
 ```
 
-Formats, by extension: `.zip`, `.7z`, `.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`,
+Formats, by extension: `.zip`, `.7z`, `.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`/`.tbz2`/`.tbz`,
 `.tar.xz`/`.txz`, plus `.gz`, `.bz2` and `.xz`, plus `.rar` (RAR 4 and RAR 5,
 opt in cargo feature `rar`: build with `--features rar` or `--all-features`; without it `.rar` is
 refused as an unsupported extension). `.rar` is read by the `unrar` crate (MIT OR Apache-2.0), which
@@ -307,7 +307,7 @@ passwords) a wrong password reads as a cut archive instead. A bare gzip, bzip2 o
 members, bzip2 streams or xz streams are decoded as one stream, bytes after a bzip2 stream are
 refused as corrupt (an xz file accepts zero padding of a multiple of 4 bytes between and after its
 streams), every xz file, bare or inside a `.tar.xz`/`.txz`, is decoded by liblzma (C code, not pure Rust), and decompression stops at the project's remaining storage or the session write allowance.
-A compressed tar (`.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`, `.tar.xz`/`.txz`) is bounded the same way: decoding stops at the lower of the project's remaining storage (plus the bytes already stored under the destination) and the session write allowance, plus 1 MiB of tar bookkeeping, so a small archive that expands enormously is refused instead of filling memory. A plain `.tar` is read as is, without that bound.
+A compressed tar (`.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`) is bounded the same way: decoding stops at the lower of the project's remaining storage (plus the bytes already stored under the destination) and the session write allowance, plus 1 MiB of tar bookkeeping, so a small archive that expands enormously is refused instead of filling memory. A plain `.tar` is read as is, without that bound.
 Otherwise `destination` defaults to the archive path minus
 its suffix; `overwrite` defaults to `false`. **One destination rule for every format**
 (`resolve_destination`): the `destination` is read from the project root, typed relative or absolute,

@@ -178,7 +178,7 @@ The full token is never logged, only its first 8 characters.
 | `fs.extract_archive` | extract a stored archive in place | `path`, `destination?`, `overwrite=false`, `password?` | `destination,files_written,dirs_created,bytes_written` | D,!RO,!I,!OW | member |
 
 (2026-10-09, SPEC-0015.) Formats by extension, case insensitive: `.zip`, `.7z`,
-`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`, `.tar.xz`/`.txz`, a bare `.gz`, `.bz2` or `.xz`
+`.tar`, `.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`, a bare `.gz`, `.bz2` or `.xz`
 (see below), and `.rar` with the cargo feature `rar` (see below); anything else (including `.rar`
 on a build without the feature) is `ERR_NOT_SUPPORTED`. Default destination: the archive
 path minus its suffix. Stateless password retry: an encrypted zip or 7z with no
@@ -265,7 +265,7 @@ the root (`ERR_PATH_OUT_OF_BOUNDS`, `path escapes the volume root: <destination 
 7. destination is a file; 8. collision; 9. corrupt, project limit or session limit, whichever
 the decoding meets first. Nothing is written, and no folder created, before the decode succeeds.
 
-(2026-11-05, SPEC-0083.) A bare `.bz2` (not `.tar.bz2`/`.tb2`) follows the same flow, name rule
+(2026-11-05, SPEC-0083.) A bare `.bz2` (not `.tar.bz2`/`.tb2`/`.tbz2`/`.tbz`) follows the same flow, name rule
 (minus `.bz2`, case insensitive), limits and order of refusals as `.gz`. Several bzip2 streams are
 decoded as one stream; bytes after a stream that are not another stream are refused. A corrupt or non
 bzip2 file is `ERR_INVALID_ARGUMENT`, `archive is corrupt or not a valid bz2 file: <detail>`.
@@ -280,7 +280,7 @@ lzma-alone (`.lzma`) data, as corrupt. A corrupt or non xz file is `ERR_INVALID_
 `archive is corrupt or not a valid xz file: <detail>`. `.tar.xz`/`.txz` is decoded by the same
 liblzma decoder since SPEC-0084 (several streams and 4 byte padding accepted, `lzma-rs` removed).
 
-(2026-11-09, SPEC-0084.) A compressed tar (`.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`, `.tar.xz`/`.txz`) is
+(2026-11-09, SPEC-0084.) A compressed tar (`.tar.gz`/`.tgz`, `.tar.bz2`/`.tb2`/`.tbz2`/`.tbz`, `.tar.xz`/`.txz`) is
 decoded under a bound instead of fully in memory (`decode_bounded_tar` in `tools/archive.rs`, the
 capped reader of `archive_single.rs`). The bound is the lower of two sides plus `TAR_FRAMING`
 (1 048 576 bytes of tar headers and padding): the project side is the remaining storage plus the
@@ -291,8 +291,10 @@ charged. Order of refusals: membership, missing path, folder, password, destinat
 root (SPEC-0086), corrupt data or the bound
 (whichever decoding meets first), the entry checks in archive order,
 collision, project storage limit, session write allowance; the two limits are still
-checked on the files' sizes. A plain `.tar` is not decoded under this bound. `.tbz2` and every other
-extension stay `ERR_NOT_SUPPORTED`. The HTTP twin answers and audits the same.
+checked on the files' sizes. A plain `.tar` is not decoded under this bound. Every other unsupported
+extension stays `ERR_NOT_SUPPORTED`. The HTTP twin answers and audits the same.
+(2026-11-15, SPEC-0096.) `.tbz2` and `.tbz` are two more rows of the `SUFFIXES` table for the bzip2 tar:
+the bound and the refusals key on the format, not the suffix, so nothing else changed.
 
 (2026-11-09, SPEC-0085.) `.zip`, `.7z` and `.rar` admit their declared sizes before any entry is
 decoded. Three steps in `tools/archive.rs` (`tools/archive_rar.rs` for RAR): a listing in
