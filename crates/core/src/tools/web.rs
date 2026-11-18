@@ -18,11 +18,15 @@ use crate::core::fs_ops;
 use crate::errors::ToolError;
 use crate::tools::registry_support::handler;
 use crate::tools::registry_support::{ToolRegistry, ToolSchema};
+use crate::tools::web_access::{AccessLists, Admission};
 use crate::tools::{norm, volume};
 use serde_json::{Value, json};
 
 /// Register the four `web.*` tools.
 pub fn register(reg: &mut ToolRegistry, config: &crate::config::WebConfig) {
+    // Built once. A configuration that skipped `validate` fails closed: every call of the two
+    // tools that reach a site returns this error instead of the network (DEC-006).
+    let lists = std::sync::Arc::new(AccessLists::from_config(config));
     reg.add(
         ToolSchema::new(
             "web.search",
@@ -97,42 +101,58 @@ pub fn register(reg: &mut ToolRegistry, config: &crate::config::WebConfig) {
         .read_only(true)
         .idempotent(true)
         .open_world(true),
-        handler(|ctx, a| async move {
-            let url = a.str("url")?;
-            let timeout = a.int_or("timeout_secs", 10).clamp(1, 30) as u64;
-            let mount_id = a.opt_str("mount_id");
-            let save_path = a.opt_str("save_path");
-            match (mount_id, save_path) {
-                (Some(_), None) | (None, Some(_)) => Err(ToolError::invalid_argument(
-                    "mount_id and save_path must both be provided, or neither",
-                )),
-                (Some(mid), Some(sp)) => {
-                    // Write the raw bytes directly into the volume; the content never
-                    // passes through the LLM context window.
-                    let fake_a = crate::tools::registry_support::Args::new(
-                        json!({"mount_id": mid, "path": sp}),
-                    );
-                    let (mount, client) = volume(&ctx, &fake_a).await?;
-                    let path = norm(&ctx, &fake_a, "path")?;
-                    let limit =
-                        write_limit(&client, &ctx.state.safety, &ctx.person, &mount, &path).await?;
-                    let (bytes, _content_type) =
-                        fetch_raw(&url, timeout, limit.cap, |d| limit.refusal(d)).await?;
-                    fs_ops::write_bytes(
-                        &client,
-                        &ctx.state.safety,
-                        &ctx.person,
-                        &mount,
-                        &path,
-                        &bytes,
-                        true,
-                        true,
-                    )
-                    .await
+        {
+            let lists = lists.clone();
+            handler(move |ctx, a| {
+                let lists = lists.clone();
+                async move {
+                    let access = lists.as_ref().as_ref().map_err(Clone::clone)?;
+                    let url = a.str("url")?;
+                    let timeout = a.int_or("timeout_secs", 10).clamp(1, 30) as u64;
+                    let mount_id = a.opt_str("mount_id");
+                    let save_path = a.opt_str("save_path");
+                    match (mount_id, save_path) {
+                        (Some(_), None) | (None, Some(_)) => Err(ToolError::invalid_argument(
+                            "mount_id and save_path must both be provided, or neither",
+                        )),
+                        (Some(mid), Some(sp)) => {
+                            // Write the raw bytes directly into the volume; the content never
+                            // passes through the LLM context window.
+                            let fake_a = crate::tools::registry_support::Args::new(
+                                json!({"mount_id": mid, "path": sp}),
+                            );
+                            let (mount, client) = volume(&ctx, &fake_a).await?;
+                            let path = norm(&ctx, &fake_a, "path")?;
+                            // Before the storage allowance, so a refusal by the lists wins
+                            // over a full project and nothing is charged (DEC-008). No scheme
+                            // check here: the lists judge the site whatever the scheme.
+                            let until = deadline(timeout);
+                            let admission = access.admit(&url, until).await?;
+                            let limit =
+                                write_limit(&client, &ctx.state.safety, &ctx.person, &mount, &path)
+                                    .await?;
+                            let (bytes, _content_type) =
+                                fetch_raw(&url, access, admission, until, limit.cap, |d| {
+                                    limit.refusal(d)
+                                })
+                                .await?;
+                            fs_ops::write_bytes(
+                                &client,
+                                &ctx.state.safety,
+                                &ctx.person,
+                                &mount,
+                                &path,
+                                &bytes,
+                                true,
+                                true,
+                            )
+                            .await
+                        }
+                        (None, None) => web_fetch(&url, timeout, access).await,
+                    }
                 }
-                (None, None) => web_fetch(&url, timeout).await,
-            }
-        }),
+            })
+        },
     );
 
     reg.add(
@@ -151,33 +171,46 @@ pub fn register(reg: &mut ToolRegistry, config: &crate::config::WebConfig) {
         .read_only(false)
         .idempotent(true)
         .open_world(true),
-        handler(|ctx, a| async move {
-            let url = a.str("url")?;
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Err(ToolError::invalid_argument("url must start with http:// or https://"));
-            }
-            let timeout = a.int_or("timeout_secs", 30).clamp(1, 120) as u64;
-            let (mount, client) = volume(&ctx, &a).await?;
-            let path = norm(&ctx, &a, "path")?;
-            let limit = write_limit(&client, &ctx.state.safety, &ctx.person, &mount, &path).await?;
-            let (bytes, content_type) =
-                fetch_raw(&url, timeout, limit.cap, |d| limit.refusal(d)).await?;
-            let mut result = fs_ops::write_bytes(
-                &client,
-                &ctx.state.safety,
-                &ctx.person,
-                &mount,
-                &path,
-                &bytes,
-                true,
-                true,
-            )
-            .await?;
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert("content_type".to_string(), Value::String(content_type));
-            }
-            Ok(result)
-        }),
+        {
+            let lists = lists.clone();
+            handler(move |ctx, a| {
+                let lists = lists.clone();
+                async move {
+                    let access = lists.as_ref().as_ref().map_err(Clone::clone)?;
+                    let url = a.str("url")?;
+                    if !url.starts_with("http://") && !url.starts_with("https://") {
+                        return Err(ToolError::invalid_argument(
+                            "url must start with http:// or https://",
+                        ));
+                    }
+                    let timeout = a.int_or("timeout_secs", 30).clamp(1, 120) as u64;
+                    let (mount, client) = volume(&ctx, &a).await?;
+                    let path = norm(&ctx, &a, "path")?;
+                    let until = deadline(timeout);
+                    let admission = access.admit(&url, until).await?;
+                    let limit =
+                        write_limit(&client, &ctx.state.safety, &ctx.person, &mount, &path).await?;
+                    let (bytes, content_type) =
+                        fetch_raw(&url, access, admission, until, limit.cap, |d| limit.refusal(d))
+                            .await?;
+                    let mut result = fs_ops::write_bytes(
+                        &client,
+                        &ctx.state.safety,
+                        &ctx.person,
+                        &mount,
+                        &path,
+                        &bytes,
+                        true,
+                        true,
+                    )
+                    .await?;
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert("content_type".to_string(), Value::String(content_type));
+                    }
+                    Ok(result)
+                }
+            })
+        },
     );
 
     reg.add(
@@ -258,11 +291,15 @@ fn strip_html(s: &str) -> String {
 }
 
 fn build_client(timeout_secs: u64) -> Result<reqwest::Client, ToolError> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .user_agent("mcp-fs-web/1.0")
+    client_builder(std::time::Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| ToolError::internal(format!("http client error: {e}")))
+}
+
+/// The one client setup of the web tools. The environment proxy is kept on purpose: the owner
+/// accepted that a proxy resolves names itself (DEC-009, BL-0157).
+pub(crate) fn client_builder(timeout: std::time::Duration) -> reqwest::ClientBuilder {
+    reqwest::Client::builder().timeout(timeout).user_agent("mcp-fs-web/1.0")
 }
 
 /// Extract text between a delimiter and the next `<` (or end of string), stripping tags.
@@ -445,28 +482,24 @@ pub(crate) const ANSWER_LIMIT: u64 = 16_777_216;
 /// Fetch a URL and return the raw bytes plus the Content-Type header value.
 ///
 /// Used by both `web.fetch` (save mode) and `web.download`. The URL validation
-/// (http/https prefix) is the caller's responsibility.
+/// (http/https prefix) is the caller's responsibility. The lists send it hop by hop under the
+/// call's one deadline, connected to the addresses they checked (DEC-009, DEC-010, DEC-011).
 async fn fetch_raw(
     url: &str,
-    timeout_secs: u64,
+    access: &AccessLists,
+    admission: Admission,
+    deadline: tokio::time::Instant,
     cap: u64,
     over: impl Fn(Option<u64>) -> ToolError,
 ) -> crate::errors::Result<(Vec<u8>, String)> {
-    let client = build_client(timeout_secs)?;
-    let resp = client.get(url).send().await.map_err(|e| {
-        if e.is_timeout() {
-            ToolError::internal("request timed out")
-        } else {
-            ToolError::internal(format!("fetch request failed: {e}"))
-        }
-    })?;
+    let (resp, sent) = access.send(url, admission, deadline).await?;
     let content_type = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let bytes = read_answer(resp, url, cap, "read response", over).await?;
+    let bytes = read_answer(resp, &sent, cap, "read response", over).await?;
     Ok((bytes, content_type))
 }
 
@@ -593,13 +626,25 @@ pub(crate) async fn read_answer(
     Ok(buf)
 }
 
-async fn web_fetch(url: &str, timeout_secs: u64) -> crate::errors::Result<Value> {
+/// The instant a request of `timeout_secs` seconds must be over.
+fn deadline(timeout_secs: u64) -> tokio::time::Instant {
+    tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs)
+}
+
+async fn web_fetch(
+    url: &str,
+    timeout_secs: u64,
+    access: &AccessLists,
+) -> crate::errors::Result<Value> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(ToolError::invalid_argument("url must start with http:// or https://"));
     }
-
-    let (bytes, content_type) =
-        fetch_raw(url, timeout_secs, ANSWER_LIMIT, |_| over_answer_limit(&host_of(url))).await?;
+    let until = deadline(timeout_secs);
+    let admission = access.admit(url, until).await?;
+    let (bytes, content_type) = fetch_raw(url, access, admission, until, ANSWER_LIMIT, |_| {
+        over_answer_limit(&host_of(url))
+    })
+    .await?;
     let body = String::from_utf8_lossy(&bytes).into_owned();
 
     let text = if content_type.contains("text/html") { strip_html(&body) } else { body };

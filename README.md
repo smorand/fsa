@@ -424,6 +424,18 @@ a member may make the server fetch (CWE-918) is out of scope; the other remote r
 rest of the class sweep of the spec) are not bounded here. Security note 2026-11-12: CWE-400 and CWE-770,
 an unbounded body read into memory, closed for these seven tools.
 
+## Web access lists
+
+`web.black_list_url` and `web.white_list_url` (in the `web` section, both empty by default) limit
+which sites `web.fetch` and `web.download` may reach. An entry is a host name, a `*.host` name, an
+IP address or an address range; a bad entry stops the server at boot. A site is refused when it
+matches the black list, by name or by any address its name resolves to; with a white list set, only
+a site whose name matches, or whose every resolved address matches, is served. The refusal is
+`ERR_FORBIDDEN: host '<site>' is not allowed by the web access lists`, decided before any storage is
+charged. The name is looked up once and the connection goes to the checked address; every redirect
+is judged like a first request before it is followed. Both lists empty changes nothing. Behind a
+proxy set in the environment, the proxy opens the connection. Details: `.agent_docs/config.md`.
+
 ## Document extraction does not hold up other requests
 
 (2026-11-12, SPEC-0091.) The six built in readers of `fs.extract_text` (and `POST

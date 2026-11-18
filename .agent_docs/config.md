@@ -305,6 +305,105 @@ families on; while off, the tools are not offered and no remote request is made.
   a configuration file. Order of refusals: argument checks, membership and path, request and read, write
   checks. Accepted: redirects and timeouts as before; address filtering (CWE-918) is out of scope.
 
+- 2026-11-16 (SPEC-0097, US-0246): `web.black_list_url` and `web.white_list_url`, two lists of strings,
+  empty by default. An entry is a host name (`docs.example`), a `*.host` name (`*.corp.example`), an
+  IPv4 or IPv6 address, or an address range (`169.254.0.0/16`, `fd00::/8`). Every command that loads
+  the configuration (`serve`, `purge`, `migrate`, source then destination) checks both lists, black
+  before white, whether or not `web.enabled` is true, and refuses the first bad entry with
+  `ERR_INVALID_ARGUMENT: invalid entry '<entry>' in the web <black|white> list: expected a host name,
+  a *.host name, an IP address or an address range`. The two fields are left out of `WebConfig`'s
+  `Debug`, so the frozen configuration snapshots do not change. Parsing is in `tools/web_access.rs`.
+
+  Black list decision (US-0248, `web.fetch` returning text only for now; download, saved pages, the
+  white list, name lookup and redirects follow in later stories): with at least one list set, the site
+  is read as typed with the `url` crate (lower case ASCII, one trailing dot dropped, IPv6 brackets
+  removed, an IPv4 mapped IPv6 address judged as its IPv4 address). A name entry matches by equality,
+  `*.host` matches any name below it but not `host` itself, an address entry matches that address, a
+  range entry matches every address inside it. A match is refused before any request is sent with
+  `ERR_FORBIDDEN: host '<site>' is not allowed by the web access lists`; the message never shows a
+  resolved address. Both lists empty takes the exact path of before. A configuration that skipped
+  `validate` and holds a bad entry makes every `web.fetch` and `web.download` call return the entry
+  error instead of reaching the network.
+
+  Normalization (US-0249): entry and request are reduced to one form before comparing. Letter case
+  never matters; one trailing dot is dropped; an accented entry is converted to its `xn--` form with
+  the `url` crate, so `bücher.example` covers `xn--bcher-kva.example` while `straße.example` stays
+  distinct from `strasse.example`; the refusal shows the site only, never the port or the
+  credentials (`http://u:p@Blocked.example:8080/` gives `host 'blocked.example'`). An IPv4 mapped
+  entry (`::ffff:127.0.0.1`) covers the plain address; an IPv6 range of 96 bits or more starting
+  with `::ffff:0:0` is the IPv4 range of the bits left (`::ffff:10.0.0.0/104` is `10.0.0.0/8`); any
+  other IPv6 range, `::/0` included, covers native IPv6 addresses only; bits below the prefix are
+  ignored (`10.0.0.5/24` is `10.0.0.0/24`). `web.search`, `web.news`, `web.suggestions`, the git
+  tools and `context7.*` are not affected by the lists (DEC-014).
+
+  White list (US-0250, `web.fetch` returning text; same scope limits as above): with a white list set,
+  only a site matching one of its entries is served. Black is decided first, then the white rule, so a
+  site in both lists is refused. An IP literal is judged against the white entries directly; a name
+  is served when it matches a white name entry or when every address it resolves to matches a white
+  entry (see name lookup below). The four combinations:
+
+  | Black list | White list | A site is served when |
+  |---|---|---|
+  | empty | empty | always (the original path, untouched) |
+  | set | empty | it matches no black entry |
+  | empty | set | it matches a white entry |
+  | set | set | it matches no black entry and matches a white entry |
+
+  Saves (US-0251): `web.download` and `web.fetch` with `mount_id` and `save_path` obey the lists too.
+  Order of refusals: argument, membership and path, the lists, the storage allowance, the request.
+  So a refused save never creates or changes a file, never charges the session or the project, and
+  wins over a full project. The save mode of `web.fetch` has no `http://` prefix check, so the lists
+  judge `ftp://blocked.example/` too; an unlisted `ftp://` address then fails as before with
+  `ERR_INTERNAL_ERROR: fetch request failed`.
+
+  Name lookup (US-0252, 2026-11-16): with a list set, a name the black list does not refuse by name
+  is looked up once (`tokio::net::lookup_host`), bounded by the call's `timeout_secs`; lookup, hops
+  and body read share that one deadline. Black refuses when any resolved address matches (an IPv4
+  mapped IPv6 answer is judged as IPv4); white serves when the name matches a white name entry or
+  the name has at least one address and every one matches (an empty answer is never white listed by
+  address). A lookup error or an empty answer is "no address": the request is not sent and fails
+  with `ERR_INTERNAL_ERROR: fetch request failed: no address for host '<site>'` unless the lists
+  refused first. A lookup that overruns the deadline fails with `ERR_INTERNAL_ERROR: request timed
+  out`. The sender pins the connection to the checked addresses with `resolve_to_addrs`, so a name
+  answering differently the second time cannot reach a refused address. Both lists empty: no lookup.
+  Known limit (owner decision, BL-0157): the environment proxy is kept (no `no_proxy()`); behind a
+  proxy the proxy resolves the name itself, so pinning does not hold there. Test seam: `TestNet`
+  name table (`Addrs`, `NoAddress`, `Hang`, last answer repeats, lookup counter); a name absent from
+  the table has no address, so tests never reach the real resolver.
+
+  Request reading and the proxy (US-0253, 2026-11-17): the site is read by the `url` crate (WHATWG),
+  so `127.1`, `0177.0.0.1`, `0x7f.1` and `2130706433` are the site `127.0.0.1`, and
+  `[::ffff:127.0.0.1]` is the site `::ffff:7f00:1` judged as `127.0.0.1`; the refusal names that
+  form. An address with no host, no scheme, an IPv6 zone (`[fe80::1%25eth0]`) or a host that cannot
+  be converted to ASCII is not judged by the lists: the sender parses with the same crate, so it is
+  never sent and fails with today's `ERR_INTERNAL_ERROR: fetch request failed: ...` text. The per
+  request client is built by `AccessLists::client` (`tools/web_access.rs`): pin, then the test proxy
+  seam (`TestNet::with_proxy`). Tested proxy limit: behind a proxy the lists still refuse on the
+  typed site and on the addresses the server resolves, and the proxy receives nothing; an allowed
+  request is opened by the proxy, so the pin does not apply to it.
+
+  Redirects (US-0254, 2026-11-17): with a list set the client follows no redirect itself
+  (`Policy::none`); `AccessLists::send` follows 301, 302, 303, 307 and 308 by hand, at most 10 hops
+  like the default policy. The destination is read against the hop that sent it (`Url::join`, so
+  relative and `//host/x` work) and admitted like a first request, on any scheme, before the hop
+  limit: a refused eleventh hop is the lists refusal, a loop of allowed hops keeps `fetch request
+  failed: error following redirect ... too many redirects`, an allowed `ftp://` hop fails as today.
+  A redirect with no readable `Location` is the answer. Each hop has its own lookup and pin and the
+  time left of the call. Both lists empty keeps the client's own redirect policy.
+
+  Entry grammar (US-0247), every other shape is refused at boot:
+
+  | Form | Accepted | Refused |
+  |---|---|---|
+  | name | letters, digits, `-`, `_`; label up to 63, name up to 253; one trailing dot ignored; `xn--` must decode | spaces, empty label, `blocked.example..`, `.`, `xn--`, 64 character label, a port, a scheme |
+  | `*.name` | `*` only as the whole first label | `*`, `a*.b` |
+  | numeric name | only a four part dotted address | `2130706433`, `0x7f000001`, `10.1`, `010.0.0.1` |
+  | address | `10.0.0.5`, `fd12::1` | `[fd00::1]`, `fe80::1%eth0` |
+  | range | `address/length`, one to three digits, no sign, no leading zero, within 32 or 128 | `10.0.0.0/08`, `10.0.0.0/+8`, `10.0.0.0/33` |
+
+  `purge` refuses a bad entry like `serve` before opening any store; a purge with valid lists runs
+  as before. `migrate` checks the source first, then the destination.
+
 ## Derived paths
 
 Under the SQLite backend, only `infra.meta.dir`, `infra.blob.dir` and

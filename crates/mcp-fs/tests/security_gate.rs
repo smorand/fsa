@@ -153,7 +153,14 @@ fn accepted_advisories_are_recorded_once_with_a_reason() {
     let mut ids: Vec<&str> =
         raw.lines().filter_map(|l| l.trim().strip_prefix('"')?.split('"').next()).collect();
     ids.sort_unstable();
-    let mut expected = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0192", "RUSTSEC-2026-0441"];
+    let mut expected = [
+        "RUSTSEC-2023-0071",
+        "RUSTSEC-2026-0192",
+        "RUSTSEC-2026-0441",
+        "RUSTSEC-2026-0542",
+        "RUSTSEC-2026-0543",
+        "RUSTSEC-2026-0555",
+    ];
     expected.sort_unstable();
     assert_eq!(ids, expected);
     for id in expected {

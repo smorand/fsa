@@ -43,6 +43,12 @@ and sqlite-vec (SQLite) for vector search; it implies `postgres`. The `rar` feat
 (RARLAB's UnRAR source, non free licence, builds C++) and the optional `aes`, `cbc`, `hmac` and `sha2`
 crates for RAR header decryption; its tests run only with it.
 
+Optional web access lists (SPEC-0097): `web.black_list_url` and `web.white_list_url` (names, `*.host`,
+addresses, ranges, checked at boot) decide `web.fetch` and `web.download` on the typed site and on every
+address a name resolves to (one lookup, the connection pinned to the checked addresses), before any
+storage charge; both empty keeps the original path. Behind an environment proxy the proxy opens the
+connection (BL-0157). Code in `tools/web_access.rs`, details in `.agent_docs/config.md`.
+
 ## Key commands
 ```
 make build | make test | make run       same as ./build.sh / ./test.sh / ./run.sh

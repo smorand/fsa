@@ -245,3 +245,12 @@
 | US-0243 | SPEC-0094 | other formats and replaced files stay as they are, and the documentation | US-0242 | 2 | landed |  |  |
 | US-0244 | SPEC-0095 | bump utoipa-swagger-ui to 10 and drop the zip acceptances | main | 2 | landed |  |  |
 | US-0245 | SPEC-0096 | recognize .tbz2 and .tbz as bzip2 compressed tar archives | main | 2 | landed |  |  |
+| US-0246 | SPEC-0097 | accept and refuse web access list entries at boot | main | 2 | landed |  |  |
+| US-0247 | SPEC-0097 | the full entry grammar, and every command that reads the configuration | US-0246 | 2 | landed |  |  |
+| US-0248 | SPEC-0097 | a black list refuses the site as typed for `web.fetch` returning text | US-0247 | 2 | landed |  |  |
+| US-0249 | SPEC-0097 | the site is read as the web standard reads it, and the other web tools are left alone | US-0248 | 2 | landed |  |  |
+| US-0250 | SPEC-0097 | a white list, and a white list minus a black list | US-0249 | 2 | landed |  |  |
+| US-0251 | SPEC-0097 | downloads and saved pages are refused cleanly, in the specified order | US-0250 | 2 | landed |  |  |
+| US-0252 | SPEC-0097 | judge the addresses a site name resolves to, and connect to the checked address | US-0251 | 1 | landed |  |  |
+| US-0253 | SPEC-0097 | unreadable addresses are never sent, numeric forms are read as the plain address, the proxy limit is tested | US-0252 | 2 | landed |  |  |
+| US-0254 | SPEC-0097 | redirects are checked hop by hop, and the spec is closed | US-0253 | 1 | landed |  |  |

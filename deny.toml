@@ -16,6 +16,7 @@ unmaintained = "workspace"
 # this lot. Revisit at the next dependency upgrade pass.
 ignore = [
     "RUSTSEC-2023-0071", # rsa (Marvin timing side-channel; used for JWT signing keys, no fix released)
+    "RUSTSEC-2026-0543", # chrono unmaintained, a direct dependency, also needed by arrow (BL-0160); chrono-tz and humantime are transitive, so unmaintained = "workspace" skips them here
 ]
 
 [licenses]

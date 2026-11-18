@@ -17,3 +17,5 @@ Operators behind a proxy cannot use the web family, git remotes or hosted endpoi
 
 ## Notes
 Proposal for the spec: first verify and document what each client does with the standard variables today; then one configuration section (proxy URL, no proxy list, optional credentials from the environment only, never logged) applied through one shared client builder, plus libgit2 proxy options for git remotes and the S3 client. Interplay with BL-0156: address filtering must judge the final destination, not the proxy address. Tests need a local proxy stand-in.
+
+Added 2026-11-16 (SPEC-0097, owner decision): the web address lists of SPEC-0097 judge the site as typed and the addresses the server resolves; with a proxy, the proxy makes the connection, so the guarantee that the checked address is the address used does not hold. The proxy design must say how the lists apply (for example, resolve and check on the server, then let the proxy connect only to the checked address, or refuse a proxy while a list is set).

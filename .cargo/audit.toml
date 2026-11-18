@@ -5,5 +5,8 @@
 ignore = [
     "RUSTSEC-2023-0071", # rsa Marvin timing side channel, JWT signing keys, no fix released
     "RUSTSEC-2026-0441", # pin-utils unmaintained (archived 2026-10-01), pulled by every released aws-smithy-* crate up to the latest; a macro crate with no code path to untrusted input; revisit when aws-smithy drops it (BL-0126)
+    "RUSTSEC-2026-0543", # chrono unmaintained, needed by arrow; our own use alone would not remove it; revisit when arrow and datafusion drop it (BL-0160)
+    "RUSTSEC-2026-0555", # chrono-tz unmaintained, via arrow-array only; revisit with BL-0160
+    "RUSTSEC-2026-0542", # humantime unmaintained, via object_store (datafusion) only; revisit with BL-0160
     "RUSTSEC-2026-0192", # ttf-parser unmaintained, via pdf-extract 0.12.1, no newer release
 ]

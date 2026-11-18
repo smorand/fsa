@@ -625,14 +625,22 @@ pub struct WebConfig {
     pub max_results: usize,
     pub request_timeout_secs: u64,
     pub safe_search: String,
+    /// Sites the web tools refuse (SPEC-0097). Left out of `Debug` like `test_base`.
+    pub black_list_url: Vec<String>,
+    /// Sites the web tools are limited to when the list is not empty (SPEC-0097).
+    pub white_list_url: Vec<String>,
     /// Test only address standing in for the fixed search hosts (SPEC-0093 DEC-007).
     #[cfg(test)]
     #[serde(skip)]
     pub(crate) test_base: Option<String>,
+    /// Test only seam of the web access lists (SPEC-0097 DEC-015).
+    #[cfg(test)]
+    #[serde(skip)]
+    pub(crate) test_net: Option<std::sync::Arc<crate::tools::web_access::TestNet>>,
 }
 
-// Written by hand so the test only field never reaches the frozen `Debug` snapshots of the
-// configuration templates.
+// Written by hand so the test only field and the two lists never reach the frozen `Debug`
+// snapshots of the configuration templates.
 impl std::fmt::Debug for WebConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebConfig")
@@ -644,6 +652,13 @@ impl std::fmt::Debug for WebConfig {
     }
 }
 
+impl WebConfig {
+    /// Refuse an entry of either access list that is not one of the accepted forms.
+    pub fn validate_lists(&self) -> Result<()> {
+        crate::tools::web_access::AccessLists::from_config(self).map(drop)
+    }
+}
+
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
@@ -651,8 +666,12 @@ impl Default for WebConfig {
             max_results: d_web_max_results(),
             request_timeout_secs: d_web_request_timeout(),
             safe_search: d_web_safe_search(),
+            black_list_url: Vec::new(),
+            white_list_url: Vec::new(),
             #[cfg(test)]
             test_base: None,
+            #[cfg(test)]
+            test_net: None,
         }
     }
 }
@@ -991,6 +1010,9 @@ impl ServerConfig {
         // First of all, so a removed database is always reported as removed, whatever else
         // is wrong with the file (SPEC-0051).
         self.reject_removed_backends()?;
+        // Whether or not the web tools are on: an invalid entry must stop the boot, not wait
+        // for the day the tools are switched on (SPEC-0097).
+        self.web.validate_lists()?;
         if self.safety.max_diff_file_bytes.bytes().is_none() {
             return Err(ToolError::invalid_argument(
                 "invalid safety.max_diff_file_bytes: must be a whole number of bytes above zero",

@@ -73,6 +73,15 @@ extract:
 #     response_field: ""           # empty = the response body IS the markdown
 #     timeout_secs: 900
 
+# Web tools (DuckDuckGo search, web.fetch, web.download). Off by default.
+# The two lists limit the sites web.fetch and web.download can reach. An entry is a host name,
+# a *.host name, an IP address or a range (169.254.0.0/16 covers the cloud metadata address).
+# A bad entry stops serve, purge and migrate at start, whether or not web is enabled.
+# web:
+#   enabled: false
+#   black_list_url: ["169.254.0.0/16", "*.corp.example"]
+#   white_list_url: []
+
 # Git HTTP smart server (opt-in). When enabled, adds git.* MCP tools and
 # HTTP endpoints at /git/{mount_id}/info/refs etc.
 git:
