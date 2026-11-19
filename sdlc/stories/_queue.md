@@ -254,3 +254,4 @@
 | US-0252 | SPEC-0097 | judge the addresses a site name resolves to, and connect to the checked address | US-0251 | 1 | landed |  |  |
 | US-0253 | SPEC-0097 | unreadable addresses are never sent, numeric forms are read as the plain address, the proxy limit is tested | US-0252 | 2 | landed |  |  |
 | US-0254 | SPEC-0097 | redirects are checked hop by hop, and the spec is closed | US-0253 | 1 | landed |  |  |
+| US-0255 | SPEC-0098 | pandoc conversion reads no resource the source names | main | 2 | landed |  |  |

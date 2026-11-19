@@ -278,6 +278,13 @@ async fn convert(
 
 /// Invoke pandoc and return the produced bytes.
 ///
+/// Pandoc runs with `--sandbox` (pandoc 2.15 or later): its readers and writers then
+/// touch only the files named on the command line. The source is member authored, so
+/// without it an image or frame it names would be fetched from any address (loopback,
+/// private network, cloud metadata) and a named host file would be embedded in the
+/// output the member owns. An older pandoc rejects the option, so the conversion
+/// fails closed.
+///
 /// The output format is inferred from `output`'s extension. `tmpdir` is kept alive
 /// by the caller; this function only needs the concrete file paths.
 async fn run_pandoc(
@@ -287,7 +294,7 @@ async fn run_pandoc(
     template: Option<&std::path::Path>,
 ) -> Result<Vec<u8>> {
     let mut cmd = tokio::process::Command::new(&pandoc.bin);
-    cmd.arg(input).arg("-o").arg(output);
+    cmd.arg("--sandbox").arg(input).arg("-o").arg(output);
     if let Some(tp) = template {
         cmd.arg(format!("--reference-doc={}", tp.display()));
     }
@@ -732,5 +739,239 @@ mod tests {
         h.seed("/deck.md", "# A\n").await;
         let err = h.call("doc.to_pptx", json!({"mount_id": MOUNT, "src_path": "/deck.md", "dst_path": "/out.pptx", "template_path": "/nope.pptx"})).await.unwrap_err();
         assert_eq!(err.code, code::NOT_FOUND);
+    }
+
+    // ── SPEC-0098: the conversion reads no resource the source names ───────────
+
+    /// A stand in that answers every request `404` and counts the connections, so a
+    /// request made by pandoc shows up as a count read on a channel other than the
+    /// tool answer. The serving thread blocks on `accept` and ends with the process.
+    struct StandIn {
+        port: u16,
+        seen: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl StandIn {
+        fn start() -> Self {
+            use std::io::Write;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let seen = std::sync::Arc::new(AtomicUsize::new(0));
+            let counter = seen.clone();
+            std::thread::spawn(move || {
+                for mut conn in listener.incoming().flatten() {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let _ = conn.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                }
+            });
+            Self { port, seen }
+        }
+
+        /// Connections accepted so far.
+        fn accepted(&self) -> usize {
+            self.seen.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// Entry names of a zip held in memory.
+    fn zip_names(bytes: &[u8]) -> Vec<String> {
+        let z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        z.file_names().filter_map(|n| n.ok().map(|n| n.into_owned())).collect()
+    }
+
+    /// Whether any entry of the zip holds `needle`.
+    fn zip_contains(bytes: &[u8], needle: &[u8]) -> bool {
+        use std::io::Read;
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        (0..z.len()).any(|i| {
+            let mut data = Vec::new();
+            z.by_index(i).unwrap().read_to_end(&mut data).unwrap();
+            data.windows(needle.len()).any(|w| w == needle)
+        })
+    }
+
+    async fn convert_ok(h: &crate::tools::testkit::Harness, tool: &str, src: &str, dst: &str) {
+        h.call(tool, json!({"mount_id": MOUNT, "src_path": src, "dst_path": dst})).await.unwrap();
+    }
+
+    // BT-001: a remote image in the Markdown causes no request.
+    #[tokio::test]
+    async fn bt_0098_001_remote_image_in_markdown_makes_no_request() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let stand_in = StandIn::start();
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/a.md", &format!("![x](http://127.0.0.1:{}/a.png)\n", stand_in.port)).await;
+        let r = h
+            .call(
+                "doc.to_docx",
+                json!({"mount_id": MOUNT, "src_path": "/a.md", "dst_path": "/a.docx"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(r["path"], "/a.docx");
+        assert_eq!(r["overwritten"], false);
+        assert_eq!(stand_in.accepted(), 0, "pandoc connected to the stand in");
+    }
+
+    // BT-002: addresses named by HTML elements.
+    #[tokio::test]
+    async fn bt_0098_002_html_img_and_iframe_make_no_request() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let stand_in = StandIn::start();
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        let p = stand_in.port;
+        h.seed(
+            "/p.html",
+            &format!(
+                "<p>x</p><img src=\"http://127.0.0.1:{p}/h.png\"><iframe src=\"http://127.0.0.1:{p}/i\"></iframe>"
+            ),
+        )
+        .await;
+        convert_ok(&h, "doc.to_docx", "/p.html", "/p.docx").await;
+        assert_eq!(stand_in.accepted(), 0, "pandoc connected to the stand in");
+    }
+
+    // BT-003: host files named by absolute path and by file: URL.
+    #[tokio::test]
+    async fn bt_0098_003_host_file_is_not_embedded() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("SECRET.txt");
+        std::fs::write(&secret, "SECRET-MARKER-0098").unwrap();
+        let abs = secret.display().to_string();
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/f.md", &format!("![a]({abs})\n\n![f](file://{abs})\n")).await;
+        convert_ok(&h, "doc.to_docx", "/f.md", "/f.docx").await;
+        let out = h.client().await.read_bytes("/f.docx").await.unwrap();
+        let media: Vec<_> =
+            zip_names(&out).into_iter().filter(|n| n.starts_with("word/media/")).collect();
+        assert!(media.is_empty(), "host file embedded as {media:?}");
+        assert!(!zip_contains(&out, b"SECRET-MARKER-0098"));
+    }
+
+    // BT-004: a remote image makes a pptx fail, with no request and no file.
+    #[tokio::test]
+    async fn bt_0098_004_pptx_remote_image_fails_without_request() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let stand_in = StandIn::start();
+        let url = format!("http://127.0.0.1:{}/a.png", stand_in.port);
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/p.md", &format!("# T\n\n![x]({url})\n")).await;
+        let err = h
+            .call(
+                "doc.to_pptx",
+                json!({"mount_id": MOUNT, "src_path": "/p.md", "dst_path": "/p.pptx"}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, code::INTERNAL_ERROR);
+        let want =
+            format!("pandoc exited with exit status: 99: File '{url}' not found in resource path");
+        assert!(err.message.starts_with(&want), "got: {}", err.message);
+        assert!(!h.client().await.exists("/p.pptx").await.unwrap());
+        assert_eq!(stand_in.accepted(), 0, "pandoc connected to the stand in");
+    }
+
+    // BT-010: the docx keeps the alt text of an image it may not load.
+    #[tokio::test]
+    async fn bt_0098_010_docx_keeps_alt_text() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/a.md", "![ALT-0098](http://127.0.0.1:1/a.png)\n").await;
+        let r = h
+            .call(
+                "doc.to_docx",
+                json!({"mount_id": MOUNT, "src_path": "/a.md", "dst_path": "/a.docx"}),
+            )
+            .await
+            .unwrap();
+        assert!(r["bytes_written"].as_i64().unwrap() > 0);
+        let out = h.client().await.read_bytes("/a.docx").await.unwrap();
+        assert!(zip_contains(&out, b"ALT-0098"));
+    }
+
+    // BT-011: a failed pptx leaves the file it would have replaced.
+    #[tokio::test]
+    async fn bt_0098_011_failed_pptx_keeps_existing_file() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/p.md", "# T\n\n![x](http://127.0.0.1:1/a.png)\n").await;
+        h.client().await.write_bytes_atomic("/p.pptx", b"PK-OLD-BYTES").await.unwrap();
+        h.state.safety.record_read(crate::tools::testkit::PERSON, MOUNT, "/p.pptx");
+        let err = h
+            .call(
+                "doc.to_pptx",
+                json!({"mount_id": MOUNT, "src_path": "/p.md", "dst_path": "/p.pptx", "overwrite": true}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, code::INTERNAL_ERROR);
+        assert_eq!(h.client().await.read_bytes("/p.pptx").await.unwrap(), b"PK-OLD-BYTES");
+    }
+
+    // BT-020: a data: image is still embedded.
+    #[tokio::test]
+    async fn bt_0098_020_data_image_is_still_embedded() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed(
+            "/d.md",
+            "![d](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==)\n",
+        )
+        .await;
+        convert_ok(&h, "doc.to_docx", "/d.md", "/d.docx").await;
+        let out = h.client().await.read_bytes("/d.docx").await.unwrap();
+        let media: Vec<_> = zip_names(&out)
+            .into_iter()
+            .filter(|n| n.starts_with("word/media/") && n.ends_with(".png"))
+            .collect();
+        assert_eq!(media.len(), 1, "got {media:?}");
+    }
+
+    // BT-021: plain sources and templates behave as before.
+    #[tokio::test]
+    async fn bt_0098_021_plain_and_templated_conversions_still_work() {
+        if !pandoc_available() {
+            eprintln!("skipped: pandoc not found");
+            return;
+        }
+        let h = harness_with_extra(register_with_pandoc_extra).await;
+        h.seed("/n.md", "# T\n\nhello\n").await;
+        convert_ok(&h, "doc.to_docx", "/n.md", "/t.docx").await;
+        convert_ok(&h, "doc.to_pptx", "/n.md", "/t.pptx").await;
+        for (tool, ext) in [("doc.to_docx", "docx"), ("doc.to_pptx", "pptx")] {
+            for template in [None, Some(format!("/t.{ext}"))] {
+                let dst = format!("/o-{}.{ext}", template.is_some());
+                let mut args = json!({"mount_id": MOUNT, "src_path": "/n.md", "dst_path": dst});
+                if let Some(t) = &template {
+                    args["template_path"] = json!(t);
+                }
+                let r = h.call(tool, args).await.unwrap();
+                assert!(r["bytes_written"].as_i64().unwrap() > 0, "{tool} {template:?}");
+                assert_eq!(&h.client().await.read_bytes(&dst).await.unwrap()[..2], b"PK");
+            }
+        }
     }
 }

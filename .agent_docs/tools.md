@@ -719,6 +719,14 @@ https://`, `mount_id and save_path must both be provided, or neither`), membersh
 read, then the write checks on the whole answer (read before write, project, session). A refused call
 leaves no file, charge, audit line or companion, and logs one line. Tool descriptions are unchanged.
 
+(2026-11-18, SPEC-0098) `doc.to_docx` and `doc.to_pptx` run pandoc with `--sandbox` (`run_pandoc`, `tools/doc.rs`),
+so a Markdown or HTML source never makes the server request an address or embed a host file. In a `.docx` an
+image that names a URL or a path becomes its alt text and the call succeeds; a `data:` image is still embedded.
+A `.pptx` that names such an image fails with `ERR_INTERNAL_ERROR` `pandoc exited with exit status: 99: File
+'<name>' not found in resource path`, and no file is written. `--sandbox` needs pandoc 2.15 or later; an older
+pandoc fails every conversion with its own message. Tests: `bt_0098_*` in `tools/doc.rs` (a counting stand in
+server and a zip reader read the effect, not the tool answer).
+
 ## Authorization model
 
 | Gate | Implementation | Applies to |
