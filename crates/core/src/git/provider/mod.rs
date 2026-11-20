@@ -34,7 +34,7 @@ use crate::git::remote::{Provider, extract_host, resolve_host, validate_remote_u
 
 /// What the server sends as `User-Agent` on every provider REST call. The same
 /// literal the device flow uses, so one deployment presents one identity.
-const USER_AGENT: &str = concat!("mcp-fs/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("fsa/", env!("CARGO_PKG_VERSION"));
 
 /// Hard ceiling on a provider JSON response. A refusal, not a truncation: a
 /// half read JSON document cannot be parsed, so returning a prefix would only

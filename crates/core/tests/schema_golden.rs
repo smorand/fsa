@@ -5,12 +5,12 @@
 //! SQL Server removal. The removal touches the dialect and the column types, so only a
 //! capture from the previous code can prove an existing database keeps opening.
 //!
-//! Regenerate deliberately with `MCPFS_REWRITE_SCHEMA_GOLDEN=1 cargo test -p mcp-fs-core
+//! Regenerate deliberately with `MCPFS_REWRITE_SCHEMA_GOLDEN=1 cargo test -p fsa-core
 //! --test schema_golden` and review the diff: a changed golden is a layout change.
 
-use mcp_fs_core::git::{db as git_db, oauth::persistence as oauth_db};
-use mcp_fs_core::storage::rel::{Dialect, SchemaSet};
-use mcp_fs_core::storage::{admin, meta};
+use fsa_core::git::{db as git_db, oauth::persistence as oauth_db};
+use fsa_core::storage::rel::{Dialect, SchemaSet};
+use fsa_core::storage::{admin, meta};
 use std::path::PathBuf;
 
 fn render(dialect: Dialect) -> String {

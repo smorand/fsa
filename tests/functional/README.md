@@ -14,7 +14,7 @@ export IBM_ICA_MODEL_KEY=...       # ou la variable nommée dans config/agent_te
 
 # 3. S'assurer qu'un token agent existe
 mkdir -p .agent_keys
-./target/release/mcp-fs token admin@example.com --key .keys/jwt.key > .agent_keys/admin
+./target/release/fsa token admin@example.com --key .keys/jwt.key > .agent_keys/admin
 
 # 4. Lancer tous les tests
 ./tests/functional/run_all.sh

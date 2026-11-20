@@ -65,16 +65,16 @@ dependencies = [
 
 [[package]]
 name = "agent"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "axum",
  "chrono",
  "clap",
  "crossterm",
+ "fsa-core",
  "futures",
  "libc",
- "mcp-fs-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -2751,6 +2751,103 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "fsa"
+version = "0.4.2"
+dependencies = [
+ "fsa-core",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "fsa-core"
+version = "0.4.2"
+dependencies = [
+ "adobe-cmap-parser",
+ "aes 0.8.4",
+ "aes-gcm",
+ "anyhow",
+ "arrow",
+ "async-trait",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-s3",
+ "aws-smithy-http-client",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "bzip2",
+ "cbc",
+ "chrono",
+ "clap",
+ "datafusion",
+ "etcetera",
+ "flate2",
+ "futures",
+ "git2",
+ "globset",
+ "hex",
+ "hmac",
+ "http 1.5.0",
+ "jsonwebtoken",
+ "liblzma",
+ "md-5 0.10.6",
+ "parquet",
+ "pdf-extract",
+ "quick-xml",
+ "rand 0.8.8",
+ "regex",
+ "reqwest",
+ "rmcp",
+ "rsa",
+ "rusqlite",
+ "rustls",
+ "rustls-native-certs",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "sevenz-rust2",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "sha2 0.11.0",
+ "similar",
+ "sqlite-vec",
+ "sqlx",
+ "tantivy",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.30.0",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+ "unrar",
+ "url",
+ "utoipa-swagger-ui",
+ "uuid",
+ "weezl",
+ "which",
+ "zerocopy 0.7.35",
+ "zip",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3724,103 +3821,6 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
-
-[[package]]
-name = "mcp-fs"
-version = "0.4.1"
-dependencies = [
- "mcp-fs-core",
- "reqwest",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "mcp-fs-core"
-version = "0.4.1"
-dependencies = [
- "adobe-cmap-parser",
- "aes 0.8.4",
- "aes-gcm",
- "anyhow",
- "arrow",
- "async-trait",
- "aws-config",
- "aws-credential-types",
- "aws-sdk-s3",
- "aws-smithy-http-client",
- "axum",
- "base64 0.22.1",
- "bytes",
- "bzip2",
- "cbc",
- "chrono",
- "clap",
- "datafusion",
- "etcetera",
- "flate2",
- "futures",
- "git2",
- "globset",
- "hex",
- "hmac",
- "http 1.5.0",
- "jsonwebtoken",
- "liblzma",
- "md-5 0.10.6",
- "parquet",
- "pdf-extract",
- "quick-xml",
- "rand 0.8.8",
- "regex",
- "reqwest",
- "rmcp",
- "rsa",
- "rusqlite",
- "rustls",
- "rustls-native-certs",
- "schemars",
- "serde",
- "serde_json",
- "serde_norway",
- "sevenz-rust2",
- "sha1 0.10.7",
- "sha2 0.10.9",
- "sha2 0.11.0",
- "similar",
- "sqlite-vec",
- "sqlx",
- "tantivy",
- "tar",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite 0.30.0",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "unrar",
- "url",
- "utoipa-swagger-ui",
- "uuid",
- "weezl",
- "which",
- "zerocopy 0.7.35",
- "zip",
-]
 
 [[package]]
 name = "md-5"

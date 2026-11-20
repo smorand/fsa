@@ -1,4 +1,4 @@
-# mcp-fs (Rust)
+# fsa: File System Agentic (Rust)
 
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
@@ -60,17 +60,17 @@ make help                             list every target
 ./test.sh                             cargo test --workspace
 ./run.sh                              .env + config bootstrap + keys + build + serve :5002
 cargo clippy --all-targets --all-features -- -D warnings   quality gate, must be clean
-mcp-fs serve | keys | token | migrate | purge | version
-mcp-fs migrate --from a.yaml --to b.yaml  offline copy of relational state between backends
-mcp-fs purge [--project <id> [--on-demand]]  run the auto-purge sweep once; no --project runs
+fsa serve | keys | token | migrate | purge | version
+fsa migrate --from a.yaml --to b.yaml  offline copy of relational state between backends
+fsa purge [--project <id> [--on-demand]]  run the auto-purge sweep once; no --project runs
                                       every configured project plus the grace-period removal
 docker compose -f docker-compose.test.yml up -d  postgres for the opt-in suites
-cargo test -p mcp-fs-core --lib --features rar -- e2e_0080_  the `.rar` extraction tests (feature `rar`, SPEC-0080; ./test.sh runs them)
-cargo test -p mcp-fs-core --lib --features rar -- e2e_0087_ api::dataplane tool_contract   the truncated RAR tests (SPEC-0087)
-env -u MCPFS_TEST_PG_DSN cargo test -p mcp-fs-core --lib -- e2e_0089_ api::dataplane tool_contract --test-threads=1   the PDF and converter bound tests (SPEC-0089)
-env -u MCPFS_TEST_PG_DSN cargo test -p mcp-fs-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
-env -u MCPFS_TEST_PG_DSN cargo test -p mcp-fs-core --lib -- e2e_0094_ --test-threads=1   the damaged PDF page tests (SPEC-0094; 21 tests in tools/damage_e2e.rs, E2E-009 waits 1100 ms of real time)
-MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p mcp-fs-core --lib tool_contract_golden_is_current
+cargo test -p fsa-core --lib --features rar -- e2e_0080_  the `.rar` extraction tests (feature `rar`, SPEC-0080; ./test.sh runs them)
+cargo test -p fsa-core --lib --features rar -- e2e_0087_ api::dataplane tool_contract   the truncated RAR tests (SPEC-0087)
+env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0089_ api::dataplane tool_contract --test-threads=1   the PDF and converter bound tests (SPEC-0089)
+env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
+env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0094_ --test-threads=1   the damaged PDF page tests (SPEC-0094; 21 tests in tools/damage_e2e.rs, E2E-009 waits 1100 ms of real time)
+MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p fsa-core --lib tool_contract_golden_is_current
                                       regenerate the frozen tool contract, then review the diff
 python3 scripts/doc_service_fake.py --port 8099   fake document service, for doc_service api mode
 ./agent.sh --user <name>              interactive CLI agent; starts/stops the server if needed
@@ -78,12 +78,12 @@ python3 scripts/pty_check.py          agent line editor checks on a real pty
 ```
 
 ## Project structure
-All logic lives in the library crate `crates/core` (package `mcp-fs-core`, crate name
-`mcp_fs_core`; the directory is `crates/core`, not `crates/mcp-fs-core`, to match the skill's
+All logic lives in the library crate `crates/core` (package `fsa-core`, crate name
+`fsa_core`; the directory is `crates/core`, not `crates/fsa-core`, to match the skill's
 mandated layout while keeping the Cargo package/crate name off the language's own `core`
-sysroot crate). `crates/mcp-fs` keeps only `src/main.rs` (9 lines) and a path dependency on
-`mcp-fs-core`; its `postgres`/`rag`/`all-backends` features forward to the same
-features on `mcp-fs-core`. The paths below are all under `crates/core/src/` unless noted.
+sysroot crate). `crates/fsa` keeps only `src/main.rs` (9 lines) and a path dependency on
+`fsa-core`; its `postgres`/`rag`/`all-backends` features forward to the same
+features on `fsa-core`. The paths below are all under `crates/core/src/` unless noted.
 - `cli.rs` : clap verbs (serve/keys/token/migrate/purge/version), config path resolution.
 - `purge.rs` : the auto-purge engine — `sweep_project_files`/`sweep_project`/`sweep_grace_period`,
   each driven by `atime`/`created_at`/`deleted_at` against the per-project `PurgeConfig` and the

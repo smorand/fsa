@@ -2205,7 +2205,7 @@ mod pg_rag {
     /// Generate a unique schema name so parallel tests don't collide.
     pub fn unique_schema() -> String {
         let id = uuid::Uuid::new_v4().to_string().replace('-', "");
-        format!("mcpfs_e2e_{}", &id[..12])
+        format!("fsa_e2e_{}", &id[..12])
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────

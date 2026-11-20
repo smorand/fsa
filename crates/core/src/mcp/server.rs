@@ -36,7 +36,7 @@ use crate::storage::traits::IndexMode;
 use crate::tools::registry_support::{Args, ToolCtx, ToolRegistry};
 
 /// Server name advertised by `initialize`, matching the old hand-rolled transport.
-const SERVER_NAME: &str = "mcp-fs";
+const SERVER_NAME: &str = "fsa";
 use crate::util::normalize_identity;
 use std::str::FromStr;
 

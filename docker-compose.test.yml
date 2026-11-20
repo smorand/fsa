@@ -12,7 +12,7 @@ services:
   postgres:
     # pgvector, not vanilla postgres: `--all-features` compiles the `rag` feature,
     # whose Postgres pool runs `CREATE EXTENSION IF NOT EXISTS vector` on every
-    # new connection (crates/mcp-fs/src/storage/rel/postgres.rs). Against a plain
+    # new connection (crates/fsa/src/storage/rel/postgres.rs). Against a plain
     # postgres:16 image that extension is never available, so every connection
     # attempt fails after_connect and the pool can never hand one out; every
     # caller then times out waiting for a pooled connection with no server-side

@@ -15,6 +15,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+/// The `clientInfo.name` sent in `initialize`.
+const CLIENT_NAME: &str = "fsa-agent";
+
 /// One tool as advertised by the server.
 #[derive(Debug, Clone)]
 pub struct Tool {
@@ -152,7 +155,7 @@ impl McpClient {
         let init_params = json!({
             "protocolVersion": "2025-03-26",
             "capabilities": {},
-            "clientInfo": {"name": "mcp-fs-agent", "version": env!("CARGO_PKG_VERSION")},
+            "clientInfo": {"name": CLIENT_NAME, "version": env!("CARGO_PKG_VERSION")},
         });
         let res = self
             .http
@@ -269,6 +272,12 @@ pub fn resolve_name<'a>(tools: &'a BTreeMap<String, Tool>, wanted: &str) -> Opti
 mod tests {
     use super::*;
 
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_client_name_is_fsa_agent() {
+        assert_eq!(CLIENT_NAME, "fsa-agent");
+    }
+
     /// DT-002 (SPEC-0013/US-0008): boot the real migrated server in-process
     /// on an ephemeral port and drive it with the real `McpClient`, exactly
     /// as `./agent.sh`'s own startup sequence does (`McpClient::new` then
@@ -278,17 +287,16 @@ mod tests {
     #[tokio::test]
     async fn agent_startup_completes_and_lists_all_100_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let (key_path, pub_path) =
-            mcp_fs_core::keys::write_keypair(dir.path().join("keys")).unwrap();
-        let token = mcp_fs_core::keys::mint_token_from_file(
+        let (key_path, pub_path) = fsa_core::keys::write_keypair(dir.path().join("keys")).unwrap();
+        let token = fsa_core::keys::mint_token_from_file(
             &key_path,
             "agent-e2e@test.com",
-            mcp_fs_core::keys::DEFAULT_ISSUER,
-            mcp_fs_core::keys::DEFAULT_CLAIM,
+            fsa_core::keys::DEFAULT_ISSUER,
+            fsa_core::keys::DEFAULT_CLAIM,
             3600,
         )
         .unwrap();
-        let mut config = mcp_fs_core::config::ServerConfig::default();
+        let mut config = fsa_core::config::ServerConfig::default();
         config.auth.jwt.public_key_path = pub_path.display().to_string();
         config.infra.meta.dir = dir.path().join("volumes").display().to_string();
         config.infra.blob.dir = dir.path().join("blobs").display().to_string();
@@ -297,7 +305,7 @@ mod tests {
         // the 109 count below is the git enabled catalogue.
         config.git.enabled = true;
 
-        let router = mcp_fs_core::app::build(config).await.expect("app::build");
+        let router = fsa_core::app::build(config).await.expect("app::build");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });

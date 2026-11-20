@@ -446,11 +446,15 @@ impl Default for SafetyConfig {
     }
 }
 
+/// The variable holding the OCR key when the setting is absent, and the one it had before.
+const OCR_KEY_ENV: &str = "FSA_OCR_KEY";
+const LEGACY_OCR_KEY_ENV: &str = "MCP_FS_OCR_KEY";
+/// The variable holding the GitHub client secret when the setting is absent, and the old one.
+const GITHUB_SECRET_ENV: &str = "FSA_GITHUB_CLIENT_SECRET";
+const LEGACY_GITHUB_SECRET_ENV: &str = "MCPFS_GITHUB_CLIENT_SECRET";
+
 fn d_ocr_provider() -> String {
     "none".into()
-}
-fn d_ocr_key_env() -> String {
-    "MCP_FS_OCR_KEY".into()
 }
 fn d_ocr_prompt() -> String {
     "Transcribe this document faithfully into Markdown.".into()
@@ -462,7 +466,10 @@ pub struct OcrConfig {
     pub provider: String,
     pub endpoint: String,
     pub model: String,
-    pub api_key_env: String,
+    /// Name of the environment variable holding the key. Absent means `FSA_OCR_KEY`, with the
+    /// old default `MCP_FS_OCR_KEY` as a fallback; a value written here is used as written
+    /// (SPEC-0099 DR-007), which is why the setting is optional rather than defaulted.
+    pub api_key_env: Option<String>,
     pub prompt: String,
 }
 impl Default for OcrConfig {
@@ -471,8 +478,23 @@ impl Default for OcrConfig {
             provider: d_ocr_provider(),
             endpoint: String::new(),
             model: String::new(),
-            api_key_env: d_ocr_key_env(),
+            api_key_env: None,
             prompt: d_ocr_prompt(),
+        }
+    }
+}
+
+impl OcrConfig {
+    /// The name of the environment variable holding the OCR key.
+    pub fn api_key_env_name(&self) -> String {
+        self.api_key_env_name_with(&|k| std::env::var(k).ok())
+    }
+
+    /// [`Self::api_key_env_name`] over an injected environment.
+    pub fn api_key_env_name_with(&self, env: &dyn Fn(&str) -> Option<String>) -> String {
+        match &self.api_key_env {
+            Some(written) => written.clone(),
+            None => crate::env_compat::name_with(OCR_KEY_ENV, LEGACY_OCR_KEY_ENV, env),
         }
     }
 }
@@ -499,9 +521,6 @@ fn d_object_format() -> String {
 }
 fn d_max_pack_mb() -> u32 {
     512
-}
-fn d_github_secret_env() -> String {
-    "MCPFS_GITHUB_CLIENT_SECRET".into()
 }
 fn d_gitlab_secret_env() -> String {
     "GITLAB_CLIENT_SECRET".into()
@@ -539,7 +558,10 @@ pub struct GitConfig {
     pub anonymous_read: bool,
     pub max_pack_size_mb: u32,
     pub github_client_id: String,
-    pub github_client_secret_env: String,
+    /// Name of the environment variable holding the GitHub secret. Absent means
+    /// `FSA_GITHUB_CLIENT_SECRET`, with `MCPFS_GITHUB_CLIENT_SECRET` as a fallback; a value
+    /// written here is used as written (SPEC-0099 DR-007).
+    pub github_client_secret_env: Option<String>,
     pub gitlab_client_id: String,
     pub gitlab_client_secret_env: String,
     pub gitlab_instance_url: String,
@@ -592,7 +614,7 @@ impl Default for GitConfig {
             anonymous_read: false,
             max_pack_size_mb: d_max_pack_mb(),
             github_client_id: String::new(),
-            github_client_secret_env: d_github_secret_env(),
+            github_client_secret_env: None,
             gitlab_client_id: String::new(),
             gitlab_client_secret_env: d_gitlab_secret_env(),
             gitlab_instance_url: d_gitlab_url(),
@@ -604,6 +626,24 @@ impl Default for GitConfig {
             gitlab_scope: d_gitlab_scope(),
             provider_api_timeout_secs: d_provider_api_timeout_secs(),
             max_pr_diff_mb: d_max_pr_diff_mb(),
+        }
+    }
+}
+
+impl GitConfig {
+    /// The name of the environment variable holding the GitHub client secret.
+    pub fn github_client_secret_env_name(&self) -> String {
+        self.github_client_secret_env_name_with(&|k| std::env::var(k).ok())
+    }
+
+    /// [`Self::github_client_secret_env_name`] over an injected environment.
+    pub fn github_client_secret_env_name_with(
+        &self,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> String {
+        match &self.github_client_secret_env {
+            Some(written) => written.clone(),
+            None => crate::env_compat::name_with(GITHUB_SECRET_ENV, LEGACY_GITHUB_SECRET_ENV, env),
         }
     }
 }
@@ -1265,6 +1305,95 @@ pub fn expand_env(text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// DT-002 (SPEC-0099): the OCR key variable is `FSA_OCR_KEY`, with `MCP_FS_OCR_KEY` as the
+    /// fallback only when the setting is absent from the configuration.
+    #[test]
+    fn dt_0099_002_ocr_key_env_name_falls_back_only_when_the_setting_is_absent() {
+        let absent = ServerConfig::from_yaml("").unwrap().extract.ocr;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).to_string())
+        };
+        assert_eq!(absent.api_key_env_name_with(&env(&[])), "FSA_OCR_KEY");
+        assert_eq!(absent.api_key_env_name_with(&env(&[("FSA_OCR_KEY", "k")])), "FSA_OCR_KEY");
+        assert_eq!(
+            absent.api_key_env_name_with(&env(&[("MCP_FS_OCR_KEY", "old")])),
+            "MCP_FS_OCR_KEY"
+        );
+        assert_eq!(
+            absent.api_key_env_name_with(&env(&[("FSA_OCR_KEY", "n"), ("MCP_FS_OCR_KEY", "old")])),
+            "FSA_OCR_KEY"
+        );
+        assert!(
+            crate::env_compat::printed_lines().contains(
+                &"warning: environment variable MCP_FS_OCR_KEY is deprecated, use FSA_OCR_KEY"
+                    .to_string()
+            ),
+            "the fallback prints the DR-006 line"
+        );
+        let written = ServerConfig::from_yaml("extract:\n  ocr:\n    api_key_env: FSA_OCR_KEY\n")
+            .unwrap()
+            .extract
+            .ocr;
+        assert_eq!(
+            written.api_key_env_name_with(&env(&[("MCP_FS_OCR_KEY", "old")])),
+            "FSA_OCR_KEY",
+            "a value written in the configuration is used as written, no fallback"
+        );
+        let other = ServerConfig::from_yaml("extract:\n  ocr:\n    api_key_env: MY_SECRET\n")
+            .unwrap()
+            .extract
+            .ocr;
+        assert_eq!(other.api_key_env_name_with(&env(&[("MCP_FS_OCR_KEY", "old")])), "MY_SECRET");
+    }
+
+    /// DT-002 (SPEC-0099): the same rule for the GitHub client secret variable.
+    #[test]
+    fn dt_0099_002_github_secret_env_name_falls_back_only_when_the_setting_is_absent() {
+        let absent = ServerConfig::from_yaml("").unwrap().git;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).to_string())
+        };
+        assert_eq!(
+            absent.github_client_secret_env_name_with(&env(&[])),
+            "FSA_GITHUB_CLIENT_SECRET"
+        );
+        assert_eq!(
+            absent
+                .github_client_secret_env_name_with(&env(&[("MCPFS_GITHUB_CLIENT_SECRET", "old")])),
+            "MCPFS_GITHUB_CLIENT_SECRET"
+        );
+        assert_eq!(
+            absent.github_client_secret_env_name_with(&env(&[
+                ("FSA_GITHUB_CLIENT_SECRET", "n"),
+                ("MCPFS_GITHUB_CLIENT_SECRET", "old")
+            ])),
+            "FSA_GITHUB_CLIENT_SECRET"
+        );
+        assert!(
+            crate::env_compat::printed_lines().contains(
+                &"warning: environment variable MCPFS_GITHUB_CLIENT_SECRET is deprecated, use FSA_GITHUB_CLIENT_SECRET"
+                    .to_string()
+            ),
+            "the fallback prints the DR-006 line"
+        );
+        let written =
+            ServerConfig::from_yaml("git:\n  github_client_secret_env: FSA_GITHUB_CLIENT_SECRET\n")
+                .unwrap()
+                .git;
+        assert_eq!(
+            written
+                .github_client_secret_env_name_with(&env(&[("MCPFS_GITHUB_CLIENT_SECRET", "old")])),
+            "FSA_GITHUB_CLIENT_SECRET"
+        );
+        let other =
+            ServerConfig::from_yaml("git:\n  github_client_secret_env: MY_GH\n").unwrap().git;
+        assert_eq!(
+            other
+                .github_client_secret_env_name_with(&env(&[("MCPFS_GITHUB_CLIENT_SECRET", "old")])),
+            "MY_GH"
+        );
+    }
+
     #[test]
     fn defaults_match_csharp() {
         let c = ServerConfig::default();
@@ -1291,7 +1420,7 @@ mod tests {
         assert!(!c.git.enabled);
         assert_eq!(c.git.object_format, "sha1");
         assert_eq!(c.git.max_pack_size_mb, 512);
-        assert_eq!(c.git.github_client_secret_env, "MCPFS_GITHUB_CLIENT_SECRET");
+        assert_eq!(c.git.github_client_secret_env, None);
         assert_eq!(c.git.gitlab_instance_url, "https://gitlab.com");
         assert_eq!(c.git.remote_timeout_secs, 120);
         assert_eq!(c.git.max_stash_entries, 100);
@@ -1721,16 +1850,16 @@ infra:
         let parsed = parse_template(
             "minio.yaml.template",
             &[
-                ("MCPFS_MINIO_ENDPOINT", "http://minio.test:9000"),
-                ("MCPFS_MINIO_ACCESS_KEY", "test-access"),
-                ("MCPFS_MINIO_SECRET_KEY", "test-secret"),
+                ("FSA_MINIO_ENDPOINT", "http://minio.test:9000"),
+                ("FSA_MINIO_ACCESS_KEY", "test-access"),
+                ("FSA_MINIO_SECRET_KEY", "test-secret"),
             ],
         );
         assert_eq!(format!("{parsed:?}"), MINIO_TEMPLATE_SNAPSHOT);
     }
 
-    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: "", secret_key: "", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: "MCP_FS_OCR_KEY", prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: "MCPFS_GITHUB_CLIENT_SECRET", gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 } } }"#;
-    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: "test-access", secret_key: "test-secret", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: "MCP_FS_OCR_KEY", prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: "MCPFS_GITHUB_CLIENT_SECRET", gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 } } }"#;
+    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: "", secret_key: "", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 } } }"#;
+    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: "test-access", secret_key: "test-secret", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 } } }"#;
 
     // ── doc service ─────────────────────────────────────────────────────────────
 
@@ -1895,9 +2024,9 @@ infra:
     /// E2E-NEW-051: `server.public_base_url` goes through `${VAR}` expansion.
     #[test]
     fn e2e_new_051_public_base_url_expands_env() {
-        unsafe { std::env::set_var("MCPFS_PUBLIC_URL", "https://files.example.com") };
-        let c = ServerConfig::from_yaml("server:\n  public_base_url: \"${MCPFS_PUBLIC_URL}\"\n")
-            .unwrap();
+        unsafe { std::env::set_var("FSA_PUBLIC_URL", "https://files.example.com") };
+        let c =
+            ServerConfig::from_yaml("server:\n  public_base_url: \"${FSA_PUBLIC_URL}\"\n").unwrap();
         assert_eq!(c.server.public_base_url, "https://files.example.com");
     }
 }

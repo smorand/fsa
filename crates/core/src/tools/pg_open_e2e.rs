@@ -50,7 +50,7 @@ impl PgFixture {
             eprintln!("skipping {test}: built without --features postgres");
             return None;
         }
-        let schema = format!("mcpfs_pgopen_{test}_{}", std::process::id());
+        let schema = format!("fsa_pgopen_{test}_{}", std::process::id());
         // A run that panicked leaves its schema behind; start from nothing.
         drop_schema(&dsn, &schema).await;
 

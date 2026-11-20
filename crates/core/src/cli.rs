@@ -16,31 +16,37 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Env var holding a full config path, checked before the dir/name pair.
-pub const ENV_CONFIG: &str = "MCP_FS_CONFIG";
+pub const ENV_CONFIG: &str = "FSA_CONFIG";
 /// Env var holding the config directory (default `config`).
-pub const ENV_CONFIG_DIR: &str = "MCP_FS_CONFIG_DIR";
+pub const ENV_CONFIG_DIR: &str = "FSA_CONFIG_DIR";
 /// Env var holding the config file stem (default `local`).
-pub const ENV_CONFIG_NAME: &str = "MCP_FS_CONFIG_NAME";
+pub const ENV_CONFIG_NAME: &str = "FSA_CONFIG_NAME";
+/// The names the three variables above had before the rename, read until release 1.0.0.
+const LEGACY_ENV_CONFIG: &str = "MCP_FS_CONFIG";
+const LEGACY_ENV_CONFIG_DIR: &str = "MCP_FS_CONFIG_DIR";
+const LEGACY_ENV_CONFIG_NAME: &str = "MCP_FS_CONFIG_NAME";
 /// XDG base directory for user configuration, when set.
 pub const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 /// Fallback base for the user config directory.
 pub const ENV_HOME: &str = "HOME";
 
 /// Our directory inside the XDG config home, and the file we look for there.
-pub const XDG_APP_DIR: &str = "mcp-fs";
+pub const XDG_APP_DIR: &str = "fsa";
+/// The directory name before the rename, probed after [`XDG_APP_DIR`] until release 1.0.0.
+const LEGACY_XDG_APP_DIR: &str = "mcp-fs";
 pub const XDG_CONFIG_FILE: &str = "config.yaml";
 
-const ABOUT: &str = "mcp-fs: filesystem MCP server (SQLite metadata, object store or local blobs)";
+const ABOUT: &str = "fsa: filesystem MCP server (SQLite metadata, object store or local blobs)";
 const AFTER_HELP: &str = "Config resolution, highest priority first:\n\
      \x20 1. --config PATH (-c)\n\
-     \x20 2. $MCP_FS_CONFIG\n\
-     \x20 3. ~/.config/mcp-fs/config.yaml (honours $XDG_CONFIG_HOME), when it exists\n\
-     \x20 4. $MCP_FS_CONFIG_DIR (default 'config') / $MCP_FS_CONFIG_NAME (default 'local').yaml\n\
+     \x20 2. $FSA_CONFIG\n\
+     \x20 3. ~/.config/fsa/config.yaml, else ~/.config/mcp-fs/config.yaml (honours $XDG_CONFIG_HOME), when it exists\n\
+     \x20 4. $FSA_CONFIG_DIR (default 'config') / $FSA_CONFIG_NAME (default 'local').yaml\n\
      \nCases 1 and 2 are used as given, so a missing file is reported by name. Cases 3\n\
      and 4 are probed, and when neither exists every path tried is listed.";
 
 #[derive(Debug, Parser)]
-#[command(name = "mcp-fs", version, about = ABOUT, after_help = AFTER_HELP)]
+#[command(name = "fsa", version, about = ABOUT, after_help = AFTER_HELP)]
 pub struct Cli {
     /// Omitted verb means `serve`, matching the C# default.
     #[command(subcommand)]
@@ -51,7 +57,7 @@ pub struct Cli {
 pub enum Command {
     /// Start the streamable HTTP MCP server.
     Serve {
-        /// Config file path. Overrides MCP_FS_CONFIG and the dir/name pair.
+        /// Config file path. Overrides FSA_CONFIG and the dir/name pair.
         #[arg(short = 'c', long, value_name = "PATH")]
         config: Option<PathBuf>,
         /// Force git.enabled = true (overrides config YAML).
@@ -112,7 +118,7 @@ pub enum Command {
     /// Run one purge sweep (SPEC-0014): a project's file/project sweep, or
     /// (with no `--project`) the global grace-period sweep.
     Purge {
-        /// Config file path. Overrides MCP_FS_CONFIG and the dir/name pair.
+        /// Config file path. Overrides FSA_CONFIG and the dir/name pair.
         #[arg(short = 'c', long, value_name = "PATH")]
         config: Option<PathBuf>,
         /// Sweep only this project instead of running the global grace sweep.
@@ -179,7 +185,7 @@ async fn cmd_migrate(from: &std::path::Path, to: &std::path::Path) -> anyhow::Re
     Ok(())
 }
 
-/// Dispatch for `mcp-fs purge` (FR-NEW-010/FR-NEW-011).
+/// Dispatch for `fsa purge` (FR-NEW-010/FR-NEW-011).
 ///
 /// Builds its own admin store, volume store manager and safety manager rather
 /// than reusing `app::build`'s: a one-shot CLI sweep needs none of `app::build`'s
@@ -283,7 +289,7 @@ fn cmd_token(
     let key_path =
         key.map(std::path::Path::to_path_buf).unwrap_or_else(keys::default_private_key_path);
     let token = keys::mint_token_from_file(&key_path, email, issuer, claim, ttl)?;
-    // Nothing else on stdout: `mcp-fs token me@x.com > token.txt` must be usable.
+    // Nothing else on stdout: `fsa token me@x.com > token.txt` must be usable.
     println!("{token}");
     Ok(())
 }
@@ -319,7 +325,7 @@ async fn cmd_serve(
     }
     // The banner goes to stderr so it never pollutes a piped stdout.
     eprintln!(
-        "Serving mcp-fs {} on {}:{} (config={})",
+        "Serving fsa {} on {}:{} (config={})",
         crate::app::VERSION,
         config.server.host,
         config.server.port,
@@ -328,9 +334,9 @@ async fn cmd_serve(
     crate::app::serve(config).await
 }
 
-/// Config path resolution: `--config`, else `MCP_FS_CONFIG`, else
-/// `~/.config/mcp-fs/config.yaml` when it exists, else
-/// `{MCP_FS_CONFIG_DIR|config}/{MCP_FS_CONFIG_NAME|local}.yaml`.
+/// Config path resolution: `--config`, else `FSA_CONFIG`, else
+/// `~/.config/fsa/config.yaml`, else `~/.config/mcp-fs/config.yaml` (deprecated) when it exists, else
+/// `{FSA_CONFIG_DIR|config}/{FSA_CONFIG_NAME|local}.yaml`.
 ///
 /// `Err` carries every path that was probed, for a boot message that says where
 /// to put the file instead of naming one location the user may not have expected.
@@ -381,7 +387,7 @@ pub fn resolve_config_path_with(
     {
         return Ok(p.to_path_buf());
     }
-    if let Some(v) = env(ENV_CONFIG).and_then(non_blank) {
+    if let Some(v) = crate::env_compat::read_with(ENV_CONFIG, LEGACY_ENV_CONFIG, &env) {
         return Ok(PathBuf::from(v));
     }
 
@@ -399,10 +405,21 @@ pub fn resolve_config_path_with(
             return Ok(candidate);
         }
         tried.push(candidate);
+        let legacy = base.join(LEGACY_XDG_APP_DIR).join(XDG_CONFIG_FILE);
+        if exists(&legacy) {
+            crate::env_compat::warn_directory(
+                &base.join(LEGACY_XDG_APP_DIR),
+                &base.join(XDG_APP_DIR),
+            );
+            return Ok(legacy);
+        }
+        tried.push(legacy);
     }
 
-    let dir = env(ENV_CONFIG_DIR).and_then(non_blank).unwrap_or_else(|| "config".into());
-    let name = env(ENV_CONFIG_NAME).and_then(non_blank).unwrap_or_else(|| "local".into());
+    let dir = crate::env_compat::read_with(ENV_CONFIG_DIR, LEGACY_ENV_CONFIG_DIR, &env)
+        .unwrap_or_else(|| "config".into());
+    let name = crate::env_compat::read_with(ENV_CONFIG_NAME, LEGACY_ENV_CONFIG_NAME, &env)
+        .unwrap_or_else(|| "local".into());
     let candidate = PathBuf::from(dir).join(format!("{name}.yaml"));
     if exists(&candidate) {
         return Ok(candidate);
@@ -423,7 +440,7 @@ fn load_config(explicit: Option<&std::path::Path>) -> Result<(ServerConfig, Path
             let list = tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
             Err(ToolError::invalid_argument(format!(
                 "no configuration file found, tried: {list}. \
-                 Pass --config PATH, set MCP_FS_CONFIG, or create one of those files"
+                 Pass --config PATH, set FSA_CONFIG, or create one of those files"
             )))
         }
     }
@@ -511,7 +528,28 @@ mod tests {
             |k| (k == ENV_XDG_CONFIG_HOME).then(|| "/xdg".to_string()),
             all_exist,
         );
+        assert_eq!(p.unwrap(), PathBuf::from("/xdg/fsa/config.yaml"));
+    }
+
+    /// DT-003 (SPEC-0099): the old user directory is still probed, after the new one.
+    #[test]
+    fn the_old_user_directory_is_used_when_only_it_exists() {
+        let p = resolve_config_path_with(
+            None,
+            |k| (k == ENV_XDG_CONFIG_HOME).then(|| "/xdg".to_string()),
+            |path| path == std::path::Path::new("/xdg/mcp-fs/config.yaml"),
+        );
         assert_eq!(p.unwrap(), PathBuf::from("/xdg/mcp-fs/config.yaml"));
+    }
+
+    #[test]
+    fn the_new_user_directory_wins_when_both_exist() {
+        let p = resolve_config_path_with(
+            None,
+            |k| (k == ENV_XDG_CONFIG_HOME).then(|| "/xdg".to_string()),
+            all_exist,
+        );
+        assert_eq!(p.unwrap(), PathBuf::from("/xdg/fsa/config.yaml"));
     }
 
     #[test]
@@ -521,7 +559,7 @@ mod tests {
             |k| (k == ENV_HOME).then(|| "/home/me".to_string()),
             all_exist,
         );
-        assert_eq!(p.unwrap(), PathBuf::from("/home/me/.config/mcp-fs/config.yaml"));
+        assert_eq!(p.unwrap(), PathBuf::from("/home/me/.config/fsa/config.yaml"));
     }
 
     /// The new step must not shadow a project local checkout, which is the common
@@ -545,13 +583,13 @@ mod tests {
         let p = resolve_config_path_with(
             None,
             |k| match k {
-                ENV_CONFIG_DIR => Some("/etc/mcpfs".into()),
+                ENV_CONFIG_DIR => Some("/etc/fsa".into()),
                 ENV_CONFIG_NAME => Some("prod".into()),
                 _ => None,
             },
             all_exist,
         );
-        assert_eq!(p.unwrap(), PathBuf::from("/etc/mcpfs/prod.yaml"));
+        assert_eq!(p.unwrap(), PathBuf::from("/etc/fsa/prod.yaml"));
     }
 
     #[test]
@@ -583,6 +621,7 @@ mod tests {
         assert_eq!(
             tried,
             vec![
+                PathBuf::from("/home/me/.config/fsa/config.yaml"),
                 PathBuf::from("/home/me/.config/mcp-fs/config.yaml"),
                 PathBuf::from("config/local.yaml"),
             ]
@@ -591,14 +630,14 @@ mod tests {
 
     #[test]
     fn no_verb_means_serve() {
-        let cli = Cli::parse_from(["mcp-fs"]);
+        let cli = Cli::parse_from(["fsa"]);
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn serve_accepts_short_and_long_config_flags() {
         for args in
-            [vec!["mcp-fs", "serve", "--config", "a.yaml"], vec!["mcp-fs", "serve", "-c", "a.yaml"]]
+            [vec!["fsa", "serve", "--config", "a.yaml"], vec!["fsa", "serve", "-c", "a.yaml"]]
         {
             match Cli::parse_from(args).command {
                 Some(Command::Serve { config, .. }) => {
@@ -611,7 +650,7 @@ mod tests {
 
     #[test]
     fn serve_accepts_sqlite_and_db_flags() {
-        match Cli::parse_from(["mcp-fs", "serve", "--sqlite", "--db"]).command {
+        match Cli::parse_from(["fsa", "serve", "--sqlite", "--db"]).command {
             Some(Command::Serve { sqlite, db, .. }) => {
                 assert!(sqlite);
                 assert!(db);
@@ -622,7 +661,7 @@ mod tests {
 
     #[test]
     fn serve_accepts_git_web_context7_flags() {
-        match Cli::parse_from(["mcp-fs", "serve", "--git", "--web", "--context7"]).command {
+        match Cli::parse_from(["fsa", "serve", "--git", "--web", "--context7"]).command {
             Some(Command::Serve { git, web, context7, .. }) => {
                 assert!(git);
                 assert!(web);
@@ -634,11 +673,11 @@ mod tests {
 
     #[test]
     fn keys_defaults_to_the_dot_keys_dir() {
-        match Cli::parse_from(["mcp-fs", "keys"]).command {
+        match Cli::parse_from(["fsa", "keys"]).command {
             Some(Command::Keys { dir }) => assert_eq!(dir, PathBuf::from(".keys")),
             other => panic!("expected keys, got {other:?}"),
         }
-        match Cli::parse_from(["mcp-fs", "keys", "--dir", "/tmp/k"]).command {
+        match Cli::parse_from(["fsa", "keys", "--dir", "/tmp/k"]).command {
             Some(Command::Keys { dir }) => assert_eq!(dir, PathBuf::from("/tmp/k")),
             other => panic!("expected keys, got {other:?}"),
         }
@@ -646,7 +685,7 @@ mod tests {
 
     #[test]
     fn token_defaults_match_csharp() {
-        match Cli::parse_from(["mcp-fs", "token", "me@test.com"]).command {
+        match Cli::parse_from(["fsa", "token", "me@test.com"]).command {
             Some(Command::Token { email, key, issuer, claim, ttl }) => {
                 assert_eq!(email, "me@test.com");
                 assert_eq!(key, None);
@@ -661,7 +700,7 @@ mod tests {
     #[test]
     fn token_accepts_every_flag() {
         match Cli::parse_from([
-            "mcp-fs",
+            "fsa",
             "token",
             "me@test.com",
             "--key",
@@ -687,17 +726,17 @@ mod tests {
 
     #[test]
     fn version_is_a_verb() {
-        assert!(matches!(Cli::parse_from(["mcp-fs", "version"]).command, Some(Command::Version)));
+        assert!(matches!(Cli::parse_from(["fsa", "version"]).command, Some(Command::Version)));
     }
 
     #[test]
     fn unknown_verbs_are_rejected() {
-        assert!(Cli::try_parse_from(["mcp-fs", "frobnicate"]).is_err());
+        assert!(Cli::try_parse_from(["fsa", "frobnicate"]).is_err());
     }
 
     #[test]
     fn purge_accepts_project_and_on_demand() {
-        match Cli::parse_from(["mcp-fs", "purge", "--project", "proj1", "--on-demand"]).command {
+        match Cli::parse_from(["fsa", "purge", "--project", "proj1", "--on-demand"]).command {
             Some(Command::Purge { project, on_demand, .. }) => {
                 assert_eq!(project, Some("proj1".to_string()));
                 assert!(on_demand);
@@ -708,7 +747,7 @@ mod tests {
 
     #[test]
     fn purge_with_no_flags_means_the_global_sweep() {
-        match Cli::parse_from(["mcp-fs", "purge"]).command {
+        match Cli::parse_from(["fsa", "purge"]).command {
             Some(Command::Purge { project, on_demand, .. }) => {
                 assert_eq!(project, None);
                 assert!(!on_demand);
@@ -721,28 +760,20 @@ mod tests {
     async fn keys_then_token_works_end_to_end() {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().join("k");
-        dispatch(Cli::parse_from(["mcp-fs", "keys", "--dir", dir.to_str().unwrap()]))
-            .await
-            .unwrap();
+        dispatch(Cli::parse_from(["fsa", "keys", "--dir", dir.to_str().unwrap()])).await.unwrap();
         assert!(dir.join("jwt.pub").exists());
 
         let key = dir.join("jwt.key");
-        dispatch(Cli::parse_from([
-            "mcp-fs",
-            "token",
-            "me@test.com",
-            "--key",
-            key.to_str().unwrap(),
-        ]))
-        .await
-        .unwrap();
+        dispatch(Cli::parse_from(["fsa", "token", "me@test.com", "--key", key.to_str().unwrap()]))
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn token_with_a_missing_key_fails() {
         assert!(
             dispatch(Cli::parse_from([
-                "mcp-fs",
+                "fsa",
                 "token",
                 "me@test.com",
                 "--key",
@@ -756,11 +787,9 @@ mod tests {
     #[tokio::test]
     async fn serve_with_a_missing_config_fails() {
         assert!(
-            dispatch(Cli::parse_from(
-                ["mcp-fs", "serve", "--config", "/definitely/not/here.yaml",]
-            ))
-            .await
-            .is_err()
+            dispatch(Cli::parse_from(["fsa", "serve", "--config", "/definitely/not/here.yaml",]))
+                .await
+                .is_err()
         );
     }
 
@@ -817,7 +846,7 @@ mod tests {
         drop(client);
 
         dispatch(Cli::parse_from([
-            "mcp-fs",
+            "fsa",
             "purge",
             "--config",
             path.to_str().unwrap(),
@@ -839,7 +868,7 @@ mod tests {
         admin.seed_purge_config_for_test("proj1", false, true, Some(7), Some(30)).await.unwrap();
 
         let err = dispatch(Cli::parse_from([
-            "mcp-fs",
+            "fsa",
             "purge",
             "--config",
             path.to_str().unwrap(),
@@ -863,7 +892,7 @@ mod tests {
         admin.seed_purge_config_for_test("proj1", false, true, Some(7), Some(30)).await.unwrap();
 
         dispatch(Cli::parse_from([
-            "mcp-fs",
+            "fsa",
             "purge",
             "--config",
             path.to_str().unwrap(),
@@ -885,7 +914,7 @@ mod tests {
         drop(admin);
 
         let err = dispatch(Cli::parse_from([
-            "mcp-fs",
+            "fsa",
             "purge",
             "--config",
             path.to_str().unwrap(),
@@ -907,7 +936,7 @@ mod tests {
         let admin = seeded_admin(&config).await;
         drop(admin);
 
-        dispatch(Cli::parse_from(["mcp-fs", "purge", "--config", path.to_str().unwrap()]))
+        dispatch(Cli::parse_from(["fsa", "purge", "--config", path.to_str().unwrap()]))
             .await
             .unwrap();
     }
@@ -926,7 +955,7 @@ mod tests {
 
         // Must not fail or require `--project`/`--on-demand`: the no-`--project`
         // branch never reads `autopurge_enabled` at all.
-        dispatch(Cli::parse_from(["mcp-fs", "purge", "--config", path.to_str().unwrap()]))
+        dispatch(Cli::parse_from(["fsa", "purge", "--config", path.to_str().unwrap()]))
             .await
             .unwrap();
     }

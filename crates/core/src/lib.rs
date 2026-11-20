@@ -1,4 +1,4 @@
-//! mcp-fs: a streamable-HTTP MCP server exposing a simulated multi-project
+//! fsa: a streamable-HTTP MCP server exposing a simulated multi-project
 //! filesystem, over SQLite or PostgreSQL.
 //!
 //! It began as a strict 1:1 port of a C#/.NET 9 implementation, which is why many
@@ -15,6 +15,7 @@ pub mod config;
 pub mod core;
 pub mod deleted_projects_screen;
 pub mod docs;
+pub mod env_compat;
 pub mod errors;
 pub mod exports;
 pub mod git;

@@ -1,5 +1,5 @@
 # MinIO / S3 config template: SQLite metadata + MinIO (S3) blobs + SQLite ACL.
-# Copy to config/local.yaml and provide the secret via env (.env / MCPFS_MINIO_SECRET_KEY).
+# Copy to config/local.yaml and provide the secret via env (.env / FSA_MINIO_SECRET_KEY).
 #   cp config/minio.yaml.template config/local.yaml
 
 server:
@@ -23,9 +23,9 @@ infra:
     dir: state/volumes
   blob:
     backend: minio
-    endpoint: "${MCPFS_MINIO_ENDPOINT:-http://127.0.0.1:9000}"
-    access_key: "${MCPFS_MINIO_ACCESS_KEY:-admin}"
-    secret_key: "${MCPFS_MINIO_SECRET_KEY}"   # secret: export it, never commit
+    endpoint: "${FSA_MINIO_ENDPOINT:-http://127.0.0.1:9000}"
+    access_key: "${FSA_MINIO_ACCESS_KEY:-admin}"
+    secret_key: "${FSA_MINIO_SECRET_KEY}"   # secret: export it, never commit
     bucket_prefix: "mcpfs-"
     region: us-east-1
   admin:
@@ -50,7 +50,7 @@ extract:
     # provider: multimodal
     # endpoint: https://api.openai.com/v1/chat/completions
     # model: gpt-4o-mini
-    # api_key_env: MCP_FS_OCR_KEY
+    # api_key_env: FSA_OCR_KEY
     # prompt: "Transcribe this document faithfully into Markdown."
 
 # Git HTTP smart server (opt-in). When enabled, adds git.* MCP tools and
@@ -61,7 +61,7 @@ git:
   anonymous_read: false
   max_pack_size_mb: 512
   # github_client_id: ""
-  # github_client_secret_env: MCPFS_GITHUB_CLIENT_SECRET   # export MCPFS_GITHUB_CLIENT_SECRET=<secret>
+  # github_client_secret_env: FSA_GITHUB_CLIENT_SECRET   # export FSA_GITHUB_CLIENT_SECRET=<secret>
   # gitlab_client_id: ""
   # gitlab_client_secret_env: GITLAB_CLIENT_SECRET
   # gitlab_instance_url: https://gitlab.com

@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
         assert!(r.headers().contains_key("Mcp-Session-Id"), "initialize must issue a session id");
         let v = sse_json(&body_string(r).await);
-        assert_eq!(v["result"]["serverInfo"]["name"], "mcp-fs");
+        assert_eq!(v["result"]["serverInfo"]["name"], "fsa");
         assert_eq!(v["result"]["serverInfo"]["version"], VERSION);
     }
 

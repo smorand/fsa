@@ -29,10 +29,10 @@ fn b64() -> base64::engine::general_purpose::GeneralPurpose {
 pub fn decode_key(base64_key: &str) -> Result<[u8; KEY_SIZE]> {
     let raw = b64()
         .decode(base64_key.trim())
-        .map_err(|_| ToolError::invalid_argument("MCPFS_TOKEN_KEY must be valid base64."))?;
+        .map_err(|_| ToolError::invalid_argument("FSA_TOKEN_KEY must be valid base64."))?;
     if raw.len() != KEY_SIZE {
         return Err(ToolError::invalid_argument(format!(
-            "MCPFS_TOKEN_KEY must decode to 32 bytes (got {}). \
+            "FSA_TOKEN_KEY must decode to 32 bytes (got {}). \
              Generate one with: openssl rand -base64 32",
             raw.len()
         )));

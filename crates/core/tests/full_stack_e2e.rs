@@ -25,20 +25,20 @@
 //!
 //! ```bash
 //! export MCPFS_TEST_PG_DSN=postgres://<user>@127.0.0.1:5432/postgres
-//! export MCPFS_MINIO_SECRET_KEY=<your MinIO/S3 secret key>
+//! export FSA_MINIO_SECRET_KEY=<your MinIO/S3 secret key>
 //! # optional, default to the usual local MinIO console defaults:
-//! export MCPFS_MINIO_ENDPOINT=http://127.0.0.1:9000
-//! export MCPFS_MINIO_ACCESS_KEY=admin
+//! export FSA_MINIO_ENDPOINT=http://127.0.0.1:9000
+//! export FSA_MINIO_ACCESS_KEY=admin
 //! make test-e2e-full
 //! ```
 //!
-//! `make test-e2e-full` is `cargo test -p mcp-fs-core --features postgres --test
+//! `make test-e2e-full` is `cargo test -p fsa-core --features postgres --test
 //! full_stack_e2e -- --ignored --nocapture`.
 //!
 //! ## Setup and teardown
 //!
 //! Setup creates nothing ahead of time: a fresh PostgreSQL **schema**
-//! (`e2e_<8 hex>`) and a fresh MinIO **bucket** (`mcpfs-e2e-<8 hex>-<project>`)
+//! (`e2e_<8 hex>`) and a fresh MinIO **bucket** (`fsa-e2e-<8 hex>-<project>`)
 //! are provisioned lazily, by the server itself, the same way a real deployment
 //! provisions its first volume (`PostgresRelationalDb::connect`'s
 //! `CREATE SCHEMA IF NOT EXISTS`, `StoreManager::provision_volume`'s
@@ -55,15 +55,15 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
-use mcp_fs_core::app;
-use mcp_fs_core::config::{Dsn, ServerConfig};
-use mcp_fs_core::keys;
-use mcp_fs_core::storage::rel::{PoolSettings, PostgresRelationalDb};
+use fsa_core::app;
+use fsa_core::config::{Dsn, ServerConfig};
+use fsa_core::keys;
+use fsa_core::storage::rel::{PoolSettings, PostgresRelationalDb};
 use serde_json::{Value, json};
 
 /// rmcp answers 406 to a `/mcp` POST whose `Accept` lacks both media types.
 const MCP_ACCEPT: &str = "application/json, text/event-stream";
-const ADMIN: &str = "e2e-admin@mcp-fs.test";
+const ADMIN: &str = "e2e-admin@fsa.test";
 
 // ── environment ──────────────────────────────────────────────────────────────
 
@@ -80,14 +80,13 @@ fn required_env() -> Env {
          postgres://<user>@127.0.0.1:5432/postgres. This test does not fall back to SQLite: \
          proving the postgres/minio backends work end to end is its entire purpose.",
     );
-    let minio_secret_key = std::env::var("MCPFS_MINIO_SECRET_KEY").expect(
-        "MCPFS_MINIO_SECRET_KEY is required: point it at a running MinIO/S3's secret key. \
+    let minio_secret_key = std::env::var("FSA_MINIO_SECRET_KEY").expect(
+        "FSA_MINIO_SECRET_KEY is required: point it at a running MinIO/S3's secret key. \
          This test does not fall back to the local blob backend.",
     );
     let minio_endpoint =
-        std::env::var("MCPFS_MINIO_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".into());
-    let minio_access_key =
-        std::env::var("MCPFS_MINIO_ACCESS_KEY").unwrap_or_else(|_| "admin".into());
+        std::env::var("FSA_MINIO_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:9000".into());
+    let minio_access_key = std::env::var("FSA_MINIO_ACCESS_KEY").unwrap_or_else(|_| "admin".into());
     Env { pg_dsn, minio_endpoint, minio_access_key, minio_secret_key }
 }
 
@@ -125,7 +124,7 @@ impl Drop for Teardown {
                 .build()
                 .expect("teardown runtime");
             rt.block_on(async move {
-                match mcp_fs_core::storage::build_blob_store(&config, &project_id) {
+                match fsa_core::storage::build_blob_store(&config, &project_id) {
                     Ok(blob) => {
                         if let Err(e) = blob.remove_bucket().await {
                             eprintln!("full_stack_e2e teardown: bucket removal failed: {e}");
@@ -350,7 +349,7 @@ async fn full_stack_lifecycle() {
     config.infra.blob.endpoint = env.minio_endpoint.clone();
     config.infra.blob.access_key = env.minio_access_key.clone();
     config.infra.blob.secret_key = env.minio_secret_key.clone();
-    config.infra.blob.bucket_prefix = format!("mcpfs-e2e-{run_id}-");
+    config.infra.blob.bucket_prefix = format!("fsa-e2e-{run_id}-");
 
     config.git.enabled = true;
     let config = Arc::new(config);
@@ -668,7 +667,7 @@ async fn full_stack_lifecycle() {
 }
 
 // ── small local base64 helpers (avoid pulling the `base64` crate into the test
-// binary's own dependency closure just for two one-line calls; mcp-fs-core
+// binary's own dependency closure just for two one-line calls; fsa-core
 // already re-exposes the exact same encoding via the REST wire format) ───────
 
 fn base64_encode(data: &[u8]) -> String {

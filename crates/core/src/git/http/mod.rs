@@ -15,7 +15,7 @@
 //!
 //! Deliberate parity choices, all matching the C# byte for byte:
 //!
-//! * Capability strings match the reference, including `agent=mcp-fs/0.1.0`, with one
+//! * Capability strings match the reference, including `agent=fsa/0.1.0`, with one
 //!   difference: upload-pack announces `multi_ack_detailed` (which git requires over smart
 //!   HTTP) and not the plain `multi_ack` (see `UPLOAD_PACK_CAPABILITIES`).
 //! * Fetch negotiates like git's own server (`negotiate.rs`, SPEC-0067): the pack carries what
@@ -25,7 +25,7 @@
 //!   though the refs update correctly. This is a deliberate divergence: reproducing a
 //!   protocol bug that breaks a documented feature is not useful parity. Everything
 //!   else about the report (per ref `ok`/`ng` lines, framing, flush) is unchanged.
-//! * `401` responses carry `WWW-Authenticate: Bearer realm="mcp-fs"`, like the C#.
+//! * `401` responses carry `WWW-Authenticate: Bearer realm="fsa"`, like the C#.
 //!   Note the git CLI only prompts for credentials on a `Basic` challenge, so
 //!   anonymous CLI use needs `git.anonymous_read` or an explicit credential helper.
 //!
@@ -64,10 +64,9 @@ use std::sync::Arc;
 /// real `git clone` fails against it; verified against both servers. Advertising the
 /// detailed variant is a deliberate divergence: parity that leaves the documented git
 /// protocol unusable is not useful parity.
-const UPLOAD_PACK_CAPABILITIES: &str =
-    "multi_ack_detailed side-band-64k ofs-delta agent=mcp-fs/0.1.0";
+const UPLOAD_PACK_CAPABILITIES: &str = "multi_ack_detailed side-band-64k ofs-delta agent=fsa/0.1.0";
 const RECEIVE_PACK_CAPABILITIES: &str =
-    "report-status delete-refs side-band-64k quiet atomic ofs-delta agent=mcp-fs/0.1.0";
+    "report-status delete-refs side-band-64k quiet atomic ofs-delta agent=fsa/0.1.0";
 const ZERO_ID: &str = "0000000000000000000000000000000000000000";
 /// side-band-64k: the largest pkt-line is 65520 bytes (its 4 byte length included), so one
 /// packet carries at most 65520 - 4 - 1 bytes of payload after the 1 byte channel id. A larger
@@ -85,9 +84,9 @@ pub struct GitHttpState {
 /// The git smart HTTP router, ready to `merge` into the main app.
 ///
 /// ```ignore
-/// let git = mcp_fs_core::git::repo::GitRepoStore::shared(state.config.clone());
+/// let git = fsa_core::git::repo::GitRepoStore::shared(state.config.clone());
 /// if state.config.git.enabled {
-///     app = app.merge(mcp_fs_core::git::http::router(state.clone(), git));
+///     app = app.merge(fsa_core::git::http::router(state.clone(), git));
 /// }
 /// ```
 pub fn router(app: Arc<AppState>, git: Arc<GitRepoStore>) -> Router {
@@ -253,7 +252,7 @@ async fn gate(
                 let mut resp = text(StatusCode::UNAUTHORIZED, "authentication required");
                 resp.headers_mut().insert(
                     header::WWW_AUTHENTICATE,
-                    header::HeaderValue::from_static("Bearer realm=\"mcp-fs\""),
+                    header::HeaderValue::from_static("Bearer realm=\"fsa\""),
                 );
                 return Err(Box::new(resp));
             }
@@ -638,11 +637,11 @@ mod tests {
         // the C# text plus nothing the service does not honour: no plain `multi_ack`
         assert_eq!(
             UPLOAD_PACK_CAPABILITIES,
-            "multi_ack_detailed side-band-64k ofs-delta agent=mcp-fs/0.1.0"
+            "multi_ack_detailed side-band-64k ofs-delta agent=fsa/0.1.0"
         );
         assert_eq!(
             RECEIVE_PACK_CAPABILITIES,
-            "report-status delete-refs side-band-64k quiet atomic ofs-delta agent=mcp-fs/0.1.0"
+            "report-status delete-refs side-band-64k quiet atomic ofs-delta agent=fsa/0.1.0"
         );
         assert_eq!(ZERO_ID.len(), 40);
     }
@@ -666,7 +665,7 @@ mod tests {
         let text = String::from_utf8_lossy(&body).to_string();
         assert!(text.starts_with("001e# service=git-upload-pack\n0000"));
         assert!(text.contains(&format!("{ZERO_ID} capabilities^{{}}\0")));
-        assert!(text.contains("agent=mcp-fs/0.1.0"));
+        assert!(text.contains("agent=fsa/0.1.0"));
         assert!(text.ends_with("0000"));
     }
 
@@ -686,7 +685,7 @@ mod tests {
         assert!(text.contains(&format!("{main} refs/heads/main\n")));
         assert!(text.contains(&format!("{tag} refs/tags/v1\n")));
         assert_eq!(
-            text.matches("agent=mcp-fs/0.1.0").count(),
+            text.matches("agent=fsa/0.1.0").count(),
             1,
             "capabilities appear once, on the first ref line"
         );
@@ -777,7 +776,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (_s, e) = entry(d.path()).await;
         let (commit, _tree, _blob) =
-            seed_commit(&e.objects, "a.txt", b"hello from mcp-fs", "initial").await.unwrap();
+            seed_commit(&e.objects, "a.txt", b"hello from fsa", "initial").await.unwrap();
         e.db.set_ref("refs/heads/main", &commit, false).await.unwrap();
 
         let mut body = Vec::new();
@@ -1242,7 +1241,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(r.headers()[header::WWW_AUTHENTICATE], "Bearer realm=\"mcp-fs\"");
+        assert_eq!(r.headers()[header::WWW_AUTHENTICATE], "Bearer realm=\"fsa\"");
         assert_eq!(body_bytes(r).await, b"authentication required");
     }
 

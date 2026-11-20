@@ -26,7 +26,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
 /// Sent on every request, matching the C# client.
-pub const USER_AGENT: &str = concat!("mcp-fs/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("fsa/", env!("CARGO_PKG_VERSION"));
 
 pub const GITHUB_DEVICE_URL: &str = "https://github.com/login/device/code";
 pub const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
@@ -277,7 +277,7 @@ impl HttpDeviceFlowClient {
     }
 
     async fn github_poll(&self, code: &DeviceCode) -> Result<TokenPoll> {
-        let secret = Self::secret(&self.config.github_client_secret_env, "GitHub")?;
+        let secret = Self::secret(&self.config.github_client_secret_env_name(), "GitHub")?;
         let json: TokenBody = self
             .post_form(
                 &self.github_token_url,
@@ -406,6 +406,12 @@ impl TokenBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_user_agent_is_fsa() {
+        assert_eq!(USER_AGENT, concat!("fsa/", env!("CARGO_PKG_VERSION")));
+    }
     use axum::Router;
     use axum::extract::Form;
     use axum::routing::post;
@@ -419,7 +425,7 @@ mod tests {
         GitConfig {
             enabled: true,
             github_client_id: "gh-client".into(),
-            github_client_secret_env: gh_env.into(),
+            github_client_secret_env: Some(gh_env.into()),
             gitlab_client_id: "gl-client".into(),
             gitlab_client_secret_env: gl_env.into(),
             ..Default::default()

@@ -18,8 +18,8 @@ fi
 # The keypair must exist before the server can verify a bearer token.
 if [ ! -f .keys/jwt.pub ]; then
   echo "Generating a dev keypair in .keys ..."
-  cargo run --release --quiet -p mcp-fs -- keys --dir .keys
+  cargo run --release --quiet -p fsa -- keys --dir .keys
 fi
 
 cargo build --release
-exec ./target/release/mcp-fs serve --config config/local.yaml
+exec ./target/release/fsa serve --config config/local.yaml

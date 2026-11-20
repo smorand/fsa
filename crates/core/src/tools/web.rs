@@ -296,10 +296,13 @@ fn build_client(timeout_secs: u64) -> Result<reqwest::Client, ToolError> {
         .map_err(|e| ToolError::internal(format!("http client error: {e}")))
 }
 
+/// The `User-Agent` of every request made by the web tools.
+pub(crate) const USER_AGENT: &str = "fsa-web/1.0";
+
 /// The one client setup of the web tools. The environment proxy is kept on purpose: the owner
 /// accepted that a proxy resolves names itself (DEC-009, BL-0157).
 pub(crate) fn client_builder(timeout: std::time::Duration) -> reqwest::ClientBuilder {
-    reqwest::Client::builder().timeout(timeout).user_agent("mcp-fs-web/1.0")
+    reqwest::Client::builder().timeout(timeout).user_agent(USER_AGENT)
 }
 
 /// Extract text between a delimiter and the next `<` (or end of string), stripping tags.
@@ -773,6 +776,12 @@ pub(crate) fn answer_held(url: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_user_agent_is_fsa() {
+        assert_eq!(USER_AGENT, "fsa-web/1.0");
+    }
     use crate::config::WebConfig;
     use crate::tools::registry_support::ToolRegistry;
 

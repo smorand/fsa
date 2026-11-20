@@ -18,10 +18,10 @@ DS_PROJ=""
 
 # Le binaire du serveur, construit si le runner ne l'a pas déjà fait.
 ds_binary() {
-  if [[ ! -x ./target/release/mcp-fs ]]; then
-    cargo build --release -p mcp-fs -q || return 1
+  if [[ ! -x ./target/release/fsa ]]; then
+    cargo build --release -p fsa -q || return 1
   fi
-  [[ -x ./target/release/mcp-fs ]]
+  [[ -x ./target/release/fsa ]]
 }
 
 # Démarre un serveur dédié. $1 = port, $2 = bloc YAML doc_service (multi-lignes).
@@ -32,10 +32,10 @@ ds_start() {
 
   ds_binary || return 1
   if [[ ! -f .keys/jwt.pub ]]; then
-    ./target/release/mcp-fs keys --dir .keys >/dev/null 2>&1 || return 1
+    ./target/release/fsa keys --dir .keys >/dev/null 2>&1 || return 1
   fi
 
-  DS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mcp-fs-docsvc.XXXXXX")"
+  DS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fsa-docsvc.XXXXXX")"
   cat > "$DS_DIR/config.yaml" <<EOF
 server:
   host: 127.0.0.1
@@ -65,7 +65,7 @@ api:
 $doc_block
 EOF
 
-  ./target/release/mcp-fs serve --config "$DS_DIR/config.yaml" \
+  ./target/release/fsa serve --config "$DS_DIR/config.yaml" \
     >"$DS_DIR/server.log" 2>&1 &
   DS_PID=$!
   for _ in $(seq 1 60); do
@@ -76,7 +76,7 @@ EOF
     return 1
   fi
 
-  DS_TOKEN="$(./target/release/mcp-fs token admin@example.com --key .keys/jwt.key 2>/dev/null)"
+  DS_TOKEN="$(./target/release/fsa token admin@example.com --key .keys/jwt.key 2>/dev/null)"
   [[ -n "$DS_TOKEN" ]] || return 1
 
   DS_PROJ="ds-$$"
@@ -119,8 +119,8 @@ ds_upload() {
     2>/dev/null || true
 }
 
-# Écrit un PDF d'une page contenant "hello mcpfs". Construit ici plutôt que
+# Écrit un PDF d'une page contenant "hello fsa". Construit ici plutôt que
 # committé : le dépôt ne porte aucune fixture binaire.
 ds_sample_pdf() {
-  printf '%%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 24 Tf 20 100 Td (hello mcpfs) Tj ET\nendstream endobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%%%EOF\n' > "$1"
+  printf '%%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 42>>stream\nBT /F1 24 Tf 20 100 Td (hello fsa) Tj ET\nendstream endobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%%%EOF\n' > "$1"
 }

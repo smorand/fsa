@@ -216,7 +216,7 @@ mod tests {
 
     fn store() -> (tempfile::TempDir, LocalBlobStore) {
         let d = tempfile::tempdir().unwrap();
-        let s = LocalBlobStore::new(d.path(), "mcpfs-test");
+        let s = LocalBlobStore::new(d.path(), "fsa-test");
         (d, s)
     }
 
@@ -231,7 +231,7 @@ mod tests {
         BEFORE_REFRESH.with(|h| h.set(None));
         r.unwrap();
         assert_eq!(s.get("racy", 0, None).await.unwrap(), b"data");
-        assert!(std::fs::metadata(d.path().join("mcpfs-test").join("ra").join("racy")).is_ok());
+        assert!(std::fs::metadata(d.path().join("fsa-test").join("ra").join("racy")).is_ok());
     }
 
     /// SPEC-0038/DT-002: the refresh path keeps its bytes and leaves no temp file.
@@ -239,7 +239,7 @@ mod tests {
     async fn refresh_path_leaves_no_temp_file() {
         let (d, s) = store();
         s.put("kept", b"data").await.unwrap();
-        let shard = d.path().join("mcpfs-test").join("ke");
+        let shard = d.path().join("fsa-test").join("ke");
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
         std::fs::File::open(shard.join("kept")).unwrap().set_modified(old).unwrap();
 
@@ -263,7 +263,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let (d, s) = store();
         s.put("locked", b"data").await.unwrap();
-        let path = d.path().join("mcpfs-test").join("lo").join("locked");
+        let path = d.path().join("fsa-test").join("lo").join("locked");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
         // Root opens a 000 file anyway, so the refusal cannot be observed.
         if std::fs::File::open(&path).is_ok() {
@@ -338,7 +338,7 @@ mod tests {
         let (d, s) = store();
         let sha = "abcdef0123";
         s.put(sha, b"1").await.unwrap();
-        let shard = d.path().join("mcpfs-test").join("ab");
+        let shard = d.path().join("fsa-test").join("ab");
         let mut entries = tokio::fs::read_dir(&shard).await.unwrap();
         let mut names = Vec::new();
         while let Some(e) = entries.next_entry().await.unwrap() {
@@ -356,10 +356,10 @@ mod tests {
         let sha = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         s.put(sha, b"hello").await.unwrap();
 
-        let expected = d.path().join("mcpfs-test").join("2c").join(sha);
+        let expected = d.path().join("fsa-test").join("2c").join(sha);
         assert!(expected.exists(), "expected sharded path {}", expected.display());
         assert!(
-            !d.path().join("mcpfs-test").join(sha).exists(),
+            !d.path().join("fsa-test").join(sha).exists(),
             "a flat layout would orphan the blobs of every existing deployment"
         );
         assert_eq!(s.get(sha, 0, None).await.unwrap(), b"hello");
@@ -375,7 +375,7 @@ mod tests {
 
         s.put("3bytes", b"abc").await.unwrap();
         s.put("5bytes", b"abcde").await.unwrap();
-        let shard_dir = d.path().join("mcpfs-test").join("ab");
+        let shard_dir = d.path().join("fsa-test").join("ab");
         tokio::fs::create_dir_all(&shard_dir).await.unwrap();
         tokio::fs::write(shard_dir.join(".tmp-ab-x"), b"partial").await.unwrap();
 
@@ -407,7 +407,7 @@ mod tests {
     async fn put_of_existing_bytes_refreshes_the_modified_time() {
         let (d, s) = store();
         s.put("existing", b"data").await.unwrap();
-        let path = d.path().join("mcpfs-test").join("ex").join("existing");
+        let path = d.path().join("fsa-test").join("ex").join("existing");
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
         let f = std::fs::File::open(&path).unwrap();
         f.set_modified(old).unwrap();
@@ -428,7 +428,7 @@ mod tests {
     async fn modified_reads_the_file_time_and_not_found_once_deleted() {
         let (d, s) = store();
         s.put("backdated", b"data").await.unwrap();
-        let path = d.path().join("mcpfs-test").join("ba").join("backdated");
+        let path = d.path().join("fsa-test").join("ba").join("backdated");
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
         std::fs::File::open(&path).unwrap().set_modified(old).unwrap();
         let entry = s.list().await.unwrap().into_iter().find(|e| e.key == "backdated").unwrap();

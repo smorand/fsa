@@ -49,6 +49,9 @@ pub const DOC_SERVICE_EXTS: &[&str] = &[
     ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg", // video
 ];
 
+/// The `User-Agent` of every request made to the document service.
+pub(crate) const USER_AGENT: &str = "fsa-doc-service/1.0";
+
 /// How much stderr is kept from a failed converter. `doc-convert` writes
 /// megabytes of progress bars there, and the TAIL is where the real cause is, so
 /// the head is what gets dropped.
@@ -531,7 +534,7 @@ impl ApiDocService {
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
-            .user_agent("mcp-fs-doc-service/1.0")
+            .user_agent(USER_AGENT)
             .build()
             .map_err(|e| ToolError::internal(format!("document service http client error: {e}")))?;
         Ok(Self { config: config.clone(), extensions, max_input_bytes, http })
@@ -910,6 +913,12 @@ impl DocService for StubDocService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_user_agent_is_fsa() {
+        assert_eq!(USER_AGENT, "fsa-doc-service/1.0");
+    }
     use crate::errors::code;
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
@@ -1419,7 +1428,7 @@ mod tests {
     // ── opt in: the real converter ───────────────────────────────────────────
 
     /// Requires `doc-convert` on PATH and takes tens of seconds, so it is opt in:
-    /// `cargo test -p mcp-fs --lib docs::service -- --ignored`. It skips rather
+    /// `cargo test -p fsa --lib docs::service -- --ignored`. It skips rather
     /// than fails when the binary is absent, because "not installed" is not a
     /// regression.
     #[tokio::test]
@@ -1433,7 +1442,7 @@ mod tests {
         let pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n\
 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n\
 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n\
-4 0 obj<</Length 44>>stream\nBT /F1 24 Tf 20 100 Td (hello mcpfs) Tj ET\nendstream endobj\n\
+4 0 obj<</Length 42>>stream\nBT /F1 24 Tf 20 100 Td (hello fsa) Tj ET\nendstream endobj\n\
 5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n\
 trailer<</Root 1 0 R>>\n%%EOF\n";
 

@@ -12,7 +12,7 @@ listening**, and stops that server again when the agent exits.
 
 ```bash
 mkdir -p .agent_keys
-./target/release/mcp-fs token you@example.com \
+./target/release/fsa token you@example.com \
     --key .keys/jwt.key > .agent_keys/you                   # one raw JWT per file
 export IBM_ICA_MODEL_KEY=...                                # or put it in .env
 ./agent.sh --user you                                       # starts the server if needed
@@ -28,7 +28,7 @@ rather than merely that the port is held.
 | Situation | Behaviour |
 |---|---|
 | Something answers already | left alone, it belongs to whoever started it |
-| Nothing answers | bootstrap `config/local.yaml` and `.keys` like `run.sh`, start `mcp-fs serve` in the background logging to `mcp_<datetime>.log`, wait for `/health` |
+| Nothing answers | bootstrap `config/local.yaml` and `.keys` like `run.sh`, start `fsa serve` in the background logging to `mcp_<datetime>.log`, wait for `/health` |
 | Started but never answers | print the reason and the tail of the log, then exit non zero, having stopped it |
 | Agent exits, crashes, Ctrl+C, terminal closed | the EXIT trap stops the server (SIGTERM, then SIGKILL after five seconds) |
 | The wrapper itself is SIGKILLed | a watchdog on the AGENT's pid stops the server once the agent ends |
@@ -158,7 +158,7 @@ seeds `.agent_history/readline.txt` so the recall checks never submit a line and
 working LLM key.
 
 ```bash
-cargo build -p agent -p mcp-fs && python3 scripts/pty_check.py
+cargo build -p agent -p fsa && python3 scripts/pty_check.py
 ```
 
 Eleven checks: backspace leaving no gap, typing resuming on the text, `Ctrl+U` killing back to

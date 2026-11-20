@@ -56,6 +56,9 @@ pub struct S3BlobStore {
     bucket: String,
 }
 
+/// The name the credentials provider reports to the AWS SDK (visible in its debug logs).
+const CREDENTIALS_PROVIDER: &str = "fsa-config";
+
 impl S3BlobStore {
     pub fn new(cfg: &BlobConfig, bucket: String) -> Result<Self> {
         let creds = Credentials::new(
@@ -63,7 +66,7 @@ impl S3BlobStore {
             cfg.secret_key.clone(),
             None,
             None,
-            "mcp-fs-config",
+            CREDENTIALS_PROVIDER,
         );
         let mut builder = aws_sdk_s3::config::Builder::new()
             .behavior_version(BehaviorVersion::latest())
@@ -261,12 +264,18 @@ impl BlobBackend for S3BlobStore {
 mod tests {
     use super::*;
 
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_credentials_provider_is_fsa_config() {
+        assert_eq!(CREDENTIALS_PROVIDER, "fsa-config");
+    }
+
     fn cfg() -> BlobConfig {
         BlobConfig {
             backend: "minio".into(),
             endpoint: "http://127.0.0.1:9000".into(),
             access_key: "admin".into(),
-            secret_key: std::env::var("MCPFS_MINIO_SECRET_KEY").unwrap_or_default(),
+            secret_key: std::env::var("FSA_MINIO_SECRET_KEY").unwrap_or_default(),
             bucket_prefix: "mcpfs-".into(),
             region: "us-east-1".into(),
             ..Default::default()
@@ -275,8 +284,8 @@ mod tests {
 
     #[test]
     fn constructs_with_path_style_and_bucket_name() {
-        let s = S3BlobStore::new(&cfg(), "mcpfs-unit".to_string()).unwrap();
-        assert_eq!(s.bucket(), "mcpfs-unit");
+        let s = S3BlobStore::new(&cfg(), "fsa-unit".to_string()).unwrap();
+        assert_eq!(s.bucket(), "fsa-unit");
     }
 
     // SPEC-0059: the SDK loads the OS root certificates once per process, so each case
@@ -372,7 +381,7 @@ mod tests {
     async fn child_https_empty_store() {
         let mut c = cfg();
         c.endpoint = "https://127.0.0.1:1".into();
-        let s = S3BlobStore::new(&c, "mcpfs-unit".to_string()).unwrap();
+        let s = S3BlobStore::new(&c, "fsa-unit".to_string()).unwrap();
         assert!(s.ensure_bucket().await.is_err());
     }
 
@@ -447,16 +456,16 @@ mod tests {
     async fn child_https_untrusted_cert() {
         let mut c = cfg();
         c.endpoint = std::env::var("MCPFS_TEST_ENDPOINT").unwrap();
-        let s = S3BlobStore::new(&c, "mcpfs-unit".to_string()).unwrap();
+        let s = S3BlobStore::new(&c, "fsa-unit".to_string()).unwrap();
         assert!(s.ensure_bucket().await.is_err());
     }
 
     /// Opt-in integration test: needs a live S3/MinIO on :9000 plus the secret in
-    /// `MCPFS_MINIO_SECRET_KEY`. Ignored by default, like the C# MinIO tests.
+    /// `FSA_MINIO_SECRET_KEY`. Ignored by default, like the C# MinIO tests.
     #[tokio::test]
-    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and MCPFS_MINIO_SECRET_KEY"]
+    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and FSA_MINIO_SECRET_KEY"]
     async fn integration_put_get_range_delete() {
-        let bucket = format!("mcpfs-rust-it-{}", uuid::Uuid::new_v4().simple());
+        let bucket = format!("fsa-rust-it-{}", uuid::Uuid::new_v4().simple());
         let s = S3BlobStore::new(&cfg(), bucket).unwrap();
         s.ensure_bucket().await.unwrap();
 
@@ -478,9 +487,9 @@ mod tests {
     /// SPEC-0034/DT-012: `list()` follows pagination (`list_objects_v2` pages at
     /// 1000 keys), returning every key with its correct size.
     #[tokio::test]
-    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and MCPFS_MINIO_SECRET_KEY"]
+    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and FSA_MINIO_SECRET_KEY"]
     async fn integration_list_follows_pagination() {
-        let bucket = format!("mcpfs-rust-it-{}", uuid::Uuid::new_v4().simple());
+        let bucket = format!("fsa-rust-it-{}", uuid::Uuid::new_v4().simple());
         let s = S3BlobStore::new(&cfg(), bucket).unwrap();
         s.ensure_bucket().await.unwrap();
 
@@ -502,9 +511,9 @@ mod tests {
     /// SPEC-0034/DR-005: `modified` is the object's `last_modified`, and a
     /// deleted object is not found.
     #[tokio::test]
-    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and MCPFS_MINIO_SECRET_KEY"]
+    #[ignore = "requires a live MinIO/S3 on 127.0.0.1:9000 and FSA_MINIO_SECRET_KEY"]
     async fn integration_modified_reads_last_modified() {
-        let bucket = format!("mcpfs-rust-it-{}", uuid::Uuid::new_v4().simple());
+        let bucket = format!("fsa-rust-it-{}", uuid::Uuid::new_v4().simple());
         let s = S3BlobStore::new(&cfg(), bucket).unwrap();
         s.ensure_bucket().await.unwrap();
         s.put("stat-me", b"x").await.unwrap();

@@ -502,7 +502,7 @@ mod tests {
 
     #[test]
     fn schema_names_are_restricted_to_bare_identifiers() {
-        for good in ["public", "mcpfs", "mcp_fs_2", "A_b9"] {
+        for good in ["public", "mcpfs", "fsa_2", "A_b9"] {
             assert!(is_safe_identifier(good), "{good} should be accepted");
         }
         // A quote, a semicolon or a dot would let a schema name carry SQL, and it
@@ -559,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_migrate_is_idempotent_and_round_trips_every_value_type() {
-        let Some(db) = live_db("mcpfs_probe_roundtrip").await else {
+        let Some(db) = live_db("fsa_probe_roundtrip").await else {
             return;
         };
         let schema = probe_schema();
@@ -622,7 +622,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_a_dropped_transaction_rolls_back() {
-        let Some(db) = live_db("mcpfs_probe_rollback").await else {
+        let Some(db) = live_db("fsa_probe_rollback").await else {
             return;
         };
         db.migrate(&probe_schema()).await.unwrap();
@@ -644,7 +644,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_a_committed_transaction_persists() {
-        let Some(db) = live_db("mcpfs_probe_commit").await else {
+        let Some(db) = live_db("fsa_probe_commit").await else {
             return;
         };
         db.migrate(&probe_schema()).await.unwrap();
@@ -665,7 +665,7 @@ mod tests {
     /// a unit test on the SQL string cannot prove.
     #[tokio::test]
     async fn live_a_rendered_upsert_updates_on_conflict() {
-        let Some(db) = live_db("mcpfs_probe_upsert").await else {
+        let Some(db) = live_db("fsa_probe_upsert").await else {
             return;
         };
         db.migrate(&probe_schema()).await.unwrap();
@@ -690,7 +690,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_an_unknown_table_is_a_permanent_failure() {
-        let Some(db) = live_db("mcpfs_probe_errors").await else {
+        let Some(db) = live_db("fsa_probe_errors").await else {
             return;
         };
         let e = db
@@ -779,7 +779,7 @@ mod tests {
     /// open changes nothing, and a `nodes` lacking `rev` gets it back (BR-004).
     #[tokio::test]
     async fn spec_0026_bt_012_fresh_schema_and_missing_column() {
-        let schema_name = format!("mcpfs_pgopen_bt012_{}", std::process::id());
+        let schema_name = format!("fsa_pgopen_bt012_{}", std::process::id());
         let Some(db) = live_db(&schema_name).await else {
             eprintln!("skipping spec_0026_bt_012: MCPFS_TEST_PG_DSN is unset");
             return;

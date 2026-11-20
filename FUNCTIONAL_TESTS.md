@@ -1,4 +1,4 @@
-# Tests fonctionnels mcp-fs
+# Tests fonctionnels fsa
 
 Guide de validation manuelle. Chaque scénario est indépendant, déroulable en 5 à 15
 minutes avec `curl` et un terminal. Ils couvrent les chemins critiques que les tests
@@ -14,7 +14,7 @@ parallèle, éditeur HTML dans le navigateur.
 ./run.sh
 
 # 2. Dans un second terminal — toutes les commandes ci-dessous l'utilisent
-export TOKEN=$(./target/release/mcp-fs token you@example.com --key .keys/jwt.key)
+export TOKEN=$(./target/release/fsa token you@example.com --key .keys/jwt.key)
 export MCP=http://127.0.0.1:5002
 export H="Content-Type: application/json"
 export A="Accept: application/json, text/event-stream"
@@ -58,7 +58,7 @@ curl -sf -X POST $MCP/mcp \
 # Attendu : SSE ou JSON avec une liste de tools dont "admin.list_projects"
 
 # 1d. Token expiré (TTL = -1s)
-BAD=$(./target/release/mcp-fs token you@example.com --key .keys/jwt.key --ttl -1)
+BAD=$(./target/release/fsa token you@example.com --key .keys/jwt.key --ttl -1)
 curl -sf -X POST $MCP/mcp \
   -H "$H" -H "$A" -H "X-Forwarded-Authorization: Bearer $BAD" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -207,7 +207,7 @@ curl -sf "$MCP/api/docs" | head -5
 
 # 4f. OpenAPI spec
 curl -sf "$MCP/api/swagger.json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['info']['title'], d['info']['version'])"
-# Attendu : "mcp-fs ..."
+# Attendu : "fsa ..."
 ```
 
 **Critères de succès :** upload puis lecture MCP retourne le même contenu, zip valide,
@@ -295,7 +295,7 @@ d'erreur sur .txt.
 navigateur, vérifier que les changements apparaissent dans le volume, et inversement.
 
 > Prérequis : `--doc` flag au démarrage du serveur. Modifier `run.sh` temporairement :
-> `exec ./target/release/mcp-fs serve --config config/local.yaml --doc`
+> `exec ./target/release/fsa serve --config config/local.yaml --doc`
 > ou ajouter `doc: { enabled: true }` dans `config/local.yaml`.
 
 ```bash
@@ -439,7 +439,7 @@ mcp admin.create_project '{"project_id":"proj-a","owner":"you@example.com"}'
 mcp admin.create_project '{"project_id":"proj-b","owner":"you@example.com"}'
 
 # Token pour alice (non membre d'aucun des deux projets)
-TOKEN_ALICE=$(./target/release/mcp-fs token alice@example.com --key .keys/jwt.key)
+TOKEN_ALICE=$(./target/release/fsa token alice@example.com --key .keys/jwt.key)
 
 # 10a. Alice ne peut pas lire proj-a
 curl -sf -X POST "$MCP/mcp" \
@@ -537,7 +537,7 @@ en langage naturel.
 ```bash
 # Prérequis : token agent
 mkdir -p .agent_keys
-./target/release/mcp-fs token you@example.com --key .keys/jwt.key > .agent_keys/you
+./target/release/fsa token you@example.com --key .keys/jwt.key > .agent_keys/you
 
 # Démarrer l'agent (démarre le serveur si nécessaire)
 ./agent.sh --user you

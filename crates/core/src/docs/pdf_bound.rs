@@ -43,11 +43,11 @@ const CHUNK: usize = 65_536;
 
 /// The `Type` a deferred object stream wears during the load, so lopdf keeps it
 /// as an ordinary stream instead of inflating it (DEC-004).
-const DEFERRED: &[u8] = b"McpFsObjStm";
+const DEFERRED: &[u8] = b"FsaObjStm";
 
 /// The `Type` a stream the file itself typed [`DEFERRED`] is given instead, so
 /// that only the streams this module deferred are expanded as object streams.
-const FILE_TYPED: &[u8] = b"McpFsFileType";
+const FILE_TYPED: &[u8] = b"FsaFileType";
 
 /// Longest filter chain this module measures. Real files use one or two; a
 /// longer chain is left stored, so a chain of thousands of names never costs a
@@ -55,7 +55,7 @@ const FILE_TYPED: &[u8] = b"McpFsFileType";
 const MAX_FILTERS: usize = 8;
 
 /// Where a defused stream keeps its `Filter` value (DEC-006).
-const DEFUSED: &[u8] = b"McpFsFilter";
+const DEFUSED: &[u8] = b"FsaFilter";
 
 /// The refusal of FR-NEW-002, before `prepare_extraction` names the path.
 fn over_stream_limit() -> ToolError {
@@ -866,7 +866,7 @@ fn visit_spaces(object: &mut Object, f: &mut dyn FnMut(&mut ObjectId)) {
 }
 
 /// Move every stream's `Filter` aside, so the reader inflates nothing it was
-/// not handed (DEC-006). A `McpFsFilter` key the file itself wrote on a stream
+/// not handed (DEC-006). A `FsaFilter` key the file itself wrote on a stream
 /// without `Filter` is dropped, so arming can never give it a filter it lacked.
 /// O(objects) time, no allocation beyond the moved values.
 fn defuse(doc: &mut Document) {
@@ -1860,7 +1860,7 @@ mod tests {
 
     #[test]
     fn a_stream_the_file_typed_as_deferred_is_not_expanded() {
-        let marked = typed_stream_page("McpFsObjStm");
+        let marked = typed_stream_page("FsaObjStm");
         let neutral = typed_stream_page("Other");
 
         let doc = load(&marked, &mut PdfBudget::default()).expect("loaded");

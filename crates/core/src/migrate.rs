@@ -1,6 +1,6 @@
 //! Offline migration of relational state between two backends.
 //!
-//! `mcp-fs migrate --from a.yaml --to b.yaml` moves every row the server owns from
+//! `fsa migrate --from a.yaml --to b.yaml` moves every row the server owns from
 //! the engines one config names to the engines the other names. Without it,
 //! switching `infra.meta.backend` to PostgreSQL would mean abandoning the existing
 //! data, so the config flag would not be usable on a deployment that has any.
@@ -24,7 +24,7 @@
 //! * **OAuth tokens** (`oauth_tokens`) ARE copied (FR-NEW-012), ciphertext and
 //!   all, using the same row-for-row shape as every other table: nothing here
 //!   decrypts or re-encrypts, so the destination only decrypts them again when
-//!   it runs under the same `MCPFS_TOKEN_KEY` as the source. Opening the source
+//!   it runs under the same `FSA_TOKEN_KEY` as the source. Opening the source
 //!   store applies its schema first, which is what makes a source still on the
 //!   legacy `(person, provider)` key rebuild empty (DRIFT-005) before anything
 //!   is read from it, satisfying FR-NEW-012's "drop rows found in the legacy

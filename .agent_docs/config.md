@@ -90,16 +90,16 @@ schema triple.
 infra:
   meta:
     backend: postgres
-    dsn: "${MCPFS_META_DSN}"
+    dsn: "${FSA_META_DSN}"
     schema: mcpfs
     pool: { max_connections: 20, acquire_timeout_secs: 10 }
   admin:
     backend: postgres
-    dsn: "${MCPFS_META_DSN}"
+    dsn: "${FSA_META_DSN}"
     schema: mcpfs
   git:
     backend: postgres
-    dsn: "${MCPFS_META_DSN}"
+    dsn: "${FSA_META_DSN}"
   oauth:
     backend: sqlite
 ```
@@ -112,7 +112,7 @@ infra:
 | `dir` | string | `state/blobs` | local only: layout `{dir}/{bucket}/{sha[..2]}/{sha}` |
 | `endpoint` | string | `""` | S3 only: endpoint URL; empty means the AWS default |
 | `access_key` | string | `""` | S3 only |
-| `secret_key` | string | `""` | S3 only. **Secret**: inject it with `${MCPFS_MINIO_SECRET_KEY}` |
+| `secret_key` | string | `""` | S3 only. **Secret**: inject it with `${FSA_MINIO_SECRET_KEY}` |
 | `bucket_prefix` | string | `mcpfs-` | bucket per volume: `{bucket_prefix}{project_id}` (also the local subdirectory name) |
 | `region` | string | `us-east-1` | S3 only |
 
@@ -143,7 +143,7 @@ Path style addressing is always forced on S3 because MinIO requires it.
 | `provider` | string | `none` | `none` (images yield an empty result plus a note) or `multimodal` |
 | `endpoint` | string | `""` | OpenAI compatible `chat/completions` URL |
 | `model` | string | `""` | model name sent to that endpoint |
-| `api_key_env` | string | `MCP_FS_OCR_KEY` | **name of the environment variable** holding the key, never the key itself |
+| `api_key_env` | string | `FSA_OCR_KEY` | **name of the environment variable** holding the key, never the key itself |
 | `prompt` | string | `Transcribe this document faithfully into Markdown.` | instruction sent with the image |
 
 The prompt and the key are request material only: they are never logged, never
@@ -215,7 +215,7 @@ doc_service:
   api:
     url: https://convert.internal/v1/markdown
     auth_header: Authorization
-    auth_token: "Bearer ${MCPFS_DOC_SERVICE_TOKEN}"
+    auth_token: "Bearer ${FSA_DOC_SERVICE_TOKEN}"
     file_field: file
     response_field: ""
     timeout_secs: 900
@@ -269,7 +269,7 @@ doc_service:
 | `anonymous_read` | bool | `false` | allow unauthenticated clone and fetch |
 | `max_pack_size_mb` | int | `512` | push body ceiling, enforced (413) |
 | `github_client_id` | string | `""` | GitHub App client id for the `git.auth` device flow |
-| `github_client_secret_env` | string | `MCPFS_GITHUB_CLIENT_SECRET` | name of the env var holding the GitHub secret |
+| `github_client_secret_env` | string | `FSA_GITHUB_CLIENT_SECRET` | name of the env var holding the GitHub secret |
 | `gitlab_client_id` | string | `""` | GitLab application id |
 | `gitlab_client_secret_env` | string | `GITLAB_CLIENT_SECRET` | name of the env var holding the GitLab secret |
 | `gitlab_instance_url` | string | `https://gitlab.com` | base URL for a self hosted GitLab |
@@ -433,7 +433,7 @@ so any value in the file can come from the environment:
 | `${VAR:-default}` | the value of `VAR`, or `default` when unset **or empty** |
 | `$notavar`, `${}`, `${1BAD}` | left untouched (a name must be alphanumeric plus `_` and must not start with a digit) |
 
-An empty variable counts as unset, which is why `MCPFS_MINIO_ACCESS_KEY=` in a
+An empty variable counts as unset, which is why `FSA_MINIO_ACCESS_KEY=` in a
 `.env` still falls back to the template default.
 
 ## Secrets policy
@@ -444,11 +444,11 @@ composition root by name.
 
 | Variable | Used by |
 |---|---|
-| `MCPFS_MINIO_SECRET_KEY` | `infra.blob.secret_key` in `config/minio.yaml.template` |
-| `MCPFS_GITHUB_CLIENT_SECRET` | the `git.auth` GitHub device flow (name configurable) |
-| `MCPFS_TOKEN_KEY` | when set, OAuth tokens are persisted encrypted (AES-256-GCM, 32 byte base64 key); unset means memory only |
-| any name you choose | `doc_service.api.auth_token`, for example `${MCPFS_DOC_SERVICE_TOKEN}` |
-| any name you choose | the `dsn` of a relational store, for example `${MCPFS_META_DSN}` |
+| `FSA_MINIO_SECRET_KEY` | `infra.blob.secret_key` in `config/minio.yaml.template` |
+| `FSA_GITHUB_CLIENT_SECRET` | the `git.auth` GitHub device flow (name configurable) |
+| `FSA_TOKEN_KEY` | when set, OAuth tokens are persisted encrypted (AES-256-GCM, 32 byte base64 key); unset means memory only |
+| any name you choose | `doc_service.api.auth_token`, for example `${FSA_DOC_SERVICE_TOKEN}` |
+| any name you choose | the `dsn` of a relational store, for example `${FSA_META_DSN}` |
 
 A **dsn is a secret**, because it usually carries a password. `dsn` is typed as `Dsn`,
 not `String`, and that type redacts itself in both `Debug` and `Display`, printing
@@ -467,27 +467,53 @@ asserts the token does not appear in a `{:?}` of the whole config.
 * `config/local.yaml` is **gitignored** (personal working copy). Two templates are
   tracked: `config/local.yaml.template` (SQLite plus local blobs, zero external
   service) and `config/minio.yaml.template` (SQLite plus MinIO/S3 blobs, secret
-  through `${MCPFS_MINIO_SECRET_KEY}`). `run.sh` bootstraps the first one on a
+  through `${FSA_MINIO_SECRET_KEY}`). `run.sh` bootstraps the first one on a
   fresh checkout.
 * `state/` and `.keys/` are gitignored too.
 * No secret is ever logged: tokens redact themselves in `Debug` output.
 
 ## Config path resolution
 
-The config file is mandatory. `mcp-fs serve` picks it in this order, highest priority
+The config file is mandatory. `fsa serve` picks it in this order, highest priority
 first, which is the same CLI then environment then file pattern the rest of the CLI
 follows:
 
 | # | Source | Behaviour |
 |---|---|---|
 | 1 | `--config PATH` (also `-c`) | used as given |
-| 2 | `$MCP_FS_CONFIG` (a full path) | used as given |
-| 3 | `~/.config/mcp-fs/config.yaml` | probed, used only when it exists |
-| 4 | `${MCP_FS_CONFIG_DIR:-config}/${MCP_FS_CONFIG_NAME:-local}.yaml` | probed, used only when it exists |
+| 2 | `$FSA_CONFIG` (a full path) | used as given |
+| 3 | `~/.config/fsa/config.yaml` | probed, used only when it exists |
+| 3b | `~/.config/mcp-fs/config.yaml` (deprecated) | probed after 3; when it is the one loaded, one warning line is printed |
+| 4 | `${FSA_CONFIG_DIR:-config}/${FSA_CONFIG_NAME:-local}.yaml` | probed, used only when it exists |
 
-Cases 1 and 2 are explicit, so a missing file is reported by the name you gave. Cases 3
-and 4 are probed, and when neither exists the error lists every path tried rather than
+Cases 1 and 2 are explicit, so a missing file is reported by the name you gave. Cases 3,
+3b and 4 are probed, and when none exists the error lists every path tried rather than
 naming just one.
+
+### Deprecated names (SPEC-0099, removed at release 1.0.0)
+
+The product was renamed from `mcp-fs` to `fsa`. These old names still work and print one
+`warning: environment variable <OLD> is deprecated, use <NEW>` line on standard error per
+process (a blank value counts as unset; the new name wins when both are set):
+
+| Old | New |
+|---|---|
+| `MCP_FS_CONFIG`, `MCP_FS_CONFIG_DIR`, `MCP_FS_CONFIG_NAME` | `FSA_CONFIG`, `FSA_CONFIG_DIR`, `FSA_CONFIG_NAME` |
+| `MCPFS_TOKEN_KEY` | `FSA_TOKEN_KEY` |
+| `MCP_FS_OCR_KEY` (default of `extract.ocr.api_key_env`) | `FSA_OCR_KEY` |
+| `MCPFS_GITHUB_CLIENT_SECRET` (default of `git.github_client_secret_env`) | `FSA_GITHUB_CLIENT_SECRET` |
+| `~/.config/mcp-fs/` | `~/.config/fsa/` |
+
+The two defaults fall back only when the setting is absent from the configuration; a value
+written there, even a default name, is used as written. `MCPFS_MINIO_*`, `MCPFS_META_DSN`,
+`MCPFS_PUBLIC_URL`, `MCPFS_DOC_SERVICE_TOKEN`, `MCPFS_EMBEDDING_KEY` and `MCPFS_RERANK_KEY` were
+only used by templates and developer tests and have no fallback: use the `FSA_` names.
+
+Not renamed on purpose, because existing deployments store them: the bucket prefix `mcpfs-`,
+the trash directory `.mcp_trash`, the git refs `refs/mcpfs/` and `refs/mcp-fs/rebase-head`,
+the stash trailer, the lock key `mcpfs_migrate:`, the cookie `mcpfs_token`, and the test
+database `mcpfs`. The developer variables `MCPFS_TEST_*`, `MCPFS_REWRITE_*`, `MCPFS_CHILD_CASE*`
+and `MCPFS_PRINT_RECORD` keep their names for now.
 
 Step 3 honours `$XDG_CONFIG_HOME` when it is set and falls back to `$HOME/.config`,
 resolved through `etcetera::choose_base_strategy()` rather than a hand-rolled lookup
@@ -501,5 +527,5 @@ collapse a duplicate `git.hosts` key before the deliberately duplicate-preservin
 DDRIFT-002).
 
 A missing or unreadable file is `ERR_INVALID_ARGUMENT`; a YAML error reports the parse
-failure. The keypair is unrelated to this resolution: `mcp-fs keys --dir .keys` writes
+failure. The keypair is unrelated to this resolution: `fsa keys --dir .keys` writes
 `jwt.key` and `jwt.pub`, and `auth.jwt.public_key_path` must point at the `.pub` file.

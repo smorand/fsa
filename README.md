@@ -1,4 +1,4 @@
-# mcp-fs (Rust)
+# fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
 110 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
@@ -40,14 +40,14 @@ its TLS stack.
 ## Quickstart
 
 ```bash
-git clone git@github.com:smorand/mcp-fs-rust.git && cd mcp-fs-rust
+git clone git@github.com:smorand/fsa.git && cd fsa
 ./run.sh            # generates keys, bootstraps config/local.yaml, builds, serves :5002
 ```
 
 In another terminal:
 
 ```bash
-TOKEN=$(./target/release/mcp-fs token you@example.com --key .keys/jwt.key)
+TOKEN=$(./target/release/fsa token you@example.com --key .keys/jwt.key)
 
 curl http://127.0.0.1:5002/health
 
@@ -72,16 +72,16 @@ Interactive API docs: <http://127.0.0.1:5002/api/docs> (spec at `/api/swagger.js
 ## CLI
 
 ```
-mcp-fs serve [--config PATH]      run the server
-mcp-fs keys  [--dir DIR]          generate an RS256 keypair (default .keys)
-mcp-fs token <email> [--key PATH] [--ttl SECONDS]
-mcp-fs migrate --from A.yaml --to B.yaml   copy relational state between backends
-mcp-fs version
+fsa serve [--config PATH]      run the server
+fsa keys  [--dir DIR]          generate an RS256 keypair (default .keys)
+fsa token <email> [--key PATH] [--ttl SECONDS]
+fsa migrate --from A.yaml --to B.yaml   copy relational state between backends
+fsa version
 ```
 
-Config resolution, highest priority first: `--config`, else `$MCP_FS_CONFIG`, else
-`~/.config/mcp-fs/config.yaml` when it exists, else
-`${MCP_FS_CONFIG_DIR:-config}/${MCP_FS_CONFIG_NAME:-local}.yaml`. The first two are used
+Config resolution, highest priority first: `--config`, else `$FSA_CONFIG`, else
+`~/.config/fsa/config.yaml` (or the deprecated `~/.config/mcp-fs/config.yaml`) when it exists, else
+`${FSA_CONFIG_DIR:-config}/${FSA_CONFIG_NAME:-local}.yaml`. The first two are used
 as given; the last two are probed, and when neither exists the error lists every path
 tried.
 
@@ -92,7 +92,7 @@ every row the server owns, from the engines one config names to the engines the 
 names.
 
 ```bash
-mcp-fs migrate --from config/sqlite.yaml --to config/postgres.yaml
+fsa migrate --from config/sqlite.yaml --to config/postgres.yaml
 ```
 
 **Run it with the server stopped**: it takes no locks against a live writer, so a
@@ -102,7 +102,7 @@ store API, so every `mtime` and `ctime` is preserved exactly.
 Two things are deliberately not moved. **Blob bytes** stay put, because the blob store is
 configured separately and a relational change does not affect it; every `sha256` is
 instead checked against the destination blob store and reported when missing. **OAuth
-tokens** are skipped, because they are session state encrypted with `MCPFS_TOKEN_KEY` and
+tokens** are skipped, because they are session state encrypted with `FSA_TOKEN_KEY` and
 copying ciphertext to a deployment with a different key would produce rows that never
 decrypt. A device flow re establishes them.
 
@@ -123,11 +123,11 @@ move them one at a time:
 infra:
   meta:                          # the per volume file tree
     backend: postgres            # sqlite | postgres
-    dsn: "${MCPFS_META_DSN}"     # secret, required for a server engine
+    dsn: "${FSA_META_DSN}"     # secret, required for a server engine
     schema: mcpfs                # postgres only
     pool: { max_connections: 20, acquire_timeout_secs: 10 }
-  admin: { backend: postgres, dsn: "${MCPFS_META_DSN}" }   # projects and ACL
-  git:   { backend: postgres, dsn: "${MCPFS_META_DSN}" }   # git index
+  admin: { backend: postgres, dsn: "${FSA_META_DSN}" }   # projects and ACL
+  git:   { backend: postgres, dsn: "${FSA_META_DSN}" }   # git index
   oauth: { backend: sqlite }                               # OAuth tokens
 ```
 
@@ -142,10 +142,15 @@ parsed, so **secrets never live in a committed file**. Put them in a gitignored 
 
 | Variable | Purpose |
 |---|---|
-| `MCPFS_MINIO_SECRET_KEY` | S3/MinIO secret key |
-| `MCPFS_GITHUB_CLIENT_SECRET` | GitHub App secret for the `git.auth` device flow |
-| `MCPFS_TOKEN_KEY` | 32 byte base64 key; when set, OAuth tokens are persisted encrypted (AES-256-GCM). Unset means in-memory only |
-| any name you pick | a store `dsn`, for example `${MCPFS_META_DSN}` |
+| `FSA_MINIO_SECRET_KEY` | S3/MinIO secret key |
+| `FSA_GITHUB_CLIENT_SECRET` | GitHub App secret for the `git.auth` device flow |
+| `FSA_TOKEN_KEY` | 32 byte base64 key; when set, OAuth tokens are persisted encrypted (AES-256-GCM). Unset means in-memory only |
+| any name you pick | a store `dsn`, for example `${FSA_META_DSN}` |
+
+**Renamed from `mcp-fs` (SPEC-0099).** The old variables `MCP_FS_CONFIG`, `MCP_FS_CONFIG_DIR`,
+`MCP_FS_CONFIG_NAME` and `MCPFS_TOKEN_KEY`, and the directory `~/.config/mcp-fs/`, still work
+until release 1.0.0 and print one deprecation line on standard error; see
+`.agent_docs/config.md`, "Deprecated names", for the full table and what was not renamed.
 
 A dsn normally carries a password, so it is treated as a secret: the type redacts itself in
 both `Debug` and `Display`, and a test asserts it never reaches a log line, a boot banner
@@ -193,7 +198,7 @@ doc_service:
   api:
     url: "https://converter.internal/convert"
     auth_header: Authorization   # header NAME, not necessarily a bearer
-    auth_token: "Bearer ${MCPFS_DOC_SERVICE_TOKEN}"   # secret, sent verbatim
+    auth_token: "Bearer ${FSA_DOC_SERVICE_TOKEN}"   # secret, sent verbatim
     file_field: file             # name of the multipart part carrying the document
     response_field: ""           # empty = the response body IS the markdown
     timeout_secs: 900
@@ -572,7 +577,7 @@ store behaves identically on both. See
 
 ```bash
 mkdir -p .agent_keys
-./target/release/mcp-fs token you@example.com \
+./target/release/fsa token you@example.com \
     --key .keys/jwt.key > .agent_keys/you                   # one raw JWT per file
 export IBM_ICA_MODEL_KEY=...                                # or put it in .env
 ./agent.sh --user you
@@ -598,7 +603,7 @@ The line editor is verified on a real pty, because terminal geometry bugs pass e
 test: a wrong prompt width is a mistake at the call site, not in the width function.
 
 ```bash
-cargo build -p agent -p mcp-fs && python3 scripts/pty_check.py
+cargo build -p agent -p fsa && python3 scripts/pty_check.py
 ```
 
 ## The tool contract is frozen
@@ -611,7 +616,7 @@ run, serialized form included, which means even a reordered schema key fails the
 Changing the contract is deliberate, never a hand edit:
 
 ```bash
-MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p mcp-fs-core --lib tool_contract_golden_is_current
+MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p fsa-core --lib tool_contract_golden_is_current
 ```
 
 Then review the diff: a description edit is one line, and 57 changed tools means something
@@ -660,7 +665,7 @@ Audio and video extraction (needs a speech model) and legacy binary Office forma
 libgit2 is sha1 only. RAR archives are extracted only in a build with the cargo feature `rar`, and multi volume archives
 (`.rar` parts, `.7z.001`, `.zip.001`) are not extracted.
 
-On the relational side: there is no online migration (`mcp-fs migrate` is offline, run with
+On the relational side: there is no online migration (`fsa migrate` is offline, run with
 the server stopped) and no automated downgrade, since a database written by the current
 code carries a `volume_id` column older code does not know about. Blob bytes are never
 stored in the relational database.

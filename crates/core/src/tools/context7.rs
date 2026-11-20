@@ -84,10 +84,15 @@ fn cap_tokens(requested: i64) -> usize {
     if requested <= 0 { 10_000 } else { (requested as usize).min(50_000) }
 }
 
+/// The `User-Agent` of every request made to Context7.
+const USER_AGENT: &str = "fsa/1.0";
+/// The value of the `X-Context7-Source` header: who is asking.
+const SOURCE: &str = "fsa";
+
 fn build_client(timeout_secs: u64) -> Result<reqwest::Client, ToolError> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
-        .user_agent("mcp-fs/1.0")
+        .user_agent(USER_AGENT)
         .build()
         .map_err(|e| ToolError::internal(format!("http client error: {e}")))
 }
@@ -100,14 +105,13 @@ async fn resolve_library_id(
     let url = format!("{}/v1/search?query={encoded}", config.api_url);
 
     let client = build_client(config.request_timeout_secs)?;
-    let resp =
-        client.get(&url).header("X-Context7-Source", "mcp-fs").send().await.map_err(|e| {
-            if e.is_timeout() {
-                ToolError::internal("request timed out")
-            } else {
-                ToolError::internal(format!("context7 search failed: {e}"))
-            }
-        })?;
+    let resp = client.get(&url).header("X-Context7-Source", SOURCE).send().await.map_err(|e| {
+        if e.is_timeout() {
+            ToolError::internal("request timed out")
+        } else {
+            ToolError::internal(format!("context7 search failed: {e}"))
+        }
+    })?;
 
     let bytes = read_answer(resp, &url, ANSWER_LIMIT, "parse context7 response", |_| {
         over_answer_limit(&host_of(&url))
@@ -142,14 +146,13 @@ async fn get_library_docs(
     }
 
     let client = build_client(config.request_timeout_secs)?;
-    let resp =
-        client.get(&url).header("X-Context7-Source", "mcp-fs").send().await.map_err(|e| {
-            if e.is_timeout() {
-                ToolError::internal("request timed out")
-            } else {
-                ToolError::internal(format!("context7 docs request failed: {e}"))
-            }
-        })?;
+    let resp = client.get(&url).header("X-Context7-Source", SOURCE).send().await.map_err(|e| {
+        if e.is_timeout() {
+            ToolError::internal("request timed out")
+        } else {
+            ToolError::internal(format!("context7 docs request failed: {e}"))
+        }
+    })?;
 
     // A failure status is answered before the body is touched; the guard records that
     // nothing was held. A success is recorded by `read_answer` itself.
@@ -189,6 +192,13 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_user_agent_and_source_are_fsa() {
+        assert_eq!(USER_AGENT, "fsa/1.0");
+        assert_eq!(SOURCE, "fsa");
+    }
     use crate::config::Context7Config;
     use crate::tools::registry_support::ToolRegistry;
 

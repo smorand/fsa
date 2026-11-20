@@ -46,7 +46,7 @@ including the serialized form, so a reordered schema key fails too. Regenerating
 snapshot is deliberate:
 
 ```bash
-MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p mcp-fs --lib tool_contract_golden_is_current
+MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p fsa --lib tool_contract_golden_is_current
 ```
 
 Review the resulting diff: a description edit should be one line, and 55 changed tools
@@ -63,12 +63,12 @@ and the tenant is the first column of the primary key (`PRIMARY KEY (volume_id, 
 Under SQLite the column is written but constant per file, so that deployment is unchanged
 in layout and behaviour.
 
-*Consequence:* there is no automated downgrade. `mcp-fs migrate` moves state forward
+*Consequence:* there is no automated downgrade. `fsa migrate` moves state forward
 between engines, one direction only.
 
 **2. Dialect binary typing for the OAuth token.**
 `token_enc` renders as `BLOB` or `BYTEA` per engine. The encryption is
-untouched (AES-256-GCM keyed by `MCPFS_TOKEN_KEY`); only the column type varies.
+untouched (AES-256-GCM keyed by `FSA_TOKEN_KEY`); only the column type varies.
 
 **3. One database fewer.**
 SQL Server support was removed on 2026-10-23 (SPEC-0051).
@@ -219,3 +219,15 @@ one document.
   field already allowed since the partial response uses it. A resolved POP drops its entry
   there, after every resolved byte has landed, which is the same charge, apply, drop order
   the clean pop uses; the conflicted pop deliberately deferred that delete (E2E-NEW-463).
+
+### The rename to fsa (2026-11-19, SPEC-0099)
+
+The product was renamed from `mcp-fs` to `fsa` (File System Agentic): packages `fsa`, `fsa-core`
+(crate `fsa_core`), binary `fsa`, directory `crates/fsa`, every name a client reads or this server
+sends (MCP server name, OpenAPI title and tag, git agent and realm, `User-Agent` strings, Context7
+header, reflog prefix), and the environment variables listed in `.agent_docs/config.md`, "Deprecated
+names", which keep working under their old names until release 1.0.0. Identifiers stored in existing
+deployments kept their spelling (bucket prefix `mcpfs-`, `.mcp_trash`, `refs/mcpfs/`, the lock key, the
+cookie); so did the developer variables `MCPFS_TEST_*` and friends, until the owner's shell is
+updated (the PostgreSQL suites skip silently without their DSN). `DT-010`
+(`crates/fsa/tests/old_name_gone.rs`) fails on any other old spelling.

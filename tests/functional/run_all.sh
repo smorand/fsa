@@ -46,14 +46,14 @@ SERVER_PID=""
 probe() { curl -fsS -m 2 "http://127.0.0.1:5002/health" >/dev/null 2>&1; }
 
 if ! probe; then
-  info "Starting mcp-fs server..."
+  info "Starting fsa server..."
   if [ ! -f config/local.yaml ]; then cp config/local.yaml.template config/local.yaml; fi
-  if [ ! -f .keys/jwt.pub ]; then cargo run --release -q -p mcp-fs -- keys --dir .keys; fi
-  cargo build --release -p mcp-fs -q
-  ./target/release/mcp-fs serve --config config/local.yaml >/tmp/mcp-fs-test.log 2>&1 &
+  if [ ! -f .keys/jwt.pub ]; then cargo run --release -q -p fsa -- keys --dir .keys; fi
+  cargo build --release -p fsa -q
+  ./target/release/fsa serve --config config/local.yaml >/tmp/fsa-test.log 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 1 50); do probe && break; sleep 0.2; done
-  probe || { echo "Server failed to start. Log:"; tail -20 /tmp/mcp-fs-test.log; exit 1; }
+  probe || { echo "Server failed to start. Log:"; tail -20 /tmp/fsa-test.log; exit 1; }
   info "Server started (pid $SERVER_PID)"
 else
   info "Server already running"

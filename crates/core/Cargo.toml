@@ -1,15 +1,15 @@
 [package]
-name = "mcp-fs-core"
+name = "fsa-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Library crate for mcp-fs: the streamable-HTTP MCP server logic (simulated multi-project filesystem, REST plane, git smart server)"
+description = "Library crate for fsa: the streamable-HTTP MCP server logic (simulated multi-project filesystem, REST plane, git smart server)"
 publish = false
 
 [lib]
-name = "mcp_fs_core"
+name = "fsa_core"
 path = "src/lib.rs"
 
 [features]

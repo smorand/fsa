@@ -1848,7 +1848,7 @@ pub(crate) mod tests {
     async fn vol() -> (tempfile::TempDir, VolumeClient) {
         let d = tempfile::tempdir().unwrap();
         let meta = Arc::new(RelationalMetaStore::in_memory("test").await.unwrap());
-        let blob = Arc::new(LocalBlobStore::new(d.path(), "mcpfs-docs-test"));
+        let blob = Arc::new(LocalBlobStore::new(d.path(), "fsa-docs-test"));
         (d, VolumeClient::new("test", meta, blob))
     }
 

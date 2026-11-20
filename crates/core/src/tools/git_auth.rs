@@ -30,7 +30,7 @@ const MIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Process wide token store, built once from the config. `git.auth` writes it and
 /// `git.remote_clone` reads it, so they must be the same instance; the error is
-/// cached too, because a malformed `MCPFS_TOKEN_KEY` must fail loudly every time
+/// cached too, because a malformed `FSA_TOKEN_KEY` must fail loudly every time
 /// instead of silently downgrading to memory only storage.
 /// A `tokio::sync::OnceCell` rather than a `OnceLock`: building the store now
 /// loads the encrypted rows through an async driver, so initialisation awaits.
@@ -582,7 +582,7 @@ pub(crate) async fn token_set(
     if !persistent {
         out["message"] = json!(
             "Stored in memory only: this token lives only for the current process and will \
-             not survive a restart because MCPFS_TOKEN_KEY is not configured."
+             not survive a restart because FSA_TOKEN_KEY is not configured."
         );
     }
     Ok(out)
@@ -832,7 +832,7 @@ mod tests {
     }
 
     /// E2E-NEW-049: preserves the pre-existing exact-match rejection
-    /// (`crates/mcp-fs/src/tools/git_auth.rs:160-162` before this story).
+    /// (`crates/fsa/src/tools/git_auth.rs:160-162` before this story).
     #[tokio::test]
     async fn an_unknown_provider_is_rejected_before_any_http_call() {
         let (f, r, _tokens, flow) = setup(vec![TokenPoll::pending("x")]).await;
@@ -1579,11 +1579,11 @@ mod tests {
     // tripping clippy's `await_holding_lock`.
     //
     // E2E-NEW-022 is a store level test: it proves the contract
-    // `resolve_clone_credential` (`crates/mcp-fs/src/tools/git.rs`) actually
+    // `resolve_clone_credential` (`crates/fsa/src/tools/git.rs`) actually
     // reads, now by the real host (T-CONVERGE-001): the exact token
     // `git.token_set` stores for `(person, host)` comes back unmodified, ready
     // to be supplied to the remote as `oauth2:<token>`
-    // (`crates/mcp-fs/src/tools/git.rs:1046-1049`). The tool-layer proof that
+    // (`crates/fsa/src/tools/git.rs:1046-1049`). The tool-layer proof that
     // `git.token_set` and `git.remote_clone` share this exact lookup, both
     // through their real registered tool names, lives in `tools/git.rs`'s
     // `e2e_new_defect_token_set_then_remote_clone_share_the_real_host`.
@@ -2034,7 +2034,7 @@ mod tests {
         with_git_hosts_lock(async {
             declare_hosts(REFERENCE_HOSTS);
             let tokens = Arc::new(OAuthTokenStore::new());
-            assert!(!tokens.is_persistent(), "MCPFS_TOKEN_KEY is unset in this fixture");
+            assert!(!tokens.is_persistent(), "FSA_TOKEN_KEY is unset in this fixture");
             let (f, r) = token_set_registry(tokens).await;
 
             let out = f

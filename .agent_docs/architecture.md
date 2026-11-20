@@ -355,7 +355,7 @@ client caused outcome: logged once at INFO, concise, no context dump. Everything
 else, including `ERR_INTERNAL_ERROR` and anything that is not a `ToolError`,
 stays at ERROR with the full message. A misbehaving client therefore cannot flood
 the log, and an ERROR line is always worth reading. Logs go to stderr so stdout
-stays usable for `mcp-fs token`.
+stays usable for `fsa token`.
 
 Wired at both doors (SPEC-0088, 2026-11-10): `mcp::server::to_call_result` calls
 `logging::log_tool_failure(tool, &e)` for every failed tool call and `api::dataplane::error_response`

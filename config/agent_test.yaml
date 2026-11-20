@@ -1,14 +1,14 @@
 # agent configuration
-# Connects to a running mcp-fs server and drives a LLM with its tools.
+# Connects to a running fsa server and drives a LLM with its tools.
 #
-# Start mcp-fs first:  ./run.sh
-# Mint a token:        ./target/release/mcp-fs token you@example.com --key .keys/jwt.key
+# Start fsa first:  ./run.sh
+# Mint a token:        ./target/release/fsa token you@example.com --key .keys/jwt.key
 # Then run:            ./agent.sh --user you
 mcp:
   url: http://127.0.0.1:5002/mcp
   # Default token used when --user is not specified.
   # Leave empty and use --user instead (recommended).
-  # To generate: ./target/release/mcp-fs token you@example.com --key .keys/jwt.key > .agent_keys/you
+  # To generate: ./target/release/fsa token you@example.com --key .keys/jwt.key > .agent_keys/you
   token: ""
   # Folder containing per-user token files, relative to this config file.
   # File name = user name passed to --user, content = raw JWT string.
@@ -17,7 +17,7 @@ mcp:
   #   .agent_keys/alice   → eyJhbGci...  (JWT for alice@example.com)
   #   .agent_keys/bob     → eyJhbGci...  (JWT for bob@example.com)
   # Generate a file:
-  #   ./target/release/mcp-fs token alice@example.com --key .keys/jwt.key > .agent_keys/alice
+  #   ./target/release/fsa token alice@example.com --key .keys/jwt.key > .agent_keys/alice
   # Use it:
   #   ./agent.sh --user alice
   tokens_dir: .agent_keys

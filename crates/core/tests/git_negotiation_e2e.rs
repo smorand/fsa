@@ -18,13 +18,13 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 
-use mcp_fs_core::app;
-use mcp_fs_core::config::ServerConfig;
-use mcp_fs_core::keys;
+use fsa_core::app;
+use fsa_core::config::ServerConfig;
+use fsa_core::keys;
 use serde_json::{Value, json};
 
-const ADMIN: &str = "neg-admin@mcp-fs.test";
-const STRANGER: &str = "neg-stranger@mcp-fs.test";
+const ADMIN: &str = "neg-admin@fsa.test";
+const STRANGER: &str = "neg-stranger@fsa.test";
 /// rmcp answers 406 to a `/mcp` POST whose `Accept` lacks both media types.
 const MCP_ACCEPT: &str = "application/json, text/event-stream";
 /// The options the service offers: the reference program runs with the same ones.
@@ -48,7 +48,7 @@ static FIXTURE: OnceLock<Fixture> = OnceLock::new();
 fn fixture() -> &'static Fixture {
     FIXTURE.get_or_init(|| {
         require_git();
-        let root = std::env::temp_dir().join(format!("mcpfs-neg-e2e-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("fsa-neg-e2e-{}", std::process::id()));
         remove_stale_roots(&root);
         std::fs::create_dir_all(&root).expect("fixture dir");
         let (private_key, public_key) = keys::write_keypair(&root).expect("keypair");
@@ -94,7 +94,7 @@ fn remove_stale_roots(current: &Path) {
     let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else { return };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        if name.starts_with("mcpfs-neg-e2e-") && e.path() != current {
+        if name.starts_with("fsa-neg-e2e-") && e.path() != current {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
@@ -242,7 +242,7 @@ fn git_ok(dir: &Path, token: Option<&str>, args: &[&str]) -> String {
 /// A working repository on `main` with the identity git needs to commit.
 fn work_repo(dir: &Path) {
     git_ok(dir, None, &["init", "-q", "-b", "main"]);
-    git_ok(dir, None, &["config", "user.email", "neg@mcp-fs.test"]);
+    git_ok(dir, None, &["config", "user.email", "neg@fsa.test"]);
     git_ok(dir, None, &["config", "user.name", "neg"]);
 }
 
@@ -336,7 +336,7 @@ fn clone_copy(env: &Env, token: Option<&str>) -> (tempfile::TempDir, PathBuf) {
         token,
         &["clone", "-q", &env.server.url(&env.project), copy.to_str().unwrap()],
     );
-    git_ok(&copy, None, &["config", "user.email", "neg@mcp-fs.test"]);
+    git_ok(&copy, None, &["config", "user.email", "neg@fsa.test"]);
     git_ok(&copy, None, &["config", "user.name", "neg"]);
     (dir, copy)
 }
@@ -1778,7 +1778,7 @@ async fn announced_options(env: &Env) -> String {
     String::from_utf8(body[nul + 1..end].to_vec()).expect("utf8 options")
 }
 
-const OFFERED: &str = "multi_ack_detailed side-band-64k ofs-delta agent=mcp-fs/0.1.0";
+const OFFERED: &str = "multi_ack_detailed side-band-64k ofs-delta agent=fsa/0.1.0";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn spec_0069_e2e_001_a_real_client_still_clones_and_fetches() {

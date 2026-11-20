@@ -2391,12 +2391,17 @@ pub(crate) fn validate_ref_name(name: &str, noun: &str) -> Result<()> {
     Ok(())
 }
 
+/// The message written to a reflog by the tools of this server: who acted and through which tool.
+pub(crate) fn reflog_message(tool: &str) -> String {
+    format!("fsa {tool}")
+}
+
 /// Keeps the on disk ref in step with the index row that was just written.
 /// The index is the source of truth, so a libgit2 failure (a locked ref, a full
 /// disk) never fails the call; it is logged once so an operator can see that the
 /// two disagree, since nothing repairs the on disk ref later.
 pub(crate) fn sync_disk_ref(repo: &Repository, ref_name: &str, oid: Oid, tool: &str) {
-    if let Err(e) = repo.reference(ref_name, oid, true, &format!("mcp-fs {tool}")) {
+    if let Err(e) = repo.reference(ref_name, oid, true, &reflog_message(tool)) {
         #[cfg(test)]
         DISK_REF_FAILURES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((
             repo.path().to_path_buf(),
@@ -3731,7 +3736,7 @@ async fn push_branch_inner(
                 &format!("refs/heads/{branch_owned}"),
                 oid,
                 true,
-                "mcp-fs git.remote_push",
+                &reflog_message("git.remote_push"),
             )
             .map_err(|e| git_err("sync local branch ref", e))?;
             crate::git::remote::push_to_remote(
@@ -7736,7 +7741,7 @@ struct TempClone {
 impl TempClone {
     fn new() -> Result<Self> {
         let path =
-            std::env::temp_dir().join(format!("mcpfs-clone-{}", uuid::Uuid::new_v4().simple()));
+            std::env::temp_dir().join(format!("fsa-clone-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&path)?;
         Ok(Self { path })
     }
@@ -7776,6 +7781,12 @@ fn clear_readonly(dir: &Path) {
 mod tests {
     use super::super::admin::test_support::{ADMIN, Fixture};
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_reflog_messages_name_fsa() {
+        assert_eq!(reflog_message("git.remote_push_tag"), "fsa git.remote_push_tag");
+    }
     use crate::errors::code;
     use crate::git::OAuthTokenStore;
 
@@ -9814,7 +9825,7 @@ mod tests {
                 drop(stream);
             }
         });
-        (format!("https://127.0.0.1:{port}/does-not/exist-mcpfs.git"), handle)
+        (format!("https://127.0.0.1:{port}/does-not/exist-fsa.git"), handle)
     }
 
     /// One more commit directly on the bare "remote", simulating another writer
@@ -11081,7 +11092,7 @@ mod tests {
         let err = crate::git::remote::fetch_from_remote(
             &repo,
             "origin",
-            "https://mcp-fs-fetch-unreachable-test.invalid/o/r.git",
+            "https://fsa-fetch-unreachable-test.invalid/o/r.git",
             None,
             None,
             crate::git::remote::TagScope::Off,
@@ -11090,7 +11101,7 @@ mod tests {
         assert_eq!(err.code, code::INTERNAL_ERROR);
         assert_ne!(err.code, code::UNAUTHENTICATED, "distinguishable from a credential failure");
         assert!(
-            err.message.contains("mcp-fs-fetch-unreachable-test.invalid"),
+            err.message.contains("fsa-fetch-unreachable-test.invalid"),
             "the host must be named: got {}",
             err.message
         );
@@ -11566,11 +11577,7 @@ mod tests {
         let repo = entry.repo.lock().await;
         let commit = repo.find_commit(git2::Oid::from_str(&tip).unwrap()).unwrap();
         assert_eq!(commit.parent_count(), 1, "the fetched commit's own parent count, unchanged");
-        assert_eq!(
-            commit.author().name().unwrap(),
-            "Origin",
-            "authored by the remote, not by mcp-fs"
-        );
+        assert_eq!(commit.author().name().unwrap(), "Origin", "authored by the remote, not by fsa");
     }
 
     /// E2E-NEW-120: a dirty volume (a modified tracked file) refuses the pull,

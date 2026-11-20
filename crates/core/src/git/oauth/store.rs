@@ -8,7 +8,7 @@
 //! DEC-004). `provider` is retained as a non-key attribute of the stored
 //! session.
 //!
-//! When `MCPFS_TOKEN_KEY` is set the store is backed by
+//! When `FSA_TOKEN_KEY` is set the store is backed by
 //! [`SqliteOAuthPersistence`]: sessions are loaded at startup and every mutation
 //! is written through, encrypted, so authentication survives a restart.
 //!
@@ -23,7 +23,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 /// The environment variable holding the base64 AES-256 key.
-pub const TOKEN_KEY_ENV: &str = "MCPFS_TOKEN_KEY";
+pub const TOKEN_KEY_ENV: &str = "FSA_TOKEN_KEY";
+
+/// The name of the variable before the rename, read until release 1.0.0.
+const LEGACY_TOKEN_KEY_ENV: &str = "MCPFS_TOKEN_KEY";
+
+/// The token key from the environment: the new name, else the old one with its warning.
+fn token_key_with(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    crate::env_compat::read_with(TOKEN_KEY_ENV, LEGACY_TOKEN_KEY_ENV, env)
+}
 
 /// An active OAuth session for one person plus host.
 #[derive(Clone, PartialEq, Eq)]
@@ -99,7 +107,7 @@ impl OAuthTokenStore {
         Ok(Self { sessions: RwLock::new(sessions), persistence: Some(persistence) })
     }
 
-    /// The composition root entry point: persistent when `MCPFS_TOKEN_KEY` is set
+    /// The composition root entry point: persistent when `FSA_TOKEN_KEY` is set
     /// and decodes to 32 bytes, memory only otherwise. A malformed key is an error
     /// rather than a silent downgrade, so a typo cannot quietly lose tokens.
     /// Takes the process wide registry rather than building one: on a server
@@ -109,13 +117,13 @@ impl OAuthTokenStore {
         config: &ServerConfig,
         registry: &crate::storage::RelationalRegistry,
     ) -> Result<Self> {
-        match std::env::var(TOKEN_KEY_ENV) {
-            Ok(raw) if !raw.trim().is_empty() => {
+        match token_key_with(&|k| std::env::var(k).ok()) {
+            Some(raw) => {
                 let k = cipher::decode_key(&raw)?;
                 let p = crate::storage::build_oauth_persistence(config, registry, k).await?;
                 Self::with_persistence(p).await
             }
-            _ => Ok(Self::new()),
+            None => Ok(Self::new()),
         }
     }
 
@@ -714,13 +722,41 @@ mod tests {
         assert!(s3.get_token("alice@test.com", "github.com").is_none());
     }
 
+    /// DT-001 (SPEC-0099): the token key is read as `FSA_TOKEN_KEY`, then `MCPFS_TOKEN_KEY`.
+    #[test]
+    fn token_key_prefers_the_new_name_then_the_old_one() {
+        let only_old = |k: &str| (k == "MCPFS_TOKEN_KEY").then(|| "old-key".to_string());
+        assert_eq!(token_key_with(&only_old).as_deref(), Some("old-key"));
+        assert!(
+            crate::env_compat::printed_lines().contains(
+                &"warning: environment variable MCPFS_TOKEN_KEY is deprecated, use FSA_TOKEN_KEY"
+                    .to_string()
+            ),
+            "the fallback prints the DR-006 line"
+        );
+        let both = |k: &str| match k {
+            "FSA_TOKEN_KEY" => Some("new-key".to_string()),
+            "MCPFS_TOKEN_KEY" => Some("old-key".to_string()),
+            _ => None,
+        };
+        assert_eq!(token_key_with(&both).as_deref(), Some("new-key"));
+        let blank_new = |k: &str| match k {
+            "FSA_TOKEN_KEY" => Some("  ".to_string()),
+            "MCPFS_TOKEN_KEY" => Some("old-key".to_string()),
+            _ => None,
+        };
+        assert_eq!(token_key_with(&blank_new).as_deref(), Some("old-key"));
+        assert_eq!(token_key_with(&|_| None), None);
+        assert_eq!(TOKEN_KEY_ENV, "FSA_TOKEN_KEY");
+    }
+
     #[tokio::test]
     async fn from_env_is_memory_only_without_a_key() {
         let dir = tempfile::tempdir().unwrap();
         let mut c = ServerConfig::default();
         c.infra.meta.dir = dir.path().join("state/volumes").display().to_string();
         // The env var is process wide, so assert on the absent case only when unset.
-        if std::env::var(TOKEN_KEY_ENV).is_err() {
+        if token_key_with(&|k| std::env::var(k).ok()).is_none() {
             let reg = crate::storage::RelationalRegistry::new();
             let s = OAuthTokenStore::from_env(&c, &reg).await.unwrap();
             assert!(!s.is_persistent());

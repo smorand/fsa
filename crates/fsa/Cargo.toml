@@ -1,5 +1,5 @@
 [package]
-name = "mcp-fs"
+name = "fsa"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,19 +9,19 @@ description = "Streamable-HTTP MCP server exposing a simulated multi-project fil
 publish = false
 
 [[bin]]
-name = "mcp-fs"
+name = "fsa"
 path = "src/main.rs"
 
 [features]
 default = []
-postgres = ["mcp-fs-core/postgres"]
-rag = ["mcp-fs-core/rag"]
-all-backends = ["mcp-fs-core/all-backends"]
-rar = ["mcp-fs-core/rar"]
+postgres = ["fsa-core/postgres"]
+rag = ["fsa-core/rag"]
+all-backends = ["fsa-core/all-backends"]
+rar = ["fsa-core/rar"]
 
 [dependencies]
 tokio = { workspace = true }
-mcp-fs-core = { path = "../core" }
+fsa-core = { path = "../core" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

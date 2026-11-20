@@ -103,7 +103,7 @@ async fn e2e_0097_047_a_refused_start_leaves_nothing_running() {
     let port = free_port();
     let path = write_config(d.path(), "config.yaml", &web_yaml(true, &["*"], &[]), port);
 
-    let err = dispatch(Cli::parse_from(["mcp-fs", "serve", "--config", path.to_str().unwrap()]))
+    let err = dispatch(Cli::parse_from(["fsa", "serve", "--config", path.to_str().unwrap()]))
         .await
         .expect_err("serve must refuse");
 
@@ -148,7 +148,7 @@ async fn e2e_0097_012_purge_refuses_before_any_work() {
     let d = tempfile::tempdir().unwrap();
     let path = write_config(d.path(), "config.yaml", &web_yaml(false, &[], &["a..b"]), 5002);
 
-    let err = dispatch(Cli::parse_from(["mcp-fs", "purge", "--config", path.to_str().unwrap()]))
+    let err = dispatch(Cli::parse_from(["fsa", "purge", "--config", path.to_str().unwrap()]))
         .await
         .expect_err("purge must refuse");
 
@@ -163,7 +163,7 @@ async fn e2e_0097_012_migrate_names_the_source_before_the_destination() {
     let to = write_config(d.path(), "to.yaml", &web_yaml(false, &["dst..bad"], &[]), 5002);
 
     let err = dispatch(Cli::parse_from([
-        "mcp-fs",
+        "fsa",
         "migrate",
         "--from",
         from.to_str().unwrap(),
@@ -239,7 +239,7 @@ async fn e2e_0097_089_the_purge_command_refuses_a_bad_entry() {
     let d = tempfile::tempdir().unwrap();
     let path = write_config(d.path(), "config.yaml", &web_yaml(true, &["*"], &[]), 5002);
 
-    let err = dispatch(Cli::parse_from(["mcp-fs", "purge", "--config", path.to_str().unwrap()]))
+    let err = dispatch(Cli::parse_from(["fsa", "purge", "--config", path.to_str().unwrap()]))
         .await
         .expect_err("purge must refuse");
 
@@ -254,7 +254,7 @@ async fn e2e_0097_090_the_migrate_command_refuses_a_bad_entry() {
     let to = write_config(d.path(), "to.yaml", &web_yaml(true, &[], &[]), 5002);
 
     let err = dispatch(Cli::parse_from([
-        "mcp-fs",
+        "fsa",
         "migrate",
         "--from",
         from.to_str().unwrap(),
@@ -273,7 +273,7 @@ async fn e2e_0097_091_the_purge_command_accepts_valid_lists() {
     let d = tempfile::tempdir().unwrap();
     let path = write_config(d.path(), "config.yaml", &web_yaml(true, &["10.0.0.0/8"], &[]), 5002);
 
-    dispatch(Cli::parse_from(["mcp-fs", "purge", "--config", path.to_str().unwrap()]))
+    dispatch(Cli::parse_from(["fsa", "purge", "--config", path.to_str().unwrap()]))
         .await
         .expect("purge with valid lists must run");
 }

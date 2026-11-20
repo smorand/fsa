@@ -110,7 +110,7 @@ impl Fixture {
                 eprintln!("skipping {test}: built without --features postgres");
                 return None;
             }
-            Some((dsn, format!("mcpfs_removal_{test}_{}", std::process::id())))
+            Some((dsn, format!("fsa_removal_{test}_{}", std::process::id())))
         } else {
             None
         };

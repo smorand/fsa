@@ -15,14 +15,14 @@ search:
   embedding:
     endpoint: ""        # OpenAI-compatible /v1/embeddings URL (required for rag/both)
     model: text-embedding-3-small
-    api_key_env: MCPFS_EMBEDDING_KEY  # env var holding the Bearer key
+    api_key_env: FSA_EMBEDDING_KEY  # env var holding the Bearer key
     dimensions: 1536    # must match the model; frozen after first index call
 
   reranking:
     enabled: false      # set true to call the rerank endpoint on search.query
     endpoint: ""        # Cohere/Jina rerank URL
     model: ""
-    api_key_env: MCPFS_RERANK_KEY
+    api_key_env: FSA_RERANK_KEY
     top_n: 10           # how many chunks to send to the reranker
 ```
 

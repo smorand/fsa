@@ -24,7 +24,7 @@ pub const DEFAULT_FILTER: &str = "info";
 /// Install the global tracing subscriber. Safe to call more than once: a second
 /// call is a no op rather than a panic, so tests and the CLI can both call it.
 ///
-/// Logs go to stderr on purpose: stdout stays clean so `mcp-fs token` can be
+/// Logs go to stderr on purpose: stdout stays clean so `fsa token` can be
 /// piped straight into a file.
 ///
 /// Under `cfg(test)` this always also installs [`capture::CaptureLayer`],

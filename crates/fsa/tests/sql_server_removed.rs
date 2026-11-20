@@ -1,4 +1,4 @@
-//! SPEC-0051: SQL Server support was removed. These tests drive the real `mcp-fs` binary,
+//! SPEC-0051: SQL Server support was removed. These tests drive the real `fsa` binary,
 //! because the observables (standard output, standard error, exit status, what lands on
 //! disk) only exist at the process boundary.
 
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-const BIN: &str = env!("CARGO_BIN_EXE_mcp-fs");
+const BIN: &str = env!("CARGO_BIN_EXE_fsa");
 const ADMIN: &str = "admin@example.com";
 const MEMBER: &str = "member@example.com";
 const PROJECT: &str = "atlas";
@@ -96,7 +96,7 @@ impl Deployment {
         while child.try_wait().unwrap().is_none() {
             if Instant::now() > deadline {
                 child.kill().ok();
-                panic!("`mcp-fs {args:?}` was expected to stop by itself");
+                panic!("`fsa {args:?}` was expected to stop by itself");
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -295,7 +295,7 @@ fn deployment_with_atlas() -> Deployment {
 const ALL_SQLITE: [Store; 4] = [SQLITE; 4];
 
 /// Written once, on the previous version's code, to create `tests/fixtures/state_v1`:
-/// `cargo test -p mcp-fs --test sql_server_removed spec_0051_regenerate_state_fixture -- --ignored`.
+/// `cargo test -p fsa --test sql_server_removed spec_0051_regenerate_state_fixture -- --ignored`.
 /// Never rerun it to make a failing test pass: the fixture is the proof that a database
 /// written by an earlier version still opens.
 #[tokio::test]
@@ -487,7 +487,7 @@ fn spec_0051_the_removed_build_option_is_refused() {
     // build, and this keeps the check clear of the outer cargo's lock.
     let scratch = tempfile::tempdir().unwrap();
     let out = cargo()
-        .args(["check", "-p", "mcp-fs", "--features", "sqlserver", "--offline"])
+        .args(["check", "-p", "fsa", "--features", "sqlserver", "--offline"])
         .env("CARGO_TARGET_DIR", scratch.path())
         .output()
         .unwrap();
@@ -504,13 +504,13 @@ fn spec_0051_the_removed_build_option_is_refused() {
         .output()
         .unwrap();
     let meta: Value = serde_json::from_slice(&meta.stdout).unwrap();
-    for name in ["mcp-fs-core", "mcp-fs"] {
+    for name in ["fsa-core", "fsa"] {
         let pkg = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == name).unwrap();
         let features = pkg["features"].as_object().unwrap();
         assert!(!features.contains_key("sqlserver"), "{name} still has the feature");
         assert!(features.contains_key("all-backends"), "{name} lost all-backends");
     }
-    let core = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "mcp-fs-core");
+    let core = meta["packages"].as_array().unwrap().iter().find(|p| p["name"] == "fsa-core");
     assert_eq!(core.unwrap()["features"]["all-backends"], json!(["postgres", "rag"]));
 }
 
@@ -544,7 +544,7 @@ fn spec_0051_the_postgres_suite_passes_unchanged() {
         return;
     };
     let out = cargo()
-        .args(["test", "-p", "mcp-fs-core", "--features", "postgres", "--lib", "--"])
+        .args(["test", "-p", "fsa-core", "--features", "postgres", "--lib", "--"])
         .args(["conformance", "spec_0024", "pg_open", "pg_null", "--test-threads=4"])
         .env("MCPFS_TEST_PG_DSN", dsn)
         .output()

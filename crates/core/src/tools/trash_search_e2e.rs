@@ -473,7 +473,7 @@ impl PgFixture {
             eprintln!("skipping {test}: built without --features postgres");
             return None;
         }
-        let schema = format!("mcpfs_trash_search_{test}_{}", std::process::id());
+        let schema = format!("fsa_trash_search_{test}_{}", std::process::id());
         drop_schema(&dsn, &schema).await;
 
         let dir = tempfile::tempdir().unwrap();

@@ -47,7 +47,7 @@ extract:
     # provider: multimodal
     # endpoint: https://api.openai.com/v1/chat/completions
     # model: gpt-4o-mini
-    # api_key_env: MCP_FS_OCR_KEY
+    # api_key_env: FSA_OCR_KEY
     # prompt: "Transcribe this document faithfully into Markdown."
 
 # External document to Markdown converter (opt-in), used by the
@@ -68,7 +68,7 @@ extract:
 #   api:
 #     url: ""
 #     auth_header: Authorization   # header NAME, not necessarily a bearer
-#     auth_token: "${MCPFS_DOC_SERVICE_TOKEN}"   # secret, sent verbatim
+#     auth_token: "${FSA_DOC_SERVICE_TOKEN}"   # secret, sent verbatim
 #     file_field: file             # name of the multipart part carrying the document
 #     response_field: ""           # empty = the response body IS the markdown
 #     timeout_secs: 900
@@ -90,7 +90,7 @@ git:
   anonymous_read: false
   max_pack_size_mb: 512
   # github_client_id: ""
-  # github_client_secret_env: MCPFS_GITHUB_CLIENT_SECRET   # export MCPFS_GITHUB_CLIENT_SECRET=<secret>
+  # github_client_secret_env: FSA_GITHUB_CLIENT_SECRET   # export FSA_GITHUB_CLIENT_SECRET=<secret>
   # gitlab_client_id: ""
   # gitlab_client_secret_env: GITLAB_CLIENT_SECRET
   # gitlab_instance_url: https://gitlab.com

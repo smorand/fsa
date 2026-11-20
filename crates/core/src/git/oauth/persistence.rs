@@ -4,7 +4,7 @@
 //! (AES-256-GCM, see [`super::cipher`]); the metadata is stored in clear because
 //! none of it is a secret and it has to be queryable.
 //!
-//! Instantiated only when `MCPFS_TOKEN_KEY` is set; without it the token store is
+//! Instantiated only when `FSA_TOKEN_KEY` is set; without it the token store is
 //! memory only and tokens are lost on restart.
 //!
 //! The methods are async because the PostgreSQL driver is async only. They used to be synchronous, which is why the token store above them had

@@ -525,8 +525,8 @@ pub async fn seed_commit(
     let tree_sha = objects.write(ObjectType::Tree, &tree).await?;
 
     let body = format!(
-        "tree {tree_sha}\nauthor mcp-fs <mcp-fs@example.test> 1700000000 +0000\n\
-         committer mcp-fs <mcp-fs@example.test> 1700000000 +0000\n\n{message}\n"
+        "tree {tree_sha}\nauthor fsa <fsa@example.test> 1700000000 +0000\n\
+         committer fsa <fsa@example.test> 1700000000 +0000\n\n{message}\n"
     );
     let commit_sha = objects.write(ObjectType::Commit, body.as_bytes()).await?;
     Ok((commit_sha, tree_sha, blob_sha))
@@ -638,7 +638,7 @@ mod tests {
     async fn counting_odb() -> (tempfile::TempDir, Arc<CountingBlobs>, BlobObjectDb) {
         let d = tempfile::tempdir().unwrap();
         let counting = Arc::new(CountingBlobs {
-            inner: LocalBlobStore::new(d.path(), "mcpfs-git-test"),
+            inner: LocalBlobStore::new(d.path(), "fsa-git-test"),
             exists_calls: AtomicUsize::new(0),
             get_calls: AtomicUsize::new(0),
         });
@@ -700,7 +700,7 @@ mod tests {
 
     async fn odb() -> (tempfile::TempDir, BlobObjectDb) {
         let d = tempfile::tempdir().unwrap();
-        let blobs: Arc<dyn BlobBackend> = Arc::new(LocalBlobStore::new(d.path(), "mcpfs-git-test"));
+        let blobs: Arc<dyn BlobBackend> = Arc::new(LocalBlobStore::new(d.path(), "fsa-git-test"));
         let index = Arc::new(RelationalGitDb::open_in_memory().await.unwrap());
         (d, BlobObjectDb::new(blobs, index))
     }
@@ -880,7 +880,7 @@ mod tests {
         let c = repo.find_commit(Oid::from_str(&commit).unwrap()).unwrap();
         assert_eq!(c.message().unwrap(), "init\n");
         assert_eq!(c.tree_id().to_string(), tree);
-        assert_eq!(c.author().name().unwrap(), "mcp-fs");
+        assert_eq!(c.author().name().unwrap(), "fsa");
         let t = c.tree().unwrap();
         let entry = t.get_name("readme.txt").unwrap();
         assert_eq!(entry.id().to_string(), blob);
@@ -1075,7 +1075,7 @@ mod tests {
     async fn dt010_dependencies_are_written_first() {
         let d = tempfile::tempdir().unwrap();
         let recording = Arc::new(RecordingBlobs {
-            inner: LocalBlobStore::new(d.path(), "mcpfs-git-test"),
+            inner: LocalBlobStore::new(d.path(), "fsa-git-test"),
             puts: Mutex::new(Vec::new()),
         });
         let o = odb_over(recording.clone()).await;
@@ -1132,7 +1132,7 @@ mod tests {
     async fn us0123_dt003_a_write_failure_is_not_retried_by_the_whole_walk() {
         let d = tempfile::tempdir().unwrap();
         let failing = Arc::new(FailingPutBlobs {
-            inner: LocalBlobStore::new(d.path(), "mcpfs-git-test"),
+            inner: LocalBlobStore::new(d.path(), "fsa-git-test"),
             puts: AtomicUsize::new(0),
         });
         let o = odb_over(failing.clone()).await;
@@ -1325,7 +1325,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let other = Arc::new(std::sync::OnceLock::new());
         let hook = Arc::new(HookBlobs {
-            inner: LocalBlobStore::new(d.path(), "mcpfs-git-test"),
+            inner: LocalBlobStore::new(d.path(), "fsa-git-test"),
             other: other.clone(),
             fired: std::sync::atomic::AtomicBool::new(false),
         });

@@ -133,7 +133,7 @@ class Harness:
         keys = os.path.join(self.dir, "keys")
         os.makedirs(keys)
         subprocess.run(
-            ["./target/debug/mcp-fs", "keys", "--dir", keys],
+            ["./target/debug/fsa", "keys", "--dir", keys],
             check=True,
             capture_output=True,
         )
@@ -148,13 +148,13 @@ class Harness:
                 f" admin: {{ path: {self.dir}/admin.db }} }}\n"
             )
         self.server = subprocess.Popen(
-            ["./target/debug/mcp-fs", "serve", "--config", cfg],
+            ["./target/debug/fsa", "serve", "--config", cfg],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         token = subprocess.run(
             [
-                "./target/debug/mcp-fs",
+                "./target/debug/fsa",
                 "token",
                 "pty@example.com",
                 "--key",
@@ -263,7 +263,7 @@ class Harness:
 
 def main():
     if not os.path.exists("./target/debug/agent"):
-        print("build first: cargo build -p agent -p mcp-fs", file=sys.stderr)
+        print("build first: cargo build -p agent -p fsa", file=sys.stderr)
         return 2
 
     h = Harness()

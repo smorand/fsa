@@ -724,7 +724,7 @@ fn publish_on_repo(
     if !git2::Reference::is_valid_name(&tag_ref) {
         return Err(crate::git::remote::remote_refused_tag(tag, "invalid ref name"));
     }
-    repo.reference(&tag_ref, object, true, "mcp-fs git.remote_push_tag")
+    repo.reference(&tag_ref, object, true, &super::git::reflog_message("git.remote_push_tag"))
         .map_err(|e| crate::git::remote::remote_refused_tag(tag, e.message()))?;
     let pushed = crate::git::remote::push_tag_to_remote(
         repo,
@@ -1209,7 +1209,12 @@ fn send_due_tags(repo: &Repository, tags: &mut [TagOutcome], conn: &Connection<'
             tag.outcome = Outcome::Refused("invalid ref name".to_string());
             continue;
         }
-        match repo.reference(&tag_ref, tag.object, true, "mcp-fs git.remote_push_tags") {
+        match repo.reference(
+            &tag_ref,
+            tag.object,
+            true,
+            &super::git::reflog_message("git.remote_push_tags"),
+        ) {
             Ok(_) => due.push(at),
             Err(e) => tag.outcome = Outcome::Refused(e.message().to_string()),
         }

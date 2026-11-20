@@ -5,7 +5,7 @@
 # Runtime state (SQLite metadata, local blobs, admin db, git, oauth, trash)
 state/
 
-# Dev signing keys (generate with `mcp-fs keys`)
+# Dev signing keys (generate with `fsa keys`)
 .keys/
 
 # Local secrets sourced by run.sh -- never commit real secrets

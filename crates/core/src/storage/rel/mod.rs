@@ -614,7 +614,7 @@ mod tests {
     }
 
     /// This is the guard `survives_reopen_on_disk`
-    /// (`crates/mcp-fs/src/git/oauth/persistence.rs`) pins end to end: once the
+    /// (`crates/fsa/src/git/oauth/persistence.rs`) pins end to end: once the
     /// table already carries the guard column, a re-migrate must not drop it.
     #[tokio::test]
     async fn table_recreation_is_a_no_op_once_the_column_exists() {

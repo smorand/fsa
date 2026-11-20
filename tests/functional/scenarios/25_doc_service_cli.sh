@@ -43,7 +43,7 @@ assert_contains "compagnon listé" "$OUT" "sample.md"
 
 # ── le markdown produit par le convertisseur est non vide ────────────────────
 OUT=$(ds_mcp fs.read "{\"mount_id\":\"$DS_PROJ\",\"path\":\"/sample.md\",\"line_numbered\":false}")
-assert_contains "markdown non vide" "$OUT" "hello mcpfs"
+assert_contains "markdown non vide" "$OUT" "hello fsa"
 
 # ── fs.documentize : la surface de reprise, no-clobber par défaut ────────────
 OUT=$(ds_mcp fs.documentize "{\"mount_id\":\"$DS_PROJ\",\"path\":\"/sample.pdf\"}")

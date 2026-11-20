@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Interactive CLI agent driving the mcp-fs tools through an LLM.
+# Interactive CLI agent driving the fsa tools through an LLM.
 #
 # Starts the server itself when nothing is listening, logging to mcp_<datetime>.log, and
 # stops it again when the agent exits. A server that was already running is left alone:
@@ -7,7 +7,7 @@
 #
 # Mint a token for yourself once:
 #   mkdir -p .agent_keys
-#   ./target/release/mcp-fs token you@example.com --key .keys/jwt.key > .agent_keys/you
+#   ./target/release/fsa token you@example.com --key .keys/jwt.key > .agent_keys/you
 # Then:
 #   ./agent.sh --user you
 set -euo pipefail
@@ -36,7 +36,7 @@ cleanup() {
     kill -TERM "$WATCHDOG_PID" 2>/dev/null || true
   fi
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-    printf '  stopping mcp-fs (pid %s)\n' "$SERVER_PID"
+    printf '  stopping fsa (pid %s)\n' "$SERVER_PID"
     kill -TERM "$SERVER_PID" 2>/dev/null || true
     # Give it five seconds to flush and close its database, then insist.
     for _ in $(seq 1 50); do
@@ -70,7 +70,7 @@ start_watchdog() {
   WATCHDOG_PID=$!
 }
 
-# Is something answering as an mcp-fs server on this host and port?
+# Is something answering as an fsa server on this host and port?
 # /health needs no bearer, and answering it proves the HTTP server is up rather than
 # merely that the port is held by something.
 probe() {
@@ -104,7 +104,7 @@ fi
 # ── server ───────────────────────────────────────────────────────────────────────
 
 if probe "$HOST" "$PORT"; then
-  printf '  mcp-fs already running at %s:%s, leaving it alone\n' "$HOST" "$PORT"
+  printf '  fsa already running at %s:%s, leaving it alone\n' "$HOST" "$PORT"
 else
   # Same bootstrap as run.sh: a personal config and a dev keypair on first use.
   if [ ! -f "$SERVER_CONFIG" ]; then
@@ -113,14 +113,14 @@ else
   fi
   if [ ! -f .keys/jwt.pub ]; then
     printf '  generating a dev keypair in .keys\n'
-    cargo run --release --quiet -p mcp-fs -- keys --dir .keys
+    cargo run --release --quiet -p fsa -- keys --dir .keys
   fi
-  cargo build --release -p mcp-fs
+  cargo build --release -p fsa
 
   SERVER_LOG="mcp_$(date +%Y%m%d-%H%M%S).log"
-  ./target/release/mcp-fs serve --config "$SERVER_CONFIG" >"$SERVER_LOG" 2>&1 &
+  ./target/release/fsa serve --config "$SERVER_CONFIG" >"$SERVER_LOG" 2>&1 &
   SERVER_PID=$!
-  printf '  started mcp-fs (pid %s), logging to %s\n' "$SERVER_PID" "$SERVER_LOG"
+  printf '  started fsa (pid %s), logging to %s\n' "$SERVER_PID" "$SERVER_LOG"
 
   # Wait for it to answer, and fail loudly rather than handing the agent a dead endpoint.
   up=0
@@ -130,14 +130,14 @@ else
       break
     fi
     if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      printf '\n  mcp-fs exited during startup. Last lines of %s:\n\n' "$SERVER_LOG" >&2
+      printf '\n  fsa exited during startup. Last lines of %s:\n\n' "$SERVER_LOG" >&2
       tail -n 20 "$SERVER_LOG" >&2
       exit 1
     fi
     sleep 0.1
   done
   if [ "$up" -ne 1 ]; then
-    printf '\n  mcp-fs did not answer at %s:%s within 10s.\n' "$HOST" "$PORT" >&2
+    printf '\n  fsa did not answer at %s:%s within 10s.\n' "$HOST" "$PORT" >&2
     printf '  The agent expects %s, so check the port in %s.\n\n' "$MCP_URL" "$SERVER_CONFIG" >&2
     tail -n 20 "$SERVER_LOG" >&2
     exit 1

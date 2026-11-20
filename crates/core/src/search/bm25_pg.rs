@@ -220,7 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_index_and_query() {
-        let Some(b) = live_backend("mcpfs_bm25pg_idx").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_idx").await else { return };
         b.index_path("v1", "/a.md", "the quick brown fox jumps", 200, 0).await.unwrap();
         let r = b.query_bm25("v1", "fox", 10).await.unwrap();
         assert!(!r.is_empty(), "expected at least one result");
@@ -229,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_ranks_start_at_one() {
-        let Some(b) = live_backend("mcpfs_bm25pg_ranks").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_ranks").await else { return };
         b.index_path("v1", "/a.md", "quick fox", 200, 0).await.unwrap();
         b.index_path("v1", "/b.md", "quick fox brown", 200, 0).await.unwrap();
         let r = b.query_bm25("v1", "fox", 10).await.unwrap();
@@ -241,7 +241,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_delete_removes_doc() {
-        let Some(b) = live_backend("mcpfs_bm25pg_del").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_del").await else { return };
         b.index_path("v1", "/b.md", "hello world test", 200, 0).await.unwrap();
         let deleted = b.delete_path("v1", "/b.md").await.unwrap();
         assert!(deleted > 0, "delete must report at least one chunk removed");
@@ -251,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_stats_zero_on_empty_volume() {
-        let Some(b) = live_backend("mcpfs_bm25pg_stats").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_stats").await else { return };
         let s = b.stats("empty_vol").await.unwrap();
         assert_eq!(s.bm25_docs, 0);
         assert!(!s.bm25_warm, "empty volume must not be warm");
@@ -259,7 +259,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_stats_counts_chunks_after_index() {
-        let Some(b) = live_backend("mcpfs_bm25pg_stats2").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_stats2").await else { return };
         // Two files, each one chunk at this size.
         b.index_path("v1", "/a.md", "alpha beta gamma", 200, 0).await.unwrap();
         b.index_path("v1", "/b.md", "delta epsilon zeta", 200, 0).await.unwrap();
@@ -270,7 +270,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_idempotent_reindex() {
-        let Some(b) = live_backend("mcpfs_bm25pg_idem").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_idem").await else { return };
         b.index_path("v1", "/a.md", "first version content", 200, 0).await.unwrap();
         // Re-index the same path: should replace, not duplicate.
         b.index_path("v1", "/a.md", "second version content", 200, 0).await.unwrap();
@@ -286,7 +286,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_volume_isolation() {
-        let Some(b) = live_backend("mcpfs_bm25pg_iso").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_iso").await else { return };
         b.index_path("vol_a", "/shared.md", "document in volume a", 200, 0).await.unwrap();
         b.index_path("vol_b", "/shared.md", "document in volume b", 200, 0).await.unwrap();
         // Query vol_a must not return vol_b rows.
@@ -300,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_delete_all_removes_every_chunk_of_the_volume() {
-        let Some(b) = live_backend("mcpfs_bm25pg_delall").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_delall").await else { return };
         b.index_path("v1", "/a.md", "alpha content", 200, 0).await.unwrap();
         b.index_path("v1", "/b.md", "beta content", 200, 0).await.unwrap();
         assert_eq!(b.stats("v1").await.unwrap().bm25_docs, 2);
@@ -314,7 +314,7 @@ mod tests {
     /// would empty another project's index.
     #[tokio::test]
     async fn live_delete_all_is_scoped_to_one_volume() {
-        let Some(b) = live_backend("mcpfs_bm25pg_delall_iso").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_delall_iso").await else { return };
         b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
         b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
         b.delete_all("vol_a").await.unwrap();
@@ -324,13 +324,13 @@ mod tests {
 
     #[tokio::test]
     async fn live_delete_all_on_an_empty_volume_is_zero() {
-        let Some(b) = live_backend("mcpfs_bm25pg_delall_empty").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_delall_empty").await else { return };
         assert_eq!(b.delete_all("never-seen").await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn live_query_vector_returns_not_supported() {
-        let Some(b) = live_backend("mcpfs_bm25pg_norag").await else { return };
+        let Some(b) = live_backend("fsa_bm25pg_norag").await else { return };
         let err = b.query_vector("v1", "anything", 10).await.unwrap_err();
         assert_eq!(err.code, code::NOT_SUPPORTED);
     }

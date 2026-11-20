@@ -196,7 +196,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global FILE_PART
     parser = argparse.ArgumentParser(
-        description="A fake document service speaking the api mode contract of mcp-fs.",
+        description="A fake document service speaking the api mode contract of fsa.",
     )
     parser.add_argument("--port", type=int, default=8099, help="port to listen on (default 8099)")
     parser.add_argument(

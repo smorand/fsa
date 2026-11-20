@@ -26,7 +26,7 @@ SPECS = os.path.join(ROOT, 'specs')
 CITE = re.compile(r'([A-Za-z0-9_./-]+\.(?:rs|toml|txt|json|md|py|sh|yml|yaml)):(\d+)(?:-(\d+))?')
 
 # Paths a spec cites relative to a crate root rather than the repo root.
-SEARCH_PREFIXES = ['', 'crates/mcp-fs/src/', 'crates/mcp-fs/', 'crates/agent/src/']
+SEARCH_PREFIXES = ['', 'crates/fsa/src/', 'crates/fsa/', 'crates/agent/src/']
 
 
 _BY_BASENAME = None
@@ -161,14 +161,14 @@ def audit_coverage(files):
             if r:
                 claimed.add(os.path.relpath(r, ROOT))
         for m in set(re.findall(r'`([a-z_]+(?:/[a-z_]+)*/)`', text)):
-            d = os.path.join(ROOT, 'crates/mcp-fs/src', m)
+            d = os.path.join(ROOT, 'crates/fsa/src', m)
             if os.path.isdir(d):
                 for n in os.listdir(d):
                     if n.endswith('.rs'):
                         claimed.add(os.path.relpath(os.path.join(d, n), ROOT))
 
     sources = []
-    for base in ['crates/mcp-fs/src', 'crates/agent/src']:
+    for base in ['crates/fsa/src', 'crates/agent/src']:
         for dirpath, _, names in os.walk(os.path.join(ROOT, base)):
             for n in names:
                 if n.endswith('.rs'):

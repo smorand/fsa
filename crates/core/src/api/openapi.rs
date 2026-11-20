@@ -88,7 +88,7 @@ pub fn document(state: &AppState) -> Value {
     json!({
         "openapi": "3.0.1",
         "info": {
-            "title": "mcp-fs REST API",
+            "title": "FSA REST API",
             "description": "The /api/fs data plane: bytes plane (upload/download/zip) plus \
                             full parity with the fs.* MCP tools. Auth: Bearer JWT in the \
                             Authorization or X-Forwarded-Authorization header.",
@@ -107,7 +107,7 @@ pub fn document(state: &AppState) -> Value {
                 }
             },
         },
-        "tags": [{"name": "mcp-fs"}],
+        "tags": [{"name": "fsa"}],
     })
 }
 
@@ -208,7 +208,7 @@ impl ToolInputSchema for Map<String, Value> {
 /// An operation with no documentation to inherit (the health probe, git routes).
 fn bare_operation(params: &[Value]) -> Value {
     let mut op = Map::new();
-    op.insert("tags".into(), json!(["mcp-fs"]));
+    op.insert("tags".into(), json!(["fsa"]));
     if !params.is_empty() {
         op.insert("parameters".into(), json!(params));
     }
@@ -278,7 +278,7 @@ fn operation(op: &Op, catalog: &HashMap<String, ToolDoc>) -> Value {
     }
 
     let mut out = Map::new();
-    out.insert("tags".into(), json!(["mcp-fs"]));
+    out.insert("tags".into(), json!(["fsa"]));
     if !summary.is_empty() {
         out.insert("summary".into(), json!(summary));
         out.insert("description".into(), json!(description));
@@ -1577,7 +1577,7 @@ async fn docs_index() -> Response {
         Some((bytes, content_type)) => {
             let html = String::from_utf8_lossy(&bytes)
                 .replace("<head>", &format!("<head>\n    <base href=\"{DOCS_PREFIX}\">"))
-                .replace("<title>Swagger UI</title>", "<title>mcp-fs API</title>");
+                .replace("<title>Swagger UI</title>", "<title>FSA API</title>");
             ([(header::CONTENT_TYPE, content_type)], html).into_response()
         }
         None => (StatusCode::NOT_FOUND, "swagger ui assets are missing").into_response(),
@@ -1673,10 +1673,10 @@ mod tests {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let v: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(v["openapi"], "3.0.1");
-        assert_eq!(v["info"]["title"], "mcp-fs REST API");
+        assert_eq!(v["info"]["title"], "FSA REST API");
         assert_eq!(v["info"]["version"], crate::app::VERSION);
         assert!(v["info"]["description"].as_str().unwrap().contains("/api/fs data plane"));
-        assert_eq!(v["tags"][0]["name"], "mcp-fs");
+        assert_eq!(v["tags"][0]["name"], "fsa");
     }
 
     #[tokio::test]
@@ -2000,7 +2000,7 @@ mod tests {
         let html = String::from_utf8_lossy(&body);
         assert!(html.contains("swagger-ui"), "not the swagger page: {html}");
         assert!(html.contains("<base href=\"/api/docs/\">"), "missing base href");
-        assert!(html.contains("<title>mcp-fs API</title>"));
+        assert!(html.contains("<title>FSA API</title>"));
     }
 
     #[tokio::test]

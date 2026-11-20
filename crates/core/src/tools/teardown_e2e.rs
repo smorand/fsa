@@ -72,7 +72,7 @@ impl Fixture {
             eprintln!("skipping {test}: built without --features {feature}");
             return None;
         }
-        let scope = format!("mcpfs_teardown_{test}_{}", std::process::id());
+        let scope = format!("fsa_teardown_{test}_{}", std::process::id());
         // A run that panicked leaves its scope behind; start from nothing.
         drop_scope(engine, &dsn, &scope).await;
         let (db, scoped_dsn) = open_scope(engine, &dsn, &scope).await;

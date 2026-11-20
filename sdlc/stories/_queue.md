@@ -255,3 +255,11 @@
 | US-0253 | SPEC-0097 | unreadable addresses are never sent, numeric forms are read as the plain address, the proxy limit is tested | US-0252 | 2 | landed |  |  |
 | US-0254 | SPEC-0097 | redirects are checked hop by hop, and the spec is closed | US-0253 | 1 | landed |  |  |
 | US-0255 | SPEC-0098 | pandoc conversion reads no resource the source names | main | 2 | landed |  |  |
+| US-0256 | SPEC-0099 | rename the packages, the crate and the binary to fsa | main | 2 | landed |  |  |
+| US-0257 | SPEC-0099 | the names clients read are fsa | US-0256 | 2 | landed |  |  |
+| US-0258 | SPEC-0099 | the names sent to other systems are fsa | US-0257 | 2 | landed |  |  |
+| US-0259 | SPEC-0099 | environment variable fallback helper and the config and token variables | US-0258 | 2 | landed |  |  |
+| US-0260 | SPEC-0099 | secret name settings, templates and MinIO variables | US-0259 | 2 | landed |  |  |
+| US-0261 | SPEC-0099 | the user configuration directory fsa with fallback | US-0259 | 2 | landed |  |  |
+| US-0262 | SPEC-0099 | test code and fixture spellings | US-0261 | 2 | landed |  |  |
+| US-0263 | SPEC-0099 | scripts, docs, repository URL and the guard tests | US-0262 | 2 | landed |  |  |

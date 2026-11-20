@@ -33,7 +33,7 @@ Classified per the contract: **F** is a functional gap where two competent imple
 ### F findings: 1 found, 1 closed
 
 **F-1 (G7, unresolved prerequisite) — `keys.rs` had no requirement.**
-S1 SC-001 named the `mcp-fs keys` and `mcp-fs token` verbs and relied on their output, but no requirement said what they produce. Two implementing agents would have chosen different key file names, a different default directory, a different issuer and a different token lifetime, all of them user-observable and all of them load-bearing for authentication to work at all.
+S1 SC-001 named the `fsa keys` and `fsa token` verbs and relied on their output, but no requirement said what they produce. Two implementing agents would have chosen different key file names, a different default directory, a different issuer and a different token lifetime, all of them user-observable and all of them load-bearing for authentication to work at all.
 
 *Closed* by adding **S1 FR-044**, which fixes `.keys` as the default directory, `jwt.key` and `jwt.pub` as the file names, `web-a2a` as the issuer, `email` as the claim and 3600 seconds as the TTL, each cited at `keys.rs:22-32`, together with the observation that these are exactly the `auth.jwt` defaults so a fresh keypair works against a default config. Three tests added: E2E-115, E2E-116, E2E-117.
 

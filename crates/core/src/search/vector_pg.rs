@@ -314,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn live_stats_zero_on_empty_volume() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_stats0", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_stats0", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -325,7 +325,7 @@ mod tests {
     #[tokio::test]
     async fn live_stats_counts_chunks_after_index() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_stats2", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_stats2", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -338,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn live_index_and_query() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_query", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_query", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -355,7 +355,7 @@ mod tests {
     #[tokio::test]
     async fn live_delete_removes_chunks() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_del", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_del", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -369,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn live_idempotent_reindex() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_idem", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_idem", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -384,7 +384,7 @@ mod tests {
     async fn live_volume_isolation() {
         let base = spawn_fake_embedding_server(3).await;
         let ep = format!("{base}/v1/embeddings");
-        let Some(b) = live_backend("mcpfs_vecpg_iso", 3, &ep).await else { return };
+        let Some(b) = live_backend("fsa_vecpg_iso", 3, &ep).await else { return };
         b.index_path("vol_a", "/shared.md", "content in a", 200, 0).await.unwrap();
         b.index_path("vol_b", "/shared.md", "content in b", 200, 0).await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().vector_chunks, 1);
@@ -397,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn live_delete_all_removes_every_chunk_of_the_volume() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_delall", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_delall", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -416,7 +416,7 @@ mod tests {
     async fn live_delete_all_is_scoped_to_one_volume() {
         let base = spawn_fake_embedding_server(3).await;
         let Some(b) =
-            live_backend("mcpfs_vecpg_delall_iso", 3, &format!("{base}/v1/embeddings")).await
+            live_backend("fsa_vecpg_delall_iso", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -431,7 +431,7 @@ mod tests {
     async fn live_delete_all_on_an_empty_volume_is_zero() {
         let base = spawn_fake_embedding_server(3).await;
         let Some(b) =
-            live_backend("mcpfs_vecpg_delall_empty", 3, &format!("{base}/v1/embeddings")).await
+            live_backend("fsa_vecpg_delall_empty", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };
@@ -441,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn live_query_bm25_returns_not_supported() {
         let base = spawn_fake_embedding_server(3).await;
-        let Some(b) = live_backend("mcpfs_vecpg_norag", 3, &format!("{base}/v1/embeddings")).await
+        let Some(b) = live_backend("fsa_vecpg_norag", 3, &format!("{base}/v1/embeddings")).await
         else {
             return;
         };

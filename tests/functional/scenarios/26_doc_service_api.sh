@@ -29,7 +29,7 @@ FAKE_PID=""
 python3 scripts/doc_service_fake.py \
   --port "$FAKE_PORT" \
   --auth-header X-Convert-Key \
-  --auth-token "$FAKE_TOKEN" >/tmp/mcp-fs-doc-fake.log 2>&1 &
+  --auth-token "$FAKE_TOKEN" >/tmp/fsa-doc-fake.log 2>&1 &
 FAKE_PID=$!
 for _ in $(seq 1 50); do
   curl -fsS -m 2 "http://127.0.0.1:$FAKE_PORT/" >/dev/null 2>&1 && break
@@ -71,7 +71,7 @@ OUT=$(ds_mcp fs.list_dir "{\"mount_id\":\"$DS_PROJ\",\"path\":\"/\"}")
 assert_contains "source et compagnon listés" "$OUT" "sample.md"
 
 OUT=$(ds_mcp fs.read "{\"mount_id\":\"$DS_PROJ\",\"path\":\"/sample.md\",\"line_numbered\":false}")
-assert_contains "markdown non vide" "$OUT" "hello mcpfs"
+assert_contains "markdown non vide" "$OUT" "hello fsa"
 
 # ── le token est bien exigé : un mauvais token doit faire échouer la conversion,
 #    sans perdre le fichier déjà stocké ─────────────────────────────────────────

@@ -516,3 +516,9 @@ fn provider_api_timeout_is_configured_and_the_client_is_shared() {
     let b = shared_client(&cfg).unwrap();
     assert!(Arc::ptr_eq(&a, &b), "the provider client must be built once and shared");
 }
+
+/// DT-004 (SPEC-0099): the `User-Agent` of the git provider calls.
+#[test]
+fn dt_0099_004_user_agent_is_fsa() {
+    assert_eq!(super::USER_AGENT, concat!("fsa/", env!("CARGO_PKG_VERSION")));
+}

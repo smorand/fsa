@@ -39,7 +39,7 @@ would need a key mapping in the local backend, and the S3 backend is unaffected.
 | `state/git/{project_id}.db` | `git_objects(volume_id + hash PK, type, size)`, `git_refs(volume_id + name PK, target, symbolic)`, `git_remotes(volume_id + name PK, url)` |
 | `state/git-repos/{project_id}/` | bare libgit2 directory (HEAD, config, hooks) plus a rebuildable object cache |
 | blob bucket, key `git:{sha}` | the objects themselves, source of truth |
-| `state/oauth.db` | encrypted OAuth tokens, only when `MCPFS_TOKEN_KEY` is set |
+| `state/oauth.db` | encrypted OAuth tokens, only when `FSA_TOKEN_KEY` is set |
 
 The index exists because the blob store cannot be enumerated cheaply: it answers
 "which objects exist", "what type and size", and short sha prefix lookups. Refs
@@ -127,7 +127,7 @@ Auth gate (`git/http/mod.rs::gate`), in order:
 1. Resolve the bearer. `Basic` auth is accepted with the **token as the
    password** (any username), which is how a `git` CLI authenticates: `git clone
    https://x:$TOKEN@host/git/{mount_id}/`. A 401 carries
-   `WWW-Authenticate: Bearer realm="mcp-fs"`; note the CLI only prompts for
+   `WWW-Authenticate: Bearer realm="fsa"`; note the CLI only prompts for
    credentials on a `Basic` challenge, so anonymous CLI use needs
    `git.anonymous_read` or an explicit credential helper.
 2. No identity is allowed only for a **read** (`info/refs?service=git-upload-pack`
@@ -140,9 +140,9 @@ Auth gate (`git/http/mod.rs::gate`), in order:
    body limit layer and by an explicit check.
 
 Capabilities are advertised verbatim:
-`multi_ack_detailed side-band-64k ofs-delta agent=mcp-fs/0.1.0` for
+`multi_ack_detailed side-band-64k ofs-delta agent=fsa/0.1.0` for
 upload-pack (no plain `multi_ack`: SPEC-0069), `report-status delete-refs side-band-64k quiet atomic ofs-delta
-agent=mcp-fs/0.1.0` for receive-pack.
+agent=fsa/0.1.0` for receive-pack.
 
 ### Negotiation (SPEC-0067, 2026-10-31)
 
@@ -638,7 +638,7 @@ held in a field, never serialized, never logged. `DeviceCode`, `TokenPoll` and
 Tokens live in `OAuthTokenStore`, keyed `"{person}:{host}"` lowercased (see
 [Token identity is per `(person, host)`](#token-identity-is-per-person-host)
 above), and belong to a person rather than to a mount. Persistence is **opt in
-through `MCPFS_TOKEN_KEY`** (a base64 key that must decode to exactly 32
+through `FSA_TOKEN_KEY`** (a base64 key that must decode to exactly 32
 bytes; generate with `openssl rand -base64 32`). With it set, `state/oauth.db`
 holds one row per `(person, host)` with the token encrypted AES-256-GCM as
 `nonce(12) || tag(16) || ciphertext`; sessions load at startup and every mutation
@@ -657,7 +657,7 @@ git:
   anonymous_read: false   # allow unauthenticated clone and fetch
   max_pack_size_mb: 512   # enforced on push bodies (413)
   github_client_id: ""
-  github_client_secret_env: MCPFS_GITHUB_CLIENT_SECRET
+  github_client_secret_env: FSA_GITHUB_CLIENT_SECRET
   gitlab_client_id: ""
   gitlab_client_secret_env: GITLAB_CLIENT_SECRET
   gitlab_instance_url: https://gitlab.com

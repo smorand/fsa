@@ -671,7 +671,7 @@ mod tests {
     async fn fixture() -> Fix {
         let dir = tempfile::tempdir().unwrap();
         let meta = Arc::new(RelationalMetaStore::in_memory("proj").await.unwrap());
-        let blob = Arc::new(LocalBlobStore::new(dir.path(), "mcpfs-test"));
+        let blob = Arc::new(LocalBlobStore::new(dir.path(), "fsa-test"));
         let client = VolumeClient::new("proj", meta.clone(), blob).with_trash_store(meta.clone());
         let admin = RelationalAdminStore::in_memory().await.unwrap();
         admin.create_project("proj", "owner@t.c").await.unwrap();
@@ -1174,7 +1174,7 @@ mod tests {
             pass: Arc::new(std::sync::atomic::AtomicUsize::new(pass)),
         });
         let meta = Arc::new(RelationalMetaStore::open(db, "proj").await.unwrap());
-        let blob = Arc::new(LocalBlobStore::new(dir.path(), "mcpfs-test"));
+        let blob = Arc::new(LocalBlobStore::new(dir.path(), "fsa-test"));
         let client = VolumeClient::new("proj", meta.clone(), blob);
         (dir, meta, client, armed)
     }

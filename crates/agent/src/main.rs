@@ -1,4 +1,4 @@
-//! An interactive CLI agent driving the mcp-fs tools through an LLM.
+//! An interactive CLI agent driving the fsa tools through an LLM.
 //!
 //! It is a client, not part of the server: it speaks MCP over HTTP to whatever endpoint
 //! the config names, so it exercises the real wire protocol the way any other client
@@ -22,9 +22,12 @@ use spinner::{Spinner, stop_if_running};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-/// Interactive CLI agent with the mcp-fs tools.
+/// The about text of the command line.
+const ABOUT: &str = "Interactive CLI agent with fsa tools";
+
+/// Interactive CLI agent with the fsa tools.
 #[derive(Parser)]
-#[command(name = "agent", version, about = "Interactive CLI agent with mcp-fs tools")]
+#[command(name = "agent", version, about = ABOUT)]
 struct Cli {
     /// Config file. Defaults to $AGENT_CONFIG, then config/agent_test.yaml.
     #[arg(short, long)]
@@ -430,7 +433,7 @@ fn resolve_token(cfg: &AgentConfig, user: Option<&str>) -> Result<String> {
     let file = dir.join(user);
     if !file.exists() {
         bail!(
-            "token file not found: {}\n  create it with: mcp-fs token {user}@example.com --key .keys/jwt.key > {}",
+            "token file not found: {}\n  create it with: fsa token {user}@example.com --key .keys/jwt.key > {}",
             file.display(),
             file.display()
         );
@@ -525,6 +528,14 @@ fn list_sessions(history_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DT-004 (SPEC-0099): the name this module sends to other systems.
+    #[test]
+    fn dt_0099_004_about_text_names_fsa() {
+        use clap::CommandFactory;
+        let about = Cli::command().get_about().map(|a| a.to_string()).unwrap_or_default();
+        assert_eq!(about, "Interactive CLI agent with fsa tools");
+    }
 
     #[test]
     fn rows_consumed_counts_newlines() {
@@ -624,7 +635,7 @@ mod tests {
         cfg.mcp.tokens_dir = d.path().display().to_string();
         let e = resolve_token(&cfg, Some("bob")).unwrap_err().to_string();
         assert!(e.contains("token file not found"), "got {e}");
-        assert!(e.contains("mcp-fs token"), "the message must show the fix: {e}");
+        assert!(e.contains("fsa token"), "the message must show the fix: {e}");
     }
 
     #[test]
