@@ -19,3 +19,4 @@ Vectors must be reproducible and replaceable when a model changes, which the cur
 ## Notes
 - Depends on BL-0169 and BL-0170.
 - The recalculation is a long running job: start, status, cancel.
+- Vectors are not file metadata: they live in the search index. Chunks (BL-0168) are the metadata they are computed from.

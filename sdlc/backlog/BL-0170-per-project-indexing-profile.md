@@ -19,3 +19,6 @@ The embedding model is one server wide setting today, and a vector from one mode
 ## Notes
 - Depends on BL-0164 and BL-0168.
 - A different dimension per project means the vector storage cannot assume one column width; the design decides.
+- Two separate settings, text embedding model and image embedding model, even when both name the same model.
+- Models reachable on 2026-11-20 at `localhost:9010` (OpenAI compatible, `GET /v1/models`): `qwen3-embedding-0.6b` and `qwen3-vl-embedding-2b` (text and image).
+- Chunk sets of BL-0168 are chosen here: which strategy and parameters a project builds by default.
