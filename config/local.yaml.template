@@ -73,6 +73,11 @@ extract:
 #     response_field: ""           # empty = the response body IS the markdown
 #     timeout_secs: 900
 
+# Search (SPEC-0100). settle_delay_seconds: whole seconds, 0 or more, a file must stay
+# unchanged before its derived data is rebuilt. 30 when absent. Checked even when search is off.
+# search:
+#   settle_delay_seconds: 30
+
 # Web tools (DuckDuckGo search, web.fetch, web.download). Off by default.
 # The two lists limit the sites web.fetch and web.download can reach. An entry is a host name,
 # a *.host name, an IP address or a range (169.254.0.0/16 covers the cloud metadata address).

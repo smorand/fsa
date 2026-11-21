@@ -89,12 +89,13 @@ documented write returns). A null companion or a failed conversion indexes
 nothing. A documented upload indexes BOTH the source, when it is text, and the
 companion.
 
-The work is fire and forget (`search/indexer.rs`): the write returns as soon as the
-bytes are committed, and the index call runs on a detached task whose failures are a
-WARN log, never an error to the caller. **Trade-off**: an embedding round trip is
-50 to 300 ms, so a caller that writes and immediately queries can miss its own write.
+The work never sits on the write path (`search/indexer.rs`): the write returns as soon
+as the bytes are committed. A write, edit, patch or upload goes through the rebuild
+scheduler (see "Rebuild scheduler" below) and is searchable once the file has been quiet
+for `search.settle_delay_seconds` (default 30) and its rebuild ended. The companion, a
+move and a copy still index at once on a detached task whose failures are a WARN log.
 There is no read-your-write guarantee on the index. A caller that needs one must poll
-`search.status` or call `search.index` synchronously.
+`search.status` or `fs.list_derived_jobs`, or call `search.index` synchronously.
 
 #### Move and copy
 
@@ -276,4 +277,56 @@ one case.
 `Option<&Arc<dyn SearchBackend>>`; the background loop (`app.rs`) and the CLI `purge`
 verb (`cli.rs`, same backend the grace sweep already built) pass the server's
 configured backend, `None` when search is disabled.
+
+
+## Guarded index update (SPEC-0100, US-0264)
+
+`SearchBackend::index_path_checked(..., still_current)` is a provided method (the default
+ignores the guard and calls `index_path`); the four engines and `CombinedBackend`
+override it, and `index_path` is now the "always current" call of it. The chunking and
+the embedding run first, then `still_current` (a plain synchronous closure) runs right
+before the commit: false answers `Ok(None)` and stores nothing, an error before the
+commit stores nothing either, so the previous entries of the path stay. Tantivy checks
+under its `write_lock` before the single delete plus add commit; PostgreSQL BM25,
+pgvector and sqlite-vec check before the delete, then run delete plus inserts in one
+transaction (US-0265, 2026-11-21): a failed insert drops the transaction, so a reader sees
+all the old rows or all the new ones. Embeddings are computed before it opens.
+`CombinedBackend` updates the vector side first (the embedding can fail), BM25 second.
+
+## Rebuild scheduler (SPEC-0100, US-0268, 2026-11-21)
+
+`search/derived/scheduler.rs`. `app.rs` wraps the engine in `search::ScheduledBackend`
+(DEC-014), which delegates every engine call and answers `scheduler()`; the hooks
+`after_write`, `after_write_reread` (so `after_patch` too) call `Scheduler::schedule`
+when it is `Some`, else keep the old immediate detached index (only tests that build an
+`AppState` by hand). `after_companion`, `search.index`, `search.status`, move and copy
+are unchanged (DEC-015). The hook still checks the project's mode first, so a project
+with mode `none` schedules nothing.
+
+- One `tokio::sync::Mutex` over a map `(project, path, kind)` to `{waiting, running}`, one
+  dispatcher task woken by a `Notify`. Never held while a rebuild runs.
+- A change: an existing waiting job gets `due = now + delay` (no row write, same job id);
+  else a new row `waiting` is inserted. A running job of the key is marked stale.
+- Delay 0: the waiting entry is `hidden` (not listed, starts at once, DEC-007).
+- The dispatcher starts every due job whose key has nothing running (row `running`) and
+  spawns the rebuild, which reads the file then (DEC-021) and calls
+  `index_path_checked` with the guard `!stale`. Outcome: refused or stale `superseded`,
+  error `failed` with DEC-019's reason (`embedding service unreachable` for the two
+  `embed` failure texts, else `<ERR_CODE>: <message>`), else `done`. Not text or gone is
+  `done`. `JobStore::finish` deletes the earlier finished row of the key (DEC-006). No
+  retry on its own.
+- Job times follow the tokio clock from a wall clock origin taken at start, so a paused
+  test clock moves them too.
+- `fs.list_derived_jobs` reads waiting and running jobs from the scheduler's memory
+  (`seconds_left` rounded up) and finished jobs from the table.
+- `fs.recalculate` (US-0273) calls `Scheduler::recalculate` once `tools::derived::recalculate`
+  has passed the refusal order of design 5.2. The key's waiting job is dropped and its row
+  deleted (no record). Nothing running: a new `manual` row is written `running` and the
+  rebuild is spawned in the call. A running job: it is marked stale (ends `superseded`), and
+  the new job is a listed waiting entry with `due = now` (`seconds_left` 0, not `hidden`,
+  DEC-007), started by the dispatcher when the key frees. At most one running job per key.
+- Shutdown aborts the dispatcher; rows stay. Boot recovery is US-0270.
+- Tests: `search/derived_e2e.rs` (`e2e_0100_`), paused clock, `Stub` engine (in process
+  embedding stand in with a delay queue, a down switch and start and end instants;
+  the default build has no embedding client).
 

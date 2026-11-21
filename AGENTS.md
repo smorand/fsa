@@ -2,7 +2,7 @@
 
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
-multi-project filesystem** (116 tools: 45 `fs.*`, 17 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
+multi-project filesystem** (118 tools: 47 `fs.*`, 17 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
 + 4 `search.*` when search enabled),
 a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger UI at
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
@@ -49,6 +49,13 @@ address a name resolves to (one lookup, the connection pinned to the checked add
 storage charge; both empty keeps the original path. Behind an environment proxy the proxy opens the
 connection (BL-0157). Code in `tools/web_access.rs`, details in `.agent_docs/config.md`.
 
+Search entries are rebuilt after the file settles (SPEC-0100): the write hooks hand the path to
+`search::derived::Scheduler` (`search/derived/`), which runs one rebuild once the file has been
+quiet for `search.settle_delay_seconds` (default 30, `0` keeps the immediate timing), discards a
+result whose file changed meanwhile, and records every job in the admin table `derived_job`.
+`fs.list_derived_jobs` lists the jobs, `fs.recalculate` rebuilds one file now; engine
+`tools/derived.rs`, MCP only. Details in `.agent_docs/search.md`, "Rebuild scheduler".
+
 ## Key commands
 ```
 make build | make test | make run       same as ./build.sh / ./test.sh / ./run.sh
@@ -69,6 +76,7 @@ cargo test -p fsa-core --lib --features rar -- e2e_0080_  the `.rar` extraction 
 cargo test -p fsa-core --lib --features rar -- e2e_0087_ api::dataplane tool_contract   the truncated RAR tests (SPEC-0087)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0089_ api::dataplane tool_contract --test-threads=1   the PDF and converter bound tests (SPEC-0089)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
+cargo test -p fsa-core --lib -- e2e_0100_   the settle delay rebuild tests (SPEC-0100, paused clock, search/derived_e2e.rs)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0094_ --test-threads=1   the damaged PDF page tests (SPEC-0094; 21 tests in tools/damage_e2e.rs, E2E-009 waits 1100 ms of real time)
 MCPFS_REWRITE_TOOL_CONTRACT=1 cargo test -p fsa-core --lib tool_contract_golden_is_current
                                       regenerate the frozen tool contract, then review the diff
@@ -100,7 +108,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   wrapping `mcp::server::McpServer`, `LocalSessionManager` + `legacy_session_mode: true` so
   `initialize` is mandatory; see `.agent_docs/architecture.md` for the exact wire shapes), `/health`.
 - `mcp/` : `server.rs` only — `McpServer`, one `#[tool]` method per entry in `TOOL_CONTRACT.txt`
-  (116 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
+  (118 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
   calls, never reimplementing an operation. The hand-rolled JSON-RPC/SSE framing layer this module
   used to own (`ToolRegistry`/`ToolSchema`/`Args`/`ToolHandler`) is gone (SPEC-0013); what remains
   of that machinery lives at `tools::registry_support`, kept only because `Args`/`ToolCtx` are the
@@ -158,7 +166,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   (the real logic, called directly by `mcp::server::McpServer`'s `#[tool]` methods and by the
   REST plane); `register(&mut ToolRegistry)` survives only as `#[cfg(test)]`-gated glue for the
   shared test harness, except the five optional families (`web`/`context7`/`sqlite`/`db`/`doc`,
-  off by default, not part of the 116-tool contract), whose `register()`/`catalog()` are genuine
+  off by default, not part of the 118-tool contract), whose `register()`/`catalog()` are genuine
   production code backing `/api/swagger.json`. `catalog.rs` holds the transport-agnostic
   `ToolCatalogEntry` shape; `all.rs` has the now-test-only `register_all`. `trash.rs` holds
   `fs.trash_list`/`fs.trash_restore` (SPEC-0011): the backfill of untracked trash nodes into
@@ -227,7 +235,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   `mcp.rs` (stateless JSON-RPC, fuzzy tool name resolution), `llm.rs` (OpenAI compatible
   streaming with tool calling), `input.rs` (wrap aware line editor), `ui.rs` (markdown to
   ANSI), `spinner.rs`, `session.rs`. Config: `config/agent_test.yaml`.
-- `TOOL_CONTRACT.txt` : the 116 tool schemas and return shapes, human readable. **This is
+- `TOOL_CONTRACT.txt` : the 118 tool schemas and return shapes, human readable. **This is
   the authoritative contract.**
 - `tool-contract-golden.json` : the same contract, machine checked. Three tests compare
   every name, description and `inputSchema` against it, serialized, so a reordered schema
@@ -302,7 +310,7 @@ The backlog is the `backlog/` directory: one `BL-NNNN_slug.md` file per item.
 ## Documentation index
 - `.agent_docs/architecture.md` : storage model, project usage and quota admission, document
   artifact store, request lifecycle, safety, error logging.
-- `.agent_docs/tools.md` : the 116 tool reference (families, parameters, authorization).
+- `.agent_docs/tools.md` : the 118 tool reference (families, parameters, authorization).
 - `.agent_docs/api.md` : the `/api/fs` REST plane and the OpenAPI single source of truth.
 - `.agent_docs/git.md` : git objects in the blob store, HTTP smart protocol, the
   `git.hosts` host map, OAuth/PAT tokens (per person+host), the remote pipeline

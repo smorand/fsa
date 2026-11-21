@@ -27,9 +27,9 @@ use std::sync::Arc;
 /// its wildcard escaping is the one that keeps `a_b` from matching `axb`); the
 /// exact substring equality decides, on both engines (DEC-003, DEC-004).
 #[derive(Clone)]
-struct SubtreeMatch {
-    like: String,
-    prefix: String,
+pub(crate) struct SubtreeMatch {
+    pub(crate) like: String,
+    pub(crate) prefix: String,
     prefix_len: usize,
 }
 
@@ -42,7 +42,7 @@ fn descendant_like(dialect: Dialect, path: &str) -> String {
 }
 
 impl SubtreeMatch {
-    fn new(dialect: Dialect, path: &str) -> Self {
+    pub(crate) fn new(dialect: Dialect, path: &str) -> Self {
         let trimmed = path.trim_end_matches('/');
         let prefix = format!("{trimmed}/");
         let like = descendant_like(dialect, path);
@@ -51,7 +51,7 @@ impl SubtreeMatch {
 
     /// `(col LIKE ?L ESCAPE '\' AND substr(col, 1, n) = ?P)`; the length is an
     /// integer literal, never user text.
-    fn clause(&self, col: &str, like_ph: usize, prefix_ph: usize) -> String {
+    pub(crate) fn clause(&self, col: &str, like_ph: usize, prefix_ph: usize) -> String {
         let n = self.prefix_len;
         format!("({col} LIKE ?{like_ph} ESCAPE '\\' AND substr({col}, 1, {n}) = ?{prefix_ph})")
     }

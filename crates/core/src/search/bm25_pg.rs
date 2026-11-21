@@ -61,14 +61,43 @@ impl SearchBackend for PostgresBm25Backend {
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Result<usize> {
+        // Always current: the guard accepts, so the update is never refused.
+        let stored = self
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
+            .await?;
+        Ok(stored.unwrap_or(0))
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
         let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
         let n = chunks.len();
+
+        // Before the delete, so a refusal leaves the previous rows in place.
+        if !still_current() {
+            return Ok(None);
+        }
+
+        // One transaction: a reader sees all the old rows or all the new ones, and
+        // an error returns before commit, so the drop rolls the delete back.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ToolError::internal(format!("bm25_pg: begin: {e}")))?;
 
         // Idempotent: remove any existing rows for this (volume, path) pair.
         sqlx::query(AssertSqlSafe("DELETE FROM search_fts WHERE volume_id = $1 AND path = $2"))
             .bind(volume_id)
             .bind(path)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| ToolError::internal(format!("bm25_pg: delete: {e}")))?;
 
@@ -81,12 +110,14 @@ impl SearchBackend for PostgresBm25Backend {
             .bind(path)
             .bind(idx as i32)
             .bind(chunk_text.as_str())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| ToolError::internal(format!("bm25_pg: insert chunk {idx}: {e}")))?;
         }
 
-        Ok(n)
+        tx.commit().await.map_err(|e| ToolError::internal(format!("bm25_pg: commit: {e}")))?;
+
+        Ok(Some(n))
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -333,5 +364,23 @@ mod tests {
         let Some(b) = live_backend("fsa_bm25pg_norag").await else { return };
         let err = b.query_vector("v1", "anything", 10).await.unwrap_err();
         assert_eq!(err.code, code::NOT_SUPPORTED);
+    }
+    #[tokio::test]
+    async fn one_transaction_bm25_pg_rolls_back_a_half_replacement() {
+        let Some(b) = live_backend("fsa_bm25pg_onetx").await else { return };
+        let vol = "onetx_bm25";
+        b.delete_all(vol).await.unwrap();
+        // 3 chunks of 10 chars, no space so the cut points are fixed.
+        assert_eq!(b.index_path(vol, "/a.md", &"old".repeat(10), 10, 0).await.unwrap(), 3);
+        assert_eq!(b.stats(vol).await.unwrap().bm25_docs, 3);
+
+        // A NUL byte in the last chunk makes the third insert fail.
+        let bad = format!("{}{}\0nnnnnnnn", "n".repeat(10), "n".repeat(10));
+        assert!(b.index_path(vol, "/a.md", &bad, 10, 0).await.is_err());
+
+        assert_eq!(b.stats(vol).await.unwrap().bm25_docs, 3, "old rows kept");
+        let r = b.query_bm25(vol, "oldoldoldo", 10).await.unwrap();
+        assert!(!r.is_empty(), "old rows still returned");
+        assert_eq!(r[0].path, "/a.md");
     }
 }

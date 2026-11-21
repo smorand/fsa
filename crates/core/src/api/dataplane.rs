@@ -592,7 +592,8 @@ async fn move_path(
             a.bool_or("overwrite", false),
         )
         .await?;
-        crate::search::indexer::after_move(&r.state, &r.mount, &indexed, &dst, &r.client).await;
+        crate::search::indexer::after_move(&r.state, &r.mount, &src, &indexed, &dst, &r.client)
+            .await;
         Ok(out)
     })
     .await

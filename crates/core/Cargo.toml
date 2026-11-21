@@ -121,6 +121,9 @@ zerocopy = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Test only: `tokio::time::pause` for the SPEC-0100 settle delay tests, which
+# step a virtual clock instead of sleeping. A feature of a crate already here.
+tokio = { workspace = true, features = ["test-util"] }
 # Test only: the https mode of the git test transport (SPEC-0078).
 tokio-rustls = "0.26"
 reqwest = { workspace = true }

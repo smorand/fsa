@@ -105,11 +105,34 @@ impl SearchBackend for TantivyBm25Backend {
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Result<usize> {
+        // Always current: the guard accepts, so the update is never refused.
+        let stored = self
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
+            .await?;
+        Ok(stored.unwrap_or(0))
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
         let backend = self.get_or_open_volume(volume_id)?;
         let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
         let n = chunks.len();
         let path_owned = path.to_string();
         let _writing = backend.write_lock.lock().await;
+
+        // Evaluated under the writer lock and before anything is staged, so a refusal
+        // leaves the index exactly as it was; the delete and the adds below land in
+        // one commit, so the previous entries are replaced in one step.
+        if !still_current() {
+            return Ok(None);
+        }
 
         tokio::task::spawn_blocking({
             let backend = backend.clone();
@@ -146,7 +169,7 @@ impl SearchBackend for TantivyBm25Backend {
                 writer
                     .commit()
                     .map_err(|e| ToolError::internal(format!("tantivy: commit: {e}")))?;
-                Ok(n)
+                Ok(Some(n))
             }
         })
         .await

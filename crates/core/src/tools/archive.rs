@@ -2517,8 +2517,9 @@ pub(crate) mod tests {
         assert!(names.iter().any(|n| n == "fs.extract_archive"));
         // SPEC-0019 adds fs.list_tables, 39 to 40, then fs.get_table, 41, then
         // fs.list_images and fs.get_image, 43, then fs.get_document_view, 44;
-        // SPEC-0045 adds fs.diff_files, 45.
-        assert_eq!(names.iter().filter(|n| n.starts_with("fs.")).count(), 45);
+        // SPEC-0045 adds fs.diff_files, 45; SPEC-0100 adds fs.list_derived_jobs,
+        // 46, then fs.recalculate, 47.
+        assert_eq!(names.iter().filter(|n| n.starts_with("fs.")).count(), 47);
     }
 
     // ── converge round 1 (US-0013..US-0015) ─────────────────────────────────

@@ -467,12 +467,12 @@ mod tests {
             (
                 "storage::admin",
                 Dialect::Sqlite,
-                "deeda260cae9c31eede46a62e6f353ddff5cb1384f070061831175217e3f3048",
+                "ae4a79d44a8dee3c698a328a00e629734464874125ea80192ff94703669937d4",
             ),
             (
                 "storage::admin",
                 Dialect::Postgres,
-                "973ea4d49ab1c602220a39606b8dedd1f5018a8593ed2f68915903dafdc338d2",
+                "19cd06e760944dec72efaa9a85f0e3484537d56c7020dd14c8f9e5c0a56a6373",
             ),
             (
                 "git::db",

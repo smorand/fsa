@@ -404,6 +404,16 @@ families on; while off, the tools are not offered and no remote request is made.
   `purge` refuses a bad entry like `serve` before opening any store; a purge with valid lists runs
   as before. `migrate` checks the source first, then the destination.
 
+## `search.settle_delay_seconds` (SPEC-0100)
+
+Whole seconds, 0 or more, that a file must stay unchanged before its derived data is
+rebuilt. Absent or empty means 30; `0` is valid. A YAML integer, float or string is read as
+text and parsed in `validate()` before the `search.enabled` early return, so it is checked
+even with search off. Anything else (`-5`, `2.5`, `abc`) stops the boot with
+`ERR_INVALID_ARGUMENT: settle delay must be a whole number of seconds, 0 or more`.
+Read only through `SearchConfig::settle_delay()`. No CLI flag. `fs.recalculate` ignores it:
+a rebuild by hand starts at once (or as soon as the running one ends).
+
 ## Derived paths
 
 Under the SQLite backend, only `infra.meta.dir`, `infra.blob.dir` and

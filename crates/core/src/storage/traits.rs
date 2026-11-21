@@ -295,10 +295,28 @@ pub trait BlobBackend: Send + Sync {
     }
 }
 
+/// What runs after a project is soft deleted, restored or removed: the project id
+/// in, a future out (SPEC-0100 DEC-016).
+pub type ProjectGoneHook = std::sync::Arc<
+    dyn Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+
 /// ACL registry of projects and their members.
 #[async_trait]
 pub trait AdminBackend: Send + Sync {
     async fn connect(&self) -> Result<()>;
+
+    /// The derived data job rows (SPEC-0100), which live in this store's
+    /// database so a project delete cascades to them (DEC-004). `None` for a
+    /// registry without one, whose jobs list then reads empty.
+    fn derived_jobs(&self) -> Option<crate::search::derived::JobStore> {
+        None
+    }
+    /// Registers what runs after a project is soft deleted, restored or removed,
+    /// so the rebuild scheduler forgets its jobs (SPEC-0100 DEC-016) whichever
+    /// caller did it: tool, purge sweep or CLI. A later call replaces the hook.
+    /// A store that cannot hold one ignores it.
+    fn set_project_gone_hook(&self, _hook: ProjectGoneHook) {}
     async fn create_project(&self, project_id: &str, owner: &str) -> Result<Project>;
 
     /// Same as [`AdminBackend::create_project`], plus applying `config` as the

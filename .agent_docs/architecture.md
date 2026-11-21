@@ -265,6 +265,17 @@ Never add a store wipe to one caller only: add it to `remove_project`. Soft dele
 artifacts and index unchanged. The `purge` CLI verb builds its search backend with
 `search::build_backend` for the grace sweep. Tests: `tools/project_removal_e2e.rs`.
 
+## Derived data rebuilds (SPEC-0100, 2026-11-21)
+
+A write does not index its file at once any more: the write hooks of `search/indexer.rs`
+hand the path to `search::derived::Scheduler`, reached through the `ScheduledBackend`
+decorator `app.rs` builds around the search engine. The scheduler keeps waiting and
+running jobs in memory (one async mutex, one dispatcher task) and mirrors each job in the
+admin table `derived_job`; a rebuild starts when the file has been quiet for
+`search.settle_delay_seconds` and stores its result only if the file did not change
+meanwhile (guarded update). `fs.recalculate` asks a rebuild now, `fs.list_derived_jobs`
+lists the jobs; both MCP only (DEC-012). Details: `.agent_docs/search.md`, "Rebuild scheduler".
+
 ## Request lifecycle
 
 | Step | Where | Failure |

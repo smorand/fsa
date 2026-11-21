@@ -107,7 +107,8 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
                 a.bool_or("overwrite", false),
             )
             .await?;
-            crate::search::indexer::after_move(&ctx.state, &mount, &indexed, &dst, &client).await;
+            crate::search::indexer::after_move(&ctx.state, &mount, &src, &indexed, &dst, &client)
+                .await;
             Ok(out)
         }),
     );

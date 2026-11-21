@@ -208,6 +208,11 @@ fs.list_allowed_roots
   params: mount_id:string
   required: ['mount_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.list_derived_jobs
+  desc: List the rebuild jobs of derived data (search entries) of a project or of one file: waiting, running and the last finished one per file.
+  params: mount_id:string, path:string="", marker:string=""
+  required: ['mount_id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.list_dir
   desc: Flat directory listing with kinds and optional sizes.
   params: mount_id:string, path:string="/", include_hidden:boolean=false, sort_by:string="name", with_sizes:boolean=false
@@ -263,6 +268,11 @@ fs.read_section
   params: mount_id:string, path:string, anchor_line:integer, max_lines:integer=200
   required: ['mount_id', 'path', 'anchor_line']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.recalculate
+  desc: Rebuild the search entries of one file now, without waiting for the settle delay.
+  params: mount_id:string, path:string, kind:string
+  required: ['mount_id', 'path', 'kind']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 fs.search_replace
   desc: Replace a multi-line block (optional fuzzy match).
   params: mount_id:string, path:string, search_block:string, replace_block:string, fuzzy:boolean=false
@@ -722,6 +732,8 @@ fs.move: {"source": "/copy.txt", "destination": "/moved.txt"}
 fs.delete: {"path": "/moved.txt", "trashed": true, "trash_path": "/.mcp_trash/1785863086054__moved.txt"}
 fs.mkdir: {"path": "/src", "created": true}
 fs.list_allowed_roots: {"person": "admin@example.com", "roots": [{"mount_id": "parity-probe", "root": "/", "owner": "admin@example.com"}]}
+fs.list_derived_jobs: {"jobs": [{"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "waiting", "cause": "change", "created_at": "2026-11-20T10:01:10Z", "seconds_left": 12}, {"job_id": "<uuid>", "path": "/a.md", "kind": "search_index", "state": "failed", "cause": "change", "created_at": "2026-11-20T10:00:00Z", "ended_at": "2026-11-20T10:00:31Z", "reason": "embedding service unreachable"}]}
+fs.recalculate: {"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "running", "cause": "manual", "created_at": "2026-11-20T10:01:10Z"}
 fs.audit_log: {"entries": [{"timestamp": "<volatile>", "op": "edit", "path": "/a.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "write", "path": "/dup.txt", "detail": "11 bytes"}, {"timestamp": "<volatile>", "op": "edit", "path": "/dup.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "append", "path
 admin.list_projects: {"projects": [{"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none", "is_owner": true}]}
 admin.list_all_projects: {"projects": [{"project_id": "docling-scripts", "owner": "seb.morand@gmail.com", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "fsa", "owner": "user", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none"}]}

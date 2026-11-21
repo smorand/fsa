@@ -100,6 +100,22 @@ impl SearchBackend for SqliteVecBackend {
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Result<usize> {
+        // Always current: the guard accepts, so the update is never refused.
+        let stored = self
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
+            .await?;
+        Ok(stored.unwrap_or(0))
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
         let vc = self.get_or_open(volume_id)?;
         let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
         let n = chunks.len();
@@ -114,40 +130,46 @@ impl SearchBackend for SqliteVecBackend {
             embeddings.push(emb);
         }
 
+        // After the embeddings, before the delete: a refusal keeps the old rows.
+        if !still_current() {
+            return Ok(None);
+        }
+
         tokio::task::spawn_blocking(move || {
             let guard =
                 vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
 
+            // One transaction: an error returns before commit and the drop rolls
+            // the delete back, so the old chunks survive a half replacement.
+            let tx = guard
+                .conn
+                .unchecked_transaction()
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: begin: {e}")))?;
+
             // Idempotent: remove any existing rows for this path before re-inserting.
-            guard
-                .conn
-                .execute(
-                    "DELETE FROM search_vec WHERE rowid IN \
-                     (SELECT rowid FROM search_vec_meta WHERE volume_id=?1 AND path=?2)",
-                    params![vol, path_owned],
-                )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
-            guard
-                .conn
-                .execute(
-                    "DELETE FROM search_vec_meta WHERE volume_id=?1 AND path=?2",
-                    params![vol, path_owned],
-                )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
+            tx.execute(
+                "DELETE FROM search_vec WHERE rowid IN \
+                 (SELECT rowid FROM search_vec_meta WHERE volume_id=?1 AND path=?2)",
+                params![vol, path_owned],
+            )
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
+            tx.execute(
+                "DELETE FROM search_vec_meta WHERE volume_id=?1 AND path=?2",
+                params![vol, path_owned],
+            )
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
 
             for (idx, (chunk_text, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
                 // Insert metadata row first; its auto-increment rowid is used
                 // to link the vec0 table row.
-                guard
-                    .conn
-                    .execute(
-                        "INSERT INTO search_vec_meta (volume_id, path, chunk_idx, chunk_text) \
+                tx.execute(
+                    "INSERT INTO search_vec_meta (volume_id, path, chunk_idx, chunk_text) \
                          VALUES (?1, ?2, ?3, ?4)",
-                        params![vol, path_owned, idx as i64, chunk_text],
-                    )
-                    .map_err(|e| ToolError::internal(format!("sqlite-vec: insert meta: {e}")))?;
+                    params![vol, path_owned, idx as i64, chunk_text],
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert meta: {e}")))?;
 
-                let meta_rowid = guard.conn.last_insert_rowid();
+                let meta_rowid = tx.last_insert_rowid();
 
                 // Convert f32 slice to raw bytes for the vec0 MATCH interface.
                 //
@@ -160,15 +182,14 @@ impl SearchBackend for SqliteVecBackend {
                     )
                 };
 
-                guard
-                    .conn
-                    .execute(
-                        "INSERT INTO search_vec (rowid, embedding) VALUES (?1, ?2)",
-                        params![meta_rowid, bytes],
-                    )
-                    .map_err(|e| ToolError::internal(format!("sqlite-vec: insert vec: {e}")))?;
+                tx.execute(
+                    "INSERT INTO search_vec (rowid, embedding) VALUES (?1, ?2)",
+                    params![meta_rowid, bytes],
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert vec: {e}")))?;
             }
-            Ok(n)
+            tx.commit().map_err(|e| ToolError::internal(format!("sqlite-vec: commit: {e}")))?;
+            Ok(Some(n))
         })
         .await
         .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
@@ -519,5 +540,52 @@ mod tests {
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
         let err = b.query_bm25("vol1", "anything", 10).await.unwrap_err();
         assert_eq!(err.code, code::NOT_SUPPORTED);
+    }
+    /// Embedding stub that answers `dims` floats, except the call numbered
+    /// `short_call` (1 based, counted since the stub started) which answers 3
+    /// floats, a dimension the vec0 table refuses.
+    async fn spawn_short_on_call(dims: usize, short_call: usize) -> String {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let router = Router::new().route(
+            "/v1/embeddings",
+            post(move || {
+                let calls = calls.clone();
+                async move {
+                    let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let len = if n == short_call { 3 } else { dims };
+                    let vec: Vec<f32> = (0..len).map(|i| (i + 1) as f32).collect();
+                    Json(serde_json::json!({
+                        "data": [{"embedding": vec, "index": 0}],
+                        "model": "fake",
+                        "usage": {"prompt_tokens": 1, "total_tokens": 1}
+                    }))
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn one_transaction_sqlite_vec_rolls_back_a_half_replacement() {
+        register_extension();
+        // Calls 1 to 3 index "old"; calls 4 to 6 embed the new chunks and the
+        // sixth is short; call 7 is the query.
+        let base = spawn_short_on_call(4, 6).await;
+        let (b, _d) = backend(&format!("{base}/v1/embeddings"), 4);
+        let old = "old".repeat(10);
+        assert_eq!(b.index_path("vol1", "/a.md", &old, 10, 0).await.unwrap(), 3);
+        assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 3);
+
+        let new = "n".repeat(30);
+        let res = b.index_path("vol1", "/a.md", &new, 10, 0).await;
+        assert!(res.is_err(), "the short embedding must fail the replacement");
+
+        assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 3, "old chunks kept");
+        let r = b.query_vector("vol1", "old", 10).await.unwrap();
+        assert_eq!(r[0].path, "/a.md");
+        assert!(r.iter().all(|x| !x.chunk.contains('n')), "only old chunk text: {r:?}");
     }
 }

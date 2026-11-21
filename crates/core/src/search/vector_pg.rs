@@ -90,6 +90,22 @@ impl SearchBackend for PostgresVectorBackend {
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Result<usize> {
+        // Always current: the guard accepts, so the update is never refused.
+        let stored = self
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
+            .await?;
+        Ok(stored.unwrap_or(0))
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
         let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
         let n = chunks.len();
 
@@ -101,11 +117,24 @@ impl SearchBackend for PostgresVectorBackend {
             embeddings.push(vec_to_pg(&emb));
         }
 
+        // After the embeddings, before the delete: a refusal keeps the old rows.
+        if !still_current() {
+            return Ok(None);
+        }
+
+        // One transaction: a reader sees all the old rows or all the new ones, and
+        // an error returns before commit, so the drop rolls the delete back.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ToolError::internal(format!("vector_pg: begin: {e}")))?;
+
         // Idempotent: remove existing rows for this (volume, path) pair.
         sqlx::query(AssertSqlSafe("DELETE FROM search_chunks WHERE volume_id = $1 AND path = $2"))
             .bind(volume_id)
             .bind(path)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| ToolError::internal(format!("vector_pg: delete: {e}")))?;
 
@@ -122,12 +151,14 @@ impl SearchBackend for PostgresVectorBackend {
             .bind(idx as i32)
             .bind(chunk_text.as_str())
             .bind(vec_str.as_str())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| ToolError::internal(format!("vector_pg: insert chunk {idx}: {e}")))?;
         }
 
-        Ok(n)
+        tx.commit().await.map_err(|e| ToolError::internal(format!("vector_pg: commit: {e}")))?;
+
+        Ok(Some(n))
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -447,5 +478,26 @@ mod tests {
         };
         let err = b.query_bm25("v1", "anything", 10).await.unwrap_err();
         assert_eq!(err.code, code::NOT_SUPPORTED);
+    }
+    #[tokio::test]
+    async fn one_transaction_vector_pg_rolls_back_a_half_replacement() {
+        let base = spawn_fake_embedding_server(3).await;
+        let Some(b) = live_backend("fsa_vecpg_onetx", 3, &format!("{base}/v1/embeddings")).await
+        else {
+            return;
+        };
+        let vol = "onetx_vec";
+        b.delete_all(vol).await.unwrap();
+        assert_eq!(b.index_path(vol, "/a.md", &"old".repeat(10), 10, 0).await.unwrap(), 3);
+        assert_eq!(b.stats(vol).await.unwrap().vector_chunks, 3);
+
+        // A NUL byte in the last chunk makes the third insert fail.
+        let bad = format!("{}{}\0nnnnnnnn", "n".repeat(10), "n".repeat(10));
+        assert!(b.index_path(vol, "/a.md", &bad, 10, 0).await.is_err());
+
+        assert_eq!(b.stats(vol).await.unwrap().vector_chunks, 3, "old rows kept");
+        let r = b.query_vector(vol, "old", 10).await.unwrap();
+        assert!(!r.is_empty(), "old rows still returned");
+        assert!(r.iter().all(|x| !x.chunk.contains('n')), "only old chunk text: {r:?}");
     }
 }

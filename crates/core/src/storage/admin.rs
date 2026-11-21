@@ -8,7 +8,7 @@
 
 use crate::errors::{Result, ToolError};
 use crate::storage::rel::dialect::{Assign, ColumnType, Upsert};
-use crate::storage::rel::schema::{Column, ColumnMigration, ForeignKey, SchemaSet, Table};
+use crate::storage::rel::schema::{Column, ColumnMigration, ForeignKey, Index, SchemaSet, Table};
 use crate::storage::rel::{Query, RelationalDb, RowValues};
 use crate::storage::traits::{AdminBackend, IndexMode, Member, Project, PurgeConfig};
 use crate::util::{normalize_identity, now_iso};
@@ -72,8 +72,45 @@ pub fn schema() -> SchemaSet {
                 references_columns: vec!["id"],
                 on_delete_cascade: true,
             }),
+            // SPEC-0100 DEC-004: one row per rebuild of derived data. Global like
+            // `project`, so one scan recovers every project at boot, and a hard
+            // project delete takes its jobs through the cascade.
+            Table::new(
+                "derived_job",
+                vec![
+                    Column::required("job_id", ColumnType::Text),
+                    Column::required("project_id", ColumnType::Text),
+                    Column::required("path", ColumnType::Text),
+                    Column::required("kind", ColumnType::Text),
+                    Column::required("state", ColumnType::Text),
+                    Column::required("cause", ColumnType::Text),
+                    Column::required("hidden", ColumnType::BigInt).default("0"),
+                    Column::required("created_at", ColumnType::Text),
+                    Column::new("ended_at", ColumnType::Text),
+                    Column::new("reason", ColumnType::Text),
+                ],
+                vec!["job_id"],
+            )
+            .foreign_key(ForeignKey {
+                columns: vec!["project_id"],
+                references_table: "project",
+                references_columns: vec!["id"],
+                on_delete_cascade: true,
+            }),
         ],
-        Vec::new(),
+        vec![
+            Index {
+                name: "idx_derived_job_key",
+                table: "derived_job",
+                columns: vec!["project_id", "path", "kind"],
+            },
+            // Backs the keyset page of finished jobs (DEC-022).
+            Index {
+                name: "idx_derived_job_page",
+                table: "derived_job",
+                columns: vec!["project_id", "state", "ended_at"],
+            },
+        ],
     )
     // `project` shipped without this column, so a deployed database gains it here
     // rather than through the CREATE TABLE, which only runs on an empty database.
@@ -106,13 +143,24 @@ pub fn schema() -> SchemaSet {
 
 pub struct RelationalAdminStore {
     db: Arc<dyn RelationalDb>,
+    /// Set at boot by the composition root, read on every project removal.
+    gone: std::sync::Mutex<Option<crate::storage::traits::ProjectGoneHook>>,
 }
 
 impl RelationalAdminStore {
     /// The schema is applied by [`AdminBackend::connect`], which the composition
     /// root calls at startup, so constructing a store performs no IO.
     pub fn new(db: Arc<dyn RelationalDb>) -> Self {
-        Self { db }
+        Self { db, gone: std::sync::Mutex::new(None) }
+    }
+
+    /// Runs the registered hook, if any, once the project change is committed.
+    async fn project_gone(&self, project_id: &str) {
+        // Cloned out so the lock is never held across the await.
+        let hook = self.gone.lock().expect("project hook mutex").clone();
+        if let Some(hook) = hook {
+            hook(project_id.to_string()).await;
+        }
     }
 
     /// Connected in memory store, for tests.
@@ -207,6 +255,14 @@ impl AdminBackend for RelationalAdminStore {
         self.db.migrate(&schema()).await
     }
 
+    fn derived_jobs(&self) -> Option<crate::search::derived::JobStore> {
+        Some(crate::search::derived::JobStore::new(self.db.clone()))
+    }
+
+    fn set_project_gone_hook(&self, hook: crate::storage::traits::ProjectGoneHook) {
+        *self.gone.lock().expect("project hook mutex") = Some(hook);
+    }
+
     async fn create_project(&self, project_id: &str, owner: &str) -> Result<Project> {
         let mut tx = self.db.begin().await?;
         let project = Self::insert_project_tx(&mut tx, project_id, owner).await?;
@@ -244,6 +300,8 @@ impl AdminBackend for RelationalAdminStore {
     async fn delete_project(&self, project_id: &str) -> Result<()> {
         // Memberships cascade via the foreign key.
         self.db.execute(&Query::new("DELETE FROM project WHERE id=?1").bind(project_id)).await?;
+        // The rows cascade; the waiting and running jobs held in memory do not.
+        self.project_gone(project_id).await;
         Ok(())
     }
 
@@ -519,6 +577,10 @@ impl AdminBackend for RelationalAdminStore {
                 .bind(project_id),
             )
             .await?;
+        if affected > 0 {
+            // The project row stays, so no cascade fires (DEC-016).
+            self.project_gone(project_id).await;
+        }
         Ok(affected > 0)
     }
 
@@ -549,6 +611,8 @@ impl AdminBackend for RelationalAdminStore {
                 &Query::new("UPDATE project SET deleted_at = NULL WHERE id = ?1").bind(project_id),
             )
             .await?;
+        // A restored project lists no job from before its deletion (FR-NEW-019).
+        self.project_gone(project_id).await;
         Ok(())
     }
 }

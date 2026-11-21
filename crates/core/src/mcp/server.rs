@@ -1246,6 +1246,28 @@ pub struct TrashListArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListDerivedJobsArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// A file, or a folder for the files under it; empty lists the whole project.
+    #[serde(default)]
+    pub path: String,
+    /// The marker of the previous answer, to read the next page.
+    #[serde(default)]
+    pub marker: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecalculateArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file to rebuild.
+    pub path: String,
+    /// What to rebuild; only 'search_index' today.
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetImageArgs {
     /// Project/volume id the operation targets.
     pub mount_id: String,
@@ -2231,7 +2253,7 @@ impl McpServer {
                 a.overwrite,
             )
             .await?;
-            indexer::after_move(&self.state, &a.mount_id, &indexed, &dst, &client).await;
+            indexer::after_move(&self.state, &a.mount_id, &src, &indexed, &dst, &client).await;
             Ok(res)
         }
         .await;
@@ -2337,6 +2359,43 @@ impl McpServer {
         }
         .await;
         to_call_result("fs.trash_list", out)
+    }
+
+    #[tool(
+        name = "fs.list_derived_jobs",
+        description = "List the rebuild jobs of derived data (search entries) of a project or of one file: waiting, running and the last finished one per file."
+    )]
+    pub(crate) async fn fs_list_derived_jobs(
+        &self,
+        Parameters(a): Parameters<ListDerivedJobsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = async {
+            self.authorize_only(&a.mount_id).await?;
+            crate::tools::derived::list_derived_jobs(&self.state, &a.mount_id, &a.path, &a.marker)
+                .await
+        }
+        .await;
+        to_call_result("fs.list_derived_jobs", out)
+    }
+
+    #[tool(
+        name = "fs.recalculate",
+        description = "Rebuild the search entries of one file now, without waiting for the settle delay."
+    )]
+    pub(crate) async fn fs_recalculate(
+        &self,
+        Parameters(a): Parameters<RecalculateArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // The refusal order of FR-NEW-009 lives in the engine, membership first.
+        let out = crate::tools::derived::recalculate(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.kind,
+        )
+        .await;
+        to_call_result("fs.recalculate", out)
     }
 
     #[tool(
@@ -4094,8 +4153,9 @@ mod tests {
         // SPEC-0011 US-0005 adds fs.trash_restore, bumping 36 to 37; SPEC-0015 adds
         // fs.extract_archive, 38 to 39; SPEC-0019 adds fs.list_tables, 39 to 40, then fs.get_table, 41,
         // then fs.list_images and fs.get_image, 43, then fs.get_document_view, 44;
-        // SPEC-0045 adds fs.diff_files, 45.
-        assert_eq!(names.len(), 45, "got: {names:?}");
+        // SPEC-0045 adds fs.diff_files, 45; SPEC-0100 adds fs.list_derived_jobs, 46,
+        // and fs.recalculate, 47.
+        assert_eq!(names.len(), 47, "got: {names:?}");
     }
 
     #[test]
@@ -4119,11 +4179,13 @@ mod tests {
         // SPEC-0052 adds git.tag_create: git 50, total 116; git.tag_delete: git 51, total 117;
         // git.remote_push_tag: git 52, total 118. SPEC-0053 adds git.remote_delete_tag: git 53, total 119.
         // SPEC-0054 adds git.remote_push_tags: git 54, total 120.
-        assert_eq!(fs_count, 45, "got: {names:?}");
+        // SPEC-0100 adds fs.list_derived_jobs: fs 46, total 121; fs.recalculate: fs 47,
+        // total 122.
+        assert_eq!(fs_count, 47, "got: {names:?}");
         assert_eq!(admin_count, 17, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 120, "got: {names:?}");
+        assert_eq!(names.len(), 122, "got: {names:?}");
     }
 
     #[test]
@@ -4460,7 +4522,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 116, "the frozen contract covers 116 non-search tools");
+        assert_eq!(checked, 118, "the frozen contract covers 118 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -4481,8 +4543,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 116, "got: {names:?}");
-        assert_eq!(expected.len(), 116, "the golden contract itself must hold 116 names");
+        assert_eq!(names.len(), 118, "got: {names:?}");
+        assert_eq!(expected.len(), 118, "the golden contract itself must hold 118 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

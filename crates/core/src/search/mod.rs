@@ -18,6 +18,9 @@ use std::sync::Arc;
 pub mod bm25_pg;
 pub mod bm25_sqlite;
 pub mod chunker;
+pub mod derived;
+#[cfg(test)]
+mod derived_e2e;
 #[cfg(test)]
 pub mod e2e;
 #[cfg(feature = "rag")]
@@ -72,6 +75,25 @@ pub trait SearchBackend: Send + Sync {
         chunk_overlap: usize,
     ) -> Result<usize>;
 
+    /// Like `index_path`, but `still_current` runs after the chunking and the
+    /// embedding and right before the commit. When it returns false nothing is
+    /// stored, the previous entries of the path stay as they were, and the result
+    /// is `Ok(None)`. An error before the commit also leaves them untouched.
+    ///
+    /// The provided default ignores the guard: `index_path` means "always current".
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        let _ = still_current;
+        self.index_path(volume_id, path, text, chunk_size, chunk_overlap).await.map(Some)
+    }
+
     /// Remove all indexed chunks for `path` under `volume_id`.
     /// Returns the number of chunks deleted.
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize>;
@@ -107,6 +129,101 @@ pub trait SearchBackend: Send + Sync {
 
     /// Which query modes this backend can serve ("bm25", "rag", or both).
     fn supported_modes(&self) -> Vec<&'static str>;
+
+    /// The rebuild scheduler the write hooks hand changes to (DEC-014). `None`
+    /// keeps the immediate detached indexing, which only tests that build an
+    /// `AppState` by hand still use.
+    fn scheduler(&self) -> Option<Arc<derived::Scheduler>> {
+        None
+    }
+}
+
+/// The search backend the server serves: the engine plus the rebuild scheduler
+/// (DEC-014). Every engine call is delegated unchanged, so `search.index`, the
+/// queries and the move and mode change paths index at once as before; only the
+/// write hooks, through [`SearchBackend::scheduler`], wait for the file to settle.
+pub struct ScheduledBackend {
+    inner: Arc<dyn SearchBackend>,
+    scheduler: Arc<derived::Scheduler>,
+}
+
+impl ScheduledBackend {
+    /// Wraps `inner` and starts the scheduler's dispatcher (needs a runtime).
+    pub fn new(
+        inner: Arc<dyn SearchBackend>,
+        store: derived::JobStore,
+        stores: Arc<crate::storage::StoreManager>,
+        delay_secs: u64,
+    ) -> Self {
+        let scheduler = derived::Scheduler::new(inner.clone(), store, stores, delay_secs);
+        Self { inner, scheduler }
+    }
+}
+
+#[async_trait]
+impl SearchBackend for ScheduledBackend {
+    async fn index_path(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+    ) -> Result<usize> {
+        self.inner.index_path(volume_id, path, text, chunk_size, chunk_overlap).await
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        self.inner
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
+            .await
+    }
+
+    async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
+        self.inner.delete_path(volume_id, path).await
+    }
+
+    async fn delete_all(&self, volume_id: &str) -> Result<usize> {
+        self.inner.delete_all(volume_id).await
+    }
+
+    async fn query_bm25(
+        &self,
+        volume_id: &str,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.query_bm25(volume_id, query, top_k).await
+    }
+
+    async fn query_vector(
+        &self,
+        volume_id: &str,
+        query: &str,
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.inner.query_vector(volume_id, query, top_k).await
+    }
+
+    async fn stats(&self, volume_id: &str) -> Result<IndexStats> {
+        self.inner.stats(volume_id).await
+    }
+
+    fn supported_modes(&self) -> Vec<&'static str> {
+        self.inner.supported_modes()
+    }
+
+    fn scheduler(&self) -> Option<Arc<derived::Scheduler>> {
+        Some(self.scheduler.clone())
+    }
 }
 
 /// Build the search backend for the given config.
@@ -257,10 +374,34 @@ impl SearchBackend for CombinedBackend {
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Result<usize> {
-        let n1 = self.bm25.index_path(volume_id, path, text, chunk_size, chunk_overlap).await?;
-        // Index into vector store too; ignore the count (bm25 chunk count is authoritative).
-        let _ = self.vector.index_path(volume_id, path, text, chunk_size, chunk_overlap).await?;
-        Ok(n1)
+        let stored = self
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
+            .await?;
+        Ok(stored.unwrap_or(0))
+    }
+
+    async fn index_path_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        // The vector side goes first because embedding is what can fail: an error
+        // or a refusal there happens before BM25 is touched, so every engine keeps
+        // the old entries. The bm25 chunk count stays the authoritative one.
+        let Some(_) = self
+            .vector
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.bm25
+            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
+            .await
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -308,5 +449,121 @@ impl SearchBackend for CombinedBackend {
 
     fn supported_modes(&self) -> Vec<&'static str> {
         vec!["bm25", "rag", "both"]
+    }
+}
+
+#[cfg(test)]
+mod guarded_tests {
+    use super::*;
+
+    /// US-0264/T1: a refused guard stores nothing and the old entries stay.
+    #[tokio::test]
+    async fn guarded_refusal_keeps_old_entries_tantivy() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = bm25_sqlite::TantivyBm25Backend::new(dir.path().to_str().unwrap());
+        b.index_path("v", "/a.md", "alpha beta", 1000, 100).await.unwrap();
+
+        let r = b.index_path_checked("v", "/a.md", "gamma delta", 1000, 100, &|| false).await;
+        assert!(matches!(r, Ok(None)), "a refused guard must answer Ok(None), got {r:?}");
+        let alpha = b.query_bm25("v", "alpha", 10).await.unwrap();
+        assert_eq!(alpha.len(), 1);
+        assert_eq!(alpha[0].path, "/a.md");
+        assert!(b.query_bm25("v", "gamma", 10).await.unwrap().is_empty());
+    }
+
+    /// An accepted guard replaces the entries and reports the chunk count.
+    #[tokio::test]
+    async fn guarded_acceptance_replaces_entries_tantivy() {
+        let dir = tempfile::tempdir().unwrap();
+        let b = bm25_sqlite::TantivyBm25Backend::new(dir.path().to_str().unwrap());
+        b.index_path("v", "/a.md", "alpha beta", 1000, 100).await.unwrap();
+
+        let r = b.index_path_checked("v", "/a.md", "gamma delta", 1000, 100, &|| true).await;
+        assert!(matches!(r, Ok(Some(1))), "got {r:?}");
+        assert!(b.query_bm25("v", "alpha", 10).await.unwrap().is_empty());
+        assert_eq!(b.query_bm25("v", "gamma", 10).await.unwrap().len(), 1);
+    }
+
+    #[cfg(feature = "rag")]
+    mod rag {
+        use super::*;
+        use crate::config::EmbeddingConfig;
+
+        /// A fake endpoint that answers, or (`up == false`) a port nobody listens on.
+        async fn endpoint(up: bool) -> String {
+            use axum::{Json, Router, routing::post};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            if up {
+                let router = Router::new().route(
+                    "/v1/embeddings",
+                    post(|| async {
+                        Json(serde_json::json!({
+                            "data": [{"embedding": [0.1, 0.2, 0.3, 0.4], "index": 0}]
+                        }))
+                    }),
+                );
+                tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+            } else {
+                drop(listener);
+            }
+            format!("http://127.0.0.1:{port}/v1/embeddings")
+        }
+
+        fn combined(dir: &std::path::Path, endpoint: String) -> CombinedBackend {
+            crate::storage::sqlite::register_sqlite_vec();
+            let client = Arc::new(reqwest::Client::new());
+            let cfg = EmbeddingConfig {
+                endpoint,
+                model: "fake".into(),
+                api_key_env: String::new(),
+                dimensions: 4,
+            };
+            let dir = dir.to_str().unwrap();
+            let bm25: Arc<dyn SearchBackend> = Arc::new(bm25_sqlite::TantivyBm25Backend::new(dir));
+            let vector: Arc<dyn SearchBackend> =
+                Arc::new(vector_sqlite::SqliteVecBackend::new(4, dir, client, cfg));
+            CombinedBackend { bm25, vector, mode: "both".into() }
+        }
+
+        /// US-0264/T2: the vector side fails first, so BM25 keeps the old entries.
+        #[tokio::test]
+        async fn guarded_combined_keeps_bm25_when_the_vector_side_fails() {
+            let dir = tempfile::tempdir().unwrap();
+            let up = endpoint(true).await;
+            let c = combined(dir.path(), up);
+            c.index_path("v", "/a.md", "alpha", 1000, 100).await.unwrap();
+            // The endpoint is stopped: rebuild the combined engine would not share
+            // Tantivy handles, so swap only the vector half to a dead endpoint.
+            let down = endpoint(false).await;
+            let c2 = CombinedBackend {
+                bm25: c.bm25.clone(),
+                vector: combined(dir.path(), down).vector,
+                mode: "both".into(),
+            };
+            let r = c2.index_path_checked("v", "/a.md", "gamma", 1000, 100, &|| true).await;
+            assert!(r.is_err(), "an unreachable endpoint must fail the update");
+            let alpha = c2.query_bm25("v", "alpha", 10).await.unwrap();
+            assert_eq!(alpha.len(), 1);
+            assert_eq!(alpha[0].path, "/a.md");
+            assert!(c2.query_bm25("v", "gamma", 10).await.unwrap().is_empty());
+        }
+
+        /// A refused guard stores nothing on either side of the combined engine.
+        #[tokio::test]
+        async fn guarded_combined_refusal_stores_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let up = endpoint(true).await;
+            let c = combined(dir.path(), up);
+            c.index_path("v", "/a.md", "alpha", 1000, 100).await.unwrap();
+
+            let r = c.index_path_checked("v", "/a.md", "gamma", 1000, 100, &|| false).await;
+            assert!(matches!(r, Ok(None)), "got {r:?}");
+            assert_eq!(c.query_bm25("v", "alpha", 10).await.unwrap().len(), 1);
+            assert!(c.query_bm25("v", "gamma", 10).await.unwrap().is_empty());
+            let v = c.query_vector("v", "alpha", 10).await.unwrap();
+            assert_eq!(v.len(), 1);
+            assert_eq!(v[0].chunk, "alpha", "the vector side keeps the old chunk");
+        }
     }
 }

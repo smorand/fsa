@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-110 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+118 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -471,6 +471,26 @@ source file is kept, no companion) and the answer of `POST /api/fs/{mount_id}/do
 (HTTP 500). Diagnostic output (stderr) keeps only its last 8 192 bytes; in bundle mode standard
 output is discarded. An answer within the cap is unchanged, as are the failure messages.
 
+## Search entries are rebuilt after the file settles
+
+With search on, a write, edit, patch or upload no longer indexes its file at once: one
+rebuild is scheduled and runs once the file has stayed unchanged for
+`search.settle_delay_seconds` (default 30, whole seconds, `0` keeps the old immediate
+timing). Each further save pushes the rebuild back, so a burst of saves costs one rebuild.
+Until it ends the previous entries are served; a rebuild whose file changed meanwhile is
+discarded, and a failed one keeps the old entries. Waiting rebuilds survive a restart.
+
+```yaml
+search:
+  enabled: true
+  settle_delay_seconds: 30
+```
+
+Two MCP tools follow the work: `fs.list_derived_jobs` lists each file's waiting, running and
+last finished job (state, cause `change` or `manual`, seconds left, failure reason), and
+`fs.recalculate` (kind `search_index`) rebuilds one file now, replacing its waiting rebuild.
+Details: `.agent_docs/search.md`, "Rebuild scheduler" (SPEC-0100).
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or
@@ -572,7 +592,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 110 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 118 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash

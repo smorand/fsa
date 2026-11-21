@@ -1315,6 +1315,37 @@
       }
     },
     {
+      "name": "fs.list_derived_jobs",
+      "description": "List the rebuild jobs of derived data (search entries) of a project or of one file: waiting, running and the last finished one per file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "A file, or a folder for the files under it; empty lists the whole project.",
+            "type": "string",
+            "default": ""
+          },
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "mount_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "fs.list_dir",
       "description": "Flat directory listing with kinds and optional sizes.",
       "inputSchema": {
@@ -1722,6 +1753,38 @@
       "annotations": {
         "readOnlyHint": true,
         "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fs.recalculate",
+      "description": "Rebuild the search entries of one file now, without waiting for the settle delay.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file to rebuild.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What to rebuild; only 'search_index' today.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mount_id",
+          "path",
+          "kind"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": false,
         "openWorldHint": false
       }
     },

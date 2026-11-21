@@ -65,7 +65,7 @@ dependencies = [
 
 [[package]]
 name = "agent"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2752,7 +2752,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "fsa"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "fsa-core",
  "reqwest",
@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "fsa-core"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "adobe-cmap-parser",
  "aes 0.8.4",

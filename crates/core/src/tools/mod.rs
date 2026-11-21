@@ -60,6 +60,7 @@ pub(crate) mod converter_bound_e2e;
 #[cfg(test)]
 mod damage_e2e;
 pub mod db;
+pub(crate) mod derived;
 pub(crate) mod diff_files;
 #[cfg(test)]
 mod diff_files_e2e;
@@ -158,6 +159,7 @@ pub(crate) fn register_fs(reg: &mut crate::tools::registry_support::ToolRegistry
     export::register(reg);
     archive::register(reg);
     artifacts::register(reg);
+    derived::register(reg);
 }
 
 /// Read `mount_id`, enforce project membership, open the volume.
@@ -473,6 +475,8 @@ mod tests {
         "fs.list_tables",
         "fs.get_table",
         "fs.get_document_view",
+        "fs.list_derived_jobs",
+        "fs.recalculate",
     ];
 
     #[test]
@@ -480,8 +484,9 @@ mod tests {
         let mut reg = ToolRegistry::new();
         register_fs(&mut reg);
         // 44 since SPEC-0019 US-0008 added fs.get_document_view, 45 with
-        // SPEC-0045 fs.diff_files.
-        assert_eq!(reg.len(), 45);
+        // SPEC-0045 fs.diff_files, 46 with SPEC-0100 fs.list_derived_jobs, 47 with
+        // SPEC-0100 fs.recalculate.
+        assert_eq!(reg.len(), 47);
         assert_eq!(reg.names(), FS_TOOLS);
     }
 
@@ -557,8 +562,9 @@ mod tests {
             &reg,
             |name| name.starts_with("fs."),
             // 44 since SPEC-0019 added fs.list_tables, fs.get_table, fs.list_images,
-            // fs.get_image and fs.get_document_view; 45 with SPEC-0045 fs.diff_files.
-            45,
+            // fs.get_image and fs.get_document_view; 45 with SPEC-0045 fs.diff_files;
+            // 46 with SPEC-0100 fs.list_derived_jobs; 47 with fs.recalculate.
+            47,
             "fs.* tools",
         );
     }

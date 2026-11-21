@@ -112,6 +112,23 @@ pub(crate) async fn build_with_state(
     let search = crate::search::build_backend(&config, &relational, search_http_client)
         .await
         .map_err(|e| anyhow::anyhow!("search backend failed to start: {e}"))?;
+    // The write hooks reach the rebuild scheduler through this decorator
+    // (SPEC-0100 DEC-014); an admin store without a job table keeps the engine bare.
+    let search = match (search, admin.derived_jobs()) {
+        (Some(engine), Some(jobs)) => Some(Arc::new(crate::search::ScheduledBackend::new(
+            engine,
+            jobs,
+            stores.clone(),
+            config.search.settle_delay(),
+        )) as Arc<dyn crate::search::SearchBackend>),
+        (search, _) => search,
+    };
+    // Waiting rebuilds survive the restart and interrupted ones are ended and
+    // queued again (SPEC-0100 DEC-020); a failure stops the boot.
+    if let Some(scheduler) = search.as_ref().and_then(|s| s.scheduler()) {
+        admin.set_project_gone_hook(scheduler.project_hook());
+        scheduler.recover().await.map_err(|e| anyhow::anyhow!("rebuild recovery failed: {e}"))?;
+    }
 
     let state = Arc::new(AppState {
         config,
@@ -176,6 +193,7 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}"))?;
 
     let (purge_stop, purge_stop_rx) = tokio::sync::oneshot::channel();
+    let state_for_stop = state.clone();
     let purge_handle = spawn_purge_loop(state, purge_stop_rx);
 
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
@@ -183,6 +201,10 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     // Same cancellation intent as `shutdown_signal` above: tell the loop to stop,
     // then wait for it, bounded, so the process never exits with the task still
     // mid-cycle. A send failure means the loop already exited on its own.
+    // The rebuild dispatcher stops with the server; job rows stay for the next start.
+    if let Some(scheduler) = state_for_stop.search.as_ref().and_then(|s| s.scheduler()) {
+        scheduler.stop();
+    }
     let _ = purge_stop.send(());
     if tokio::time::timeout(std::time::Duration::from_secs(10), purge_handle).await.is_err() {
         tracing::warn!("purge loop did not stop within the shutdown grace period");

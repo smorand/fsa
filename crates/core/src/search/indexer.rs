@@ -5,11 +5,12 @@
 //!
 //! Two rules hold everywhere here:
 //!
-//! * **A write never waits for the index.** `on_write` and `on_delete` hand the
-//!   work to a detached task and return immediately, so a slow or absent
-//!   embedding endpoint costs a write nothing and fails it never. The index
-//!   therefore lags the volume by the duration of one backend call, which is
-//!   visible to a caller that writes and queries back to back.
+//! * **A write never waits for the index.** A write, edit, patch or upload hands
+//!   the file to the rebuild scheduler (SPEC-0100, `search::derived`), which
+//!   rebuilds it once it has been quiet for `search.settle_delay_seconds`; a
+//!   backend without a scheduler (tests that build an `AppState` by hand) keeps
+//!   the immediate detached task. `on_write` and `on_delete` detach too, so a
+//!   slow or absent embedding endpoint costs a write nothing and fails it never.
 //! * **An index failure is a log line, not an error.** The caller already
 //!   committed bytes; refusing the write afterwards would be a lie.
 //!
@@ -20,6 +21,7 @@
 use crate::core::fs_ops;
 use crate::errors::Result;
 use crate::search::SearchBackend;
+use crate::search::derived::JobCause;
 use crate::state::AppState;
 use crate::storage::VolumeClient;
 use crate::storage::traits::IndexMode;
@@ -85,6 +87,14 @@ impl<'a> ProjectIndexer<'a> {
             wiped,
             "search index mode changed"
         );
+
+        // FR-NEW-015: after the wipe and before the full index, so no job of the
+        // old mode outlives it; the full index is not a job.
+        if let Some(scheduler) = self.backend.scheduler() {
+            // Active to active: the full index below rewrites every path, so a
+            // removed rebuild must not clear its path when it ends.
+            scheduler.forget_project(volume_id, !new_mode.is_active()).await;
+        }
 
         if !new_mode.is_active() {
             return Ok(false);
@@ -169,7 +179,7 @@ pub async fn full_index(
 ///
 /// `read_text` is lossy, so the bytes are decoded here instead: indexing the
 /// replacement characters of a binary file is noise, not content.
-async fn read_utf8(client: &VolumeClient, path: &str) -> Option<String> {
+pub(crate) async fn read_utf8(client: &VolumeClient, path: &str) -> Option<String> {
     let bytes = client.read_bytes(path).await.ok()?;
     String::from_utf8(bytes).ok()
 }
@@ -196,25 +206,46 @@ async fn active_backend<'s>(
 }
 
 /// Auto index a file whose new text the caller already holds.
+///
+/// With a scheduler the text is not kept: the rebuild reads the file when it
+/// starts, so it indexes the last save (DEC-021).
 pub async fn after_write(state: &AppState, volume_id: &str, path: &str, text: &str) {
     if let Some(backend) = active_backend(state, volume_id).await {
-        drop(ProjectIndexer::new(backend).on_write(volume_id, path, text));
+        match backend.scheduler() {
+            Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
+            None => drop(ProjectIndexer::new(backend).on_write(volume_id, path, text)),
+        }
     }
 }
 
-/// Auto index a file whose new text the caller does not hold, by reading it back.
+/// Auto index a file whose new text the caller does not hold.
 ///
-/// The read only happens when the project has an active mode, so a project that
-/// indexes nothing pays nothing. A non UTF-8 file is skipped silently.
+/// Nothing happens unless the project has an active mode, so a project that
+/// indexes nothing pays nothing and schedules nothing. With a scheduler the file
+/// is read by the rebuild, not here; without one it is read back now. A non
+/// UTF-8 file is skipped silently.
 pub async fn after_write_reread(
     state: &AppState,
     volume_id: &str,
     path: &str,
     client: &VolumeClient,
 ) {
-    if let Some(backend) = active_backend(state, volume_id).await
-        && let Some(text) = read_utf8(client, path).await
-    {
+    if let Some(backend) = active_backend(state, volume_id).await {
+        match backend.scheduler() {
+            Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
+            None => index_now(backend, volume_id, path, client).await,
+        }
+    }
+}
+
+/// Reads `path` back and indexes it at once, without waiting for the result.
+async fn index_now(
+    backend: &Arc<dyn SearchBackend>,
+    volume_id: &str,
+    path: &str,
+    client: &VolumeClient,
+) {
+    if let Some(text) = read_utf8(client, path).await {
         drop(ProjectIndexer::new(backend).on_write(volume_id, path, &text));
     }
 }
@@ -241,7 +272,10 @@ pub async fn after_companion(
         _ => payload,
     };
     let Some(md_path) = report["md_path"].as_str() else { return };
-    after_write_reread(state, volume_id, md_path, client).await;
+    // Indexed at once, never scheduled: SPEC-0100 leaves the companion out (DEC-015).
+    if let Some(backend) = active_backend(state, volume_id).await {
+        index_now(backend, volume_id, md_path, client).await;
+    }
 }
 
 /// Reflect one patch in the search index: a patch touches several files and can
@@ -266,9 +300,13 @@ pub async fn after_patch(state: &AppState, volume_id: &str, report: &Value, clie
     }
 }
 
-/// Auto remove one path from the index.
+/// Auto remove one path from the index, and its rebuild jobs first: the
+/// scheduler flags a running rebuild before the entries go (DEC-010).
 pub async fn after_delete(state: &AppState, volume_id: &str, path: &str) {
     if let Some(backend) = active_backend(state, volume_id).await {
+        if let Some(s) = backend.scheduler() {
+            s.forget_path(volume_id, path).await;
+        }
         drop(ProjectIndexer::new(backend).on_delete(volume_id, path));
     }
 }
@@ -279,6 +317,11 @@ pub async fn after_delete_many(state: &AppState, volume_id: &str, paths: &[Strin
         return;
     }
     if let Some(backend) = active_backend(state, volume_id).await {
+        if let Some(s) = backend.scheduler() {
+            for path in paths {
+                s.forget_path(volume_id, path).await;
+            }
+        }
         let indexer = ProjectIndexer::new(backend);
         for path in paths {
             drop(indexer.on_delete(volume_id, path));
@@ -341,14 +384,33 @@ pub async fn paths_displaced_by_move(
 /// the index forever with no path to enumerate them by. The destination side is
 /// walked here instead of derived from `sources`, so a tree move needs no prefix
 /// arithmetic to stay correct.
-pub async fn after_move(
+///
+/// Jobs follow by `src` (DEC-018): a source file under `src` carries its jobs
+/// to its new path, any other one is a replaced destination file and loses
+/// them. The replaced ones go first, so a carried job is never removed by the
+/// path it lands on. The destination is still indexed here at once, without a
+/// job. Done before the clears, so a running rebuild is flagged before its
+/// entries go (DEC-010).
+pub async fn after_move<'a>(
     state: &AppState,
     volume_id: &str,
-    sources: &[String],
+    src: &str,
+    sources: &'a [String],
     destination: &str,
     client: &VolumeClient,
 ) {
     let Some(backend) = active_backend(state, volume_id).await else { return };
+    if let Some(scheduler) = backend.scheduler() {
+        let moved = |p: &'a str| below(p, src);
+        for path in sources.iter().filter(|p| moved(p).is_none()) {
+            scheduler.forget_path(volume_id, path).await;
+        }
+        for path in sources {
+            if let Some(rest) = moved(path) {
+                scheduler.move_path(volume_id, path, &format!("{destination}{rest}")).await;
+            }
+        }
+    }
     let indexer = ProjectIndexer::new(backend);
     let clears: Vec<JoinHandle<()>> =
         sources.iter().map(|path| indexer.on_delete(volume_id, path)).collect();
@@ -371,8 +433,14 @@ pub async fn after_move(
     index_tree(backend, volume_id, destination, client, trash_dir).await;
 }
 
-/// Index the destination of a copy. The source keeps the entries it had, which
-/// are still true: a copy leaves it untouched.
+/// The part of `path` after `root` when `path` is `root` or below it.
+fn below<'p>(path: &'p str, root: &str) -> Option<&'p str> {
+    path.strip_prefix(root).filter(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// Follow a copy: the destination files are scheduled like a write, the source
+/// keeps the entries it had, which are still true. Without a scheduler the
+/// destination is indexed at once, as before.
 pub async fn after_copy(
     state: &AppState,
     volume_id: &str,
@@ -381,7 +449,50 @@ pub async fn after_copy(
 ) {
     if let Some(backend) = active_backend(state, volume_id).await {
         let trash_dir = &state.safety.config().trash_dir;
-        index_tree(backend, volume_id, destination, client, trash_dir).await;
+        arrive(backend, volume_id, destination, client, trash_dir).await;
+    }
+}
+
+/// Follow a restore from the trash: forget the trash path, then treat the
+/// restored path as a change. A move re-indexes at once; a restore is a change
+/// (DEC-017), so it waits for the settle delay like a write.
+pub async fn after_restore(
+    state: &AppState,
+    volume_id: &str,
+    trash_path: &str,
+    restored_path: &str,
+    client: &VolumeClient,
+) {
+    let Some(backend) = active_backend(state, volume_id).await else { return };
+    if backend.scheduler().is_none() {
+        let sources = [trash_path.to_string()];
+        after_move(state, volume_id, trash_path, &sources, restored_path, client).await;
+        return;
+    }
+    // Awaited so the clear cannot land after the scheduled rebuild.
+    if let Err(e) = ProjectIndexer::new(backend).on_delete(volume_id, trash_path).await {
+        tracing::warn!(volume_id, error = %e, "an index clear task failed during a restore");
+    }
+    arrive(backend, volume_id, restored_path, client, &state.safety.config().trash_dir).await;
+}
+
+/// A tree has arrived at `root`: schedule each of its files when the backend
+/// has a scheduler (one walk, no read), otherwise index them at once.
+async fn arrive(
+    backend: &Arc<dyn SearchBackend>,
+    volume_id: &str,
+    root: &str,
+    client: &VolumeClient,
+    trash_dir: &str,
+) {
+    let Some(scheduler) = backend.scheduler() else {
+        index_tree(backend, volume_id, root, client, trash_dir).await;
+        return;
+    };
+    for path in files_under(client, root).await {
+        if !is_trash_path(&path, trash_dir) {
+            scheduler.schedule(volume_id, &path, JobCause::Change).await;
+        }
     }
 }
 
@@ -494,6 +605,15 @@ mod tests {
         fn supported_modes(&self) -> Vec<&'static str> {
             vec!["bm25"]
         }
+    }
+
+    /// US-0264/T3: the provided default ignores the guard and runs `index_path`.
+    #[tokio::test]
+    async fn guarded_default_method_ignores_the_guard() {
+        let (backend, rec) = recording();
+        let r = backend.index_path_checked("v", "/a.md", "text", 1000, 100, &|| false).await;
+        assert!(matches!(r, Ok(Some(1))), "got {r:?}");
+        assert_eq!(rec.calls().iter().filter(|c| c.starts_with("index ")).count(), 1);
     }
 
     fn recording() -> (Arc<dyn SearchBackend>, Arc<RecordingBackend>) {
@@ -659,7 +779,7 @@ mod tests {
         client.write_text_atomic("/dst/a.md", "arrived").await.expect("seed");
 
         let displaced = vec!["/dst/a.md".to_string(), "/dst/gone.md".to_string()];
-        after_move(&state, crate::tools::testkit::MOUNT, &displaced, "/dst", &client).await;
+        after_move(&state, crate::tools::testkit::MOUNT, "/src", &displaced, "/dst", &client).await;
 
         let calls = wait_for(&rec, 3).await;
         let vol = crate::tools::testkit::MOUNT;

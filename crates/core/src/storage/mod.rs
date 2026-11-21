@@ -281,6 +281,24 @@ pub async fn build_admin_store(
     Ok(Arc::new(admin::RelationalAdminStore::new(db)))
 }
 
+/// Build the derived data job store (SPEC-0100) on the admin database target:
+/// the registry hands back the same pool as [`build_admin_store`], so the job
+/// rows share the `project` table their foreign key cascades from (DEC-004).
+pub async fn build_derived_job_store(
+    config: &ServerConfig,
+    registry: &RelationalRegistry,
+) -> Result<crate::search::derived::JobStore> {
+    let a = &config.infra.admin;
+    let db = build_relational_db(
+        registry,
+        "admin",
+        RelationalTarget { backend: &a.backend, dsn: &a.dsn, schema: &a.schema, pool: &a.pool },
+        || config.admin_db_path(),
+    )
+    .await?;
+    Ok(crate::search::derived::JobStore::new(db))
+}
+
 /// Build the git index for one project, per `infra.git.backend`.
 ///
 /// `git/repo.rs` used to open its SQLite file directly, which meant the git index

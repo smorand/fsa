@@ -1,4 +1,4 @@
-# Tool reference (116 tools)
+# Tool reference (118 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -131,7 +131,7 @@ caller is not a member of. REST twin: `GET /api/fs/diff`
 `uid`/`gid` are the synthetic constants 1000/1000: a volume has no real POSIX
 owner.
 
-## fs lifecycle (8)
+## fs lifecycle (10)
 
 | Tool | Purpose | Parameters | Returns | Annotations | Auth |
 |---|---|---|---|---|---|
@@ -143,6 +143,8 @@ owner.
 | `fs.audit_log` | mutations recorded this session | `since:number=null`, `limit:int=20` | `entries[{timestamp, op, path, detail}]` | RO,I,!OW | member |
 | `fs.trash_list` | list trashed files, paginated | `path_prefix:string=""`, `limit:int=200`, `offset:int=0` | `entries[{trash_path, original_path, size, kind, deleted_at, deleted_by, purge_in_days}]`, `total` | RO,I,!OW | member |
 | `fs.trash_restore` | restore a trashed entry to its original path | `trash_path` | `restored_path`, `trash_path` | !D,!RO,!I,!OW | member |
+| `fs.list_derived_jobs` | rebuild jobs of derived data (SPEC-0100), 100 per page | `path:string=""`, `marker:string=""` | `jobs[{job_id, path, kind, state, cause, created_at, seconds_left?, ended_at?, reason?}]`, `marker?` | RO,I,!OW | member |
+| `fs.recalculate` | rebuild the search entries of one file now (SPEC-0100); a waiting rebuild is replaced, a running one ends `superseded` | `path`, `kind` (`search_index` only) | the job: `job_id, path, kind, state, cause, created_at, seconds_left?, ended_at?, reason?` | !D,!RO,!I,!OW | member |
 
 `trash=false` needs `safety.allow_hard_delete` on the server, otherwise
 `ERR_NOT_SUPPORTED`. `fs.list_allowed_roots` and `fs.audit_log` still take and
@@ -153,6 +155,19 @@ check `mount_id` even though they never open the volume.
 surface. `purge_in_days` is `null` when the project has no file retention
 configured. `fs.trash_restore` renames to `_restoredN` on a collision at the
 original path rather than failing (SPEC-0011).
+
+`fs.recalculate` (2026-11-21, SPEC-0100 FR-NEW-008, FR-NEW-009) is MCP only, like
+`fs.list_derived_jobs` (DEC-012). Refusals, first match wins, nothing changed:
+project absent or deleted `ERR_PROJECT_NOT_FOUND`; non member `ERR_FORBIDDEN`;
+search off `ERR_NOT_SUPPORTED: search is not enabled; set search.enabled: true in
+config`; kind other than `search_index` `ERR_INVALID_ARGUMENT: kind must be
+'search_index'`; `ERR_NOT_FOUND: file not found: <path>`; a folder (the root
+included) `ERR_INVALID_ARGUMENT: path must be a file`; index mode `none`
+`ERR_NOT_SUPPORTED: search indexing is not active for project <mount_id>`. Each
+call creates a job (cause `manual`) and drops the file's waiting job without a
+record. Nothing running: it starts in the call, answered `running`. A rebuild
+running: that one ends `superseded` and the answer is `waiting` with
+`seconds_left` 0, started when the running one ends.
 
 ## fs export (1)
 
@@ -692,8 +707,8 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 62 (45 `fs.*`, 17 `admin.*`) |
-| git flag on | 116 |
+| default | 64 (47 `fs.*`, 17 `admin.*`) |
+| git flag on | 118 |
 | git and search flags on | 120 |
 | every flag, pandoc on `PATH` | 142 (140 without pandoc: `doc.*` registers nothing) |
 | one optional family alone | 62 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
@@ -705,7 +720,7 @@ family's production `register()` into one shared `ToolRegistry`, and adds one
 family's own `ToolSchema::to_list_entry()`, so the served schema equals
 `catalog()` (what `/api/swagger.json` reads); the call goes through
 `ToolRegistry::call` then `to_call_result`. The family handlers authorize
-`mount_id` themselves, unchanged. They are outside the 116 tool golden
+`mount_id` themselves, unchanged. They are outside the 118 tool golden
 contract. Tests: `tools/tool_surface_e2e.rs`.
 
 (2026-11-12, SPEC-0093) Remote answers of `web.*` and `context7.*` are read by `tools::web::read_answer`

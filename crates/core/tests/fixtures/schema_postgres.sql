@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS "project_member" ("project_id" TEXT NOT NULL, "person
 
 CREATE TABLE IF NOT EXISTS "project_purge_config" ("project_id" TEXT NOT NULL, "autopurge_enabled" BIGINT NOT NULL DEFAULT 0, "use_internal_purge" BIGINT NOT NULL DEFAULT 0, "file_retention_days" BIGINT, "project_retention_days" BIGINT, PRIMARY KEY ("project_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
 
+CREATE TABLE IF NOT EXISTS "derived_job" ("job_id" TEXT NOT NULL, "project_id" TEXT NOT NULL, "path" TEXT NOT NULL, "kind" TEXT NOT NULL, "state" TEXT NOT NULL, "cause" TEXT NOT NULL, "hidden" BIGINT NOT NULL DEFAULT 0, "created_at" TEXT NOT NULL, "ended_at" TEXT, "reason" TEXT, PRIMARY KEY ("job_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
+
+CREATE INDEX IF NOT EXISTS "idx_derived_job_key" ON "derived_job" ("project_id", "path", "kind")
+
+CREATE INDEX IF NOT EXISTS "idx_derived_job_page" ON "derived_job" ("project_id", "state", "ended_at")
+
 -- store: git
 CREATE TABLE IF NOT EXISTS "git_objects" ("volume_id" TEXT NOT NULL, "hash" TEXT NOT NULL, "type" TEXT NOT NULL, "size" BIGINT NOT NULL, PRIMARY KEY ("volume_id", "hash"))
 
