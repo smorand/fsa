@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-118 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+123 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -488,8 +488,24 @@ search:
 
 Two MCP tools follow the work: `fs.list_derived_jobs` lists each file's waiting, running and
 last finished job (state, cause `change` or `manual`, seconds left, failure reason), and
-`fs.recalculate` (kind `search_index`) rebuilds one file now, replacing its waiting rebuild.
-Details: `.agent_docs/search.md`, "Rebuild scheduler" (SPEC-0100).
+`fs.recalculate` rebuilds one thing of one file now: kind `search_index` the search entries
+(replacing the waiting rebuild), kind `chunks` one chunk set, with the optional `set_id` (empty
+is the default set). Details: `.agent_docs/search.md`, "Rebuild scheduler" (SPEC-0100).
+
+### Chunk sets (SPEC-0101)
+
+A file of an indexing project keeps its text cut into **chunk sets**, stored as file metadata:
+the default set (strategy `structural`, server defaults from `search.chunking.*`) is made and
+refreshed by every rebuild, and search entries are built from its chunks. Up to 5 sets per file
+(the default plus extras made by hand with `fs.create_chunk_set`, strategy `fixed` or
+`structural`) follow the file through moves and deletes. Five MCP tools read and manage them:
+`fs.list_chunk_sets` (state `current` or `out_of_date`), `fs.list_chunks`, `fs.get_chunk`,
+`fs.create_chunk_set`, `fs.delete_chunk_set`. `fs.recalculate` with kind `chunks` cuts one set
+again at once from the current text, ignoring the settle delay; it works with search disabled
+and in a project that does not index (the default set then refreshes the search entries only
+when search is on and the project indexes). A text file is cut from its bytes, a converted
+document from its document view. Run the acceptance tests with
+`cargo test -p fsa-core --lib -- e2e_0101_`. Details: `.agent_docs/search.md`.
 
 ## Project quota enforcement
 
@@ -592,7 +608,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 118 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 123 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash

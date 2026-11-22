@@ -120,6 +120,7 @@ pub(crate) async fn build_with_state(
             jobs,
             stores.clone(),
             config.search.settle_delay(),
+            config.search.chunking(),
         )) as Arc<dyn crate::search::SearchBackend>),
         (search, _) => search,
     };
@@ -129,6 +130,12 @@ pub(crate) async fn build_with_state(
         admin.set_project_gone_hook(scheduler.project_hook());
         scheduler.recover().await.map_err(|e| anyhow::anyhow!("rebuild recovery failed: {e}"))?;
     }
+
+    // The sets of a soft deleted project go whatever the index mode and even
+    // without a scheduler (SPEC-0101 FR-NEW-025).
+    admin.set_project_deleted_hook(crate::chunking::ChunkStore::project_deleted_hook(
+        stores.clone(),
+    ));
 
     let state = Arc::new(AppState {
         config,

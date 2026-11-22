@@ -1772,12 +1772,8 @@ mod sqlite_rag {
         assert_eq!(err.code, crate::errors::code::FORBIDDEN, "expected ERR_FORBIDDEN, got {err}");
     }
 
-    /// Indexing a binary (non-UTF-8) file does not return an error.
-    ///
-    /// NOTE: the volume's `read_text` uses `from_utf8_lossy`, so binary files
-    /// are never rejected at read time — they are indexed as garbled text.
-    /// This test verifies that the tool completes without panicking or returning
-    /// an error code. `indexed + skipped` must equal the number of paths attempted.
+    /// A binary (non-UTF-8) file holds no text: named alone it is refused
+    /// (SPEC-0101 E2E-143), inside a recursive call it is skipped and counted.
     #[tokio::test]
     async fn e2e_sqlite_rag_index_binary_file_skips_gracefully() {
         let base = spawn_fake_embedding(3).await;
@@ -1791,22 +1787,19 @@ mod sqlite_rag {
             .await
             .expect("write_bytes_atomic must succeed");
 
-        // The call must succeed (no error returned), regardless of whether the
-        // file is indexed or skipped — the exact behaviour depends on whether
-        // the embedding call tolerates garbled input.
-        let resp = h
+        let err = h
             .call("search.index", json!({"mount_id": MOUNT, "path": "/binary.bin"}))
             .await
-            .expect("search.index on binary must succeed (not error)");
+            .expect_err("a single binary path is refused");
+        assert_eq!(err.to_string(), "ERR_NOT_SUPPORTED: no text to cut for /binary.bin");
 
-        // indexed + skipped must equal 1 (one path was attempted).
-        let indexed = resp["indexed"].as_u64().unwrap_or(0);
-        let skipped = resp["skipped"].as_u64().unwrap_or(0);
-        assert_eq!(
-            indexed + skipped,
-            1,
-            "indexed + skipped must equal 1, got indexed={indexed} skipped={skipped}"
-        );
+        // Inside a folder it is skipped, not an error.
+        let resp = h
+            .call("search.index", json!({"mount_id": MOUNT, "path": "/", "recursive": true}))
+            .await
+            .expect("a recursive index skips the binary");
+        assert_eq!(resp["indexed"], 0, "{resp}");
+        assert_eq!(resp["skipped"], 1, "{resp}");
     }
 
     /// Requesting `mode=bm25` against a RAG-only backend returns NOT_SUPPORTED.
@@ -2466,19 +2459,19 @@ mod pg_rag {
             .await
             .expect("write_bytes_atomic must succeed");
 
-        // Must succeed (no error). indexed + skipped must equal 1.
-        let resp = h
+        let err = h
             .call("search.index", json!({"mount_id": MOUNT, "path": "/binary.bin"}))
             .await
-            .expect("search.index on binary must succeed (not error)");
+            .expect_err("a single binary path is refused");
+        assert_eq!(err.to_string(), "ERR_NOT_SUPPORTED: no text to cut for /binary.bin");
 
-        let indexed = resp["indexed"].as_u64().unwrap_or(0);
-        let skipped = resp["skipped"].as_u64().unwrap_or(0);
-        assert_eq!(
-            indexed + skipped,
-            1,
-            "indexed + skipped must equal 1, got indexed={indexed} skipped={skipped}"
-        );
+        // Inside a folder it is skipped, not an error.
+        let resp = h
+            .call("search.index", json!({"mount_id": MOUNT, "path": "/", "recursive": true}))
+            .await
+            .expect("a recursive index skips the binary");
+        assert_eq!(resp["indexed"], 0, "{resp}");
+        assert_eq!(resp["skipped"], 1, "{resp}");
     }
 
     #[tokio::test]

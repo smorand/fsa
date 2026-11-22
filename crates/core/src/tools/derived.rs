@@ -7,7 +7,8 @@
 //! refusal order. MCP only, no REST twin (DEC-012).
 
 use crate::errors::{Result, ToolError};
-use crate::search::derived::{Job, JobKind, JobState, Marker};
+use crate::search::derived::scheduler::{ChunkWork, rebuild_chunk_set};
+use crate::search::derived::{Job, JobCause, JobKind, JobState, Marker};
 use crate::state::AppState;
 #[cfg(test)]
 use crate::tools::authorize_only;
@@ -21,8 +22,7 @@ const LIST_DESCRIPTION: &str = "List the rebuild jobs of derived data (search en
 
 /// Must equal the `#[tool]` description in `mcp::server`, a literal there.
 #[cfg(test)]
-const RECALCULATE_DESCRIPTION: &str =
-    "Rebuild the search entries of one file now, without waiting for the settle delay.";
+const RECALCULATE_DESCRIPTION: &str = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks').";
 
 /// Jobs per answer (FR-NEW-010).
 const PAGE: usize = 100;
@@ -53,7 +53,15 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
         ToolSchema::new("fs.recalculate", RECALCULATE_DESCRIPTION)
             .req_str("mount_id", "Project/volume id the operation targets.")
             .req_str("path", "Absolute POSIX path of the file to rebuild.")
-            .req_str("kind", "What to rebuild; only 'search_index' today.")
+            .req_str(
+                "kind",
+                "What to rebuild: 'search_index' (the search entries) or 'chunks' (one chunk set).",
+            )
+            .opt_str(
+                "set_id",
+                "",
+                "For kind 'chunks': the set to rebuild; empty means the default set.",
+            )
             .read_only(false)
             .destructive(false)
             .idempotent(false)
@@ -65,6 +73,7 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
                 &a.str("mount_id")?,
                 &a.str("path")?,
                 &a.str("kind")?,
+                &a.str_or("set_id", ""),
             )
             .await
         }),
@@ -209,24 +218,24 @@ pub(crate) async fn list_derived_jobs(
     Ok(v)
 }
 
-/// `fs.recalculate` (FR-NEW-008, FR-NEW-009): rebuild the search entries of one
-/// file now. Every refusal comes before any change, in the contract order:
-/// project absent or deleted, not a member, search off, kind, path absent,
-/// path is a folder, indexing off (design 5.2), so a refused request leaves the
-/// waiting rebuild as it was. Cost: three lookups (membership, node, mode),
-/// then the scheduler's few row writes.
+/// `fs.recalculate` (FR-NEW-008, FR-NEW-009, SPEC-0101 FR-NEW-019): rebuild one
+/// derived datum of one file now. Every refusal comes before any change, in the
+/// contract order: project absent or deleted, not a member, kind, path absent,
+/// path is a folder; then for `search_index`: `set_id` given, search off,
+/// indexing off (design 5.2); for `chunks`: set unknown, no default set, no
+/// text. So a refused request leaves the waiting rebuild as it was. `chunks`
+/// works with search off and with a project that does not index. Cost: three
+/// lookups (membership, node, mode), then the scheduler's few row writes.
 pub(crate) async fn recalculate(
     state: &AppState,
     person: &str,
     mount_id: &str,
     path: &str,
     kind: &str,
+    set_id: &str,
 ) -> Result<Value> {
     state.authorize(mount_id, person).await?;
-    let not_enabled =
-        || ToolError::not_supported("search is not enabled; set search.enabled: true in config");
-    let search = state.search.as_ref().ok_or_else(not_enabled)?;
-    let _kind: JobKind = kind.parse()?;
+    let kind: JobKind = kind.parse()?;
     let path = state.safety.normalize_path(path)?;
     let client = state.stores.client(mount_id).await?;
     // The root has no node of its own, yet it is a folder.
@@ -236,6 +245,24 @@ pub(crate) async fn recalculate(
     if path == "/" || client.is_dir(&path).await? {
         return Err(ToolError::invalid_argument("path must be a file"));
     }
+    match kind {
+        JobKind::SearchIndex => recalculate_search_index(state, mount_id, &path, set_id).await,
+        JobKind::Chunks => recalculate_chunks(state, &client, mount_id, &path, set_id).await,
+    }
+}
+
+async fn recalculate_search_index(
+    state: &AppState,
+    mount_id: &str,
+    path: &str,
+    set_id: &str,
+) -> Result<Value> {
+    if !set_id.is_empty() {
+        return Err(ToolError::invalid_argument("set_id applies to kind 'chunks' only"));
+    }
+    let search = state.search.as_ref().ok_or_else(|| {
+        ToolError::not_supported("search is not enabled; set search.enabled: true in config")
+    })?;
     if !state.admin.get_index_mode(mount_id).await?.is_active() {
         return Err(ToolError::not_supported(format!(
             "search indexing is not active for project {mount_id}"
@@ -245,5 +272,57 @@ pub(crate) async fn recalculate(
     let scheduler = search
         .scheduler()
         .ok_or_else(|| ToolError::internal("the rebuild scheduler is not running"))?;
-    Ok(scheduler.recalculate(mount_id, &path).await)
+    Ok(scheduler.recalculate(mount_id, path).await)
+}
+
+/// The kind `chunks`: the set is resolved and the text read now, so the refusals
+/// precede any job; the scheduler then cuts it at once. With search off (no
+/// scheduler) the same work runs on a task of its own, its job unrecorded and so
+/// not listed, since `fs.list_derived_jobs` reads the scheduler.
+async fn recalculate_chunks(
+    state: &AppState,
+    client: &crate::storage::volume::VolumeClient,
+    mount_id: &str,
+    path: &str,
+    set_id: &str,
+) -> Result<Value> {
+    let store = client.meta.chunk_store();
+    let set = match (&store, set_id.is_empty()) {
+        (Some(store), true) => store
+            .default_set(path)
+            .await?
+            .ok_or_else(|| ToolError::not_found("the file has no default chunk set"))?,
+        (Some(store), false) => store
+            .get_set(set_id)
+            .await?
+            .filter(|s| s.path == path)
+            .ok_or_else(|| ToolError::not_found(format!("chunk set not found: {set_id}")))?,
+        (None, true) => return Err(ToolError::not_found("the file has no default chunk set")),
+        (None, false) => {
+            return Err(ToolError::not_found(format!("chunk set not found: {set_id}")));
+        }
+    };
+    let text = crate::chunking::service::source_text(state, client, mount_id, path).await?;
+    let sha = client.meta.get(path).await?.and_then(|n| n.sha256).unwrap_or_default();
+    let indexes = state.search.is_some() && state.admin.get_index_mode(mount_id).await?.is_active();
+    let work =
+        ChunkWork { set_id: set.set_id.clone(), sha, text, reindex: set.is_default && indexes };
+    if let Some(scheduler) = state.search.as_ref().and_then(|s| s.scheduler()) {
+        return Ok(scheduler.recalculate_chunks(mount_id, path, work).await);
+    }
+    let mut job = Job::new_waiting(mount_id, path, JobKind::Chunks, JobCause::Manual);
+    job.state = JobState::Running;
+    job.set_id = Some(set.set_id);
+    let answer = job.to_json(None);
+    let (stores, defaults) = (state.stores.clone(), state.config.search.chunking());
+    let (backend, project, path) = (state.search.clone(), mount_id.to_string(), path.to_string());
+    tokio::spawn(async move {
+        let engine = backend.as_deref();
+        if let Err(e) =
+            rebuild_chunk_set(&stores, engine, &project, &path, &work, defaults, &|| true).await
+        {
+            tracing::warn!(project, path, error = %e, "rebuild of a chunk set failed");
+        }
+    });
+    Ok(answer)
 }

@@ -17,10 +17,9 @@ use std::sync::Arc;
 #[cfg(feature = "postgres")]
 pub mod bm25_pg;
 pub mod bm25_sqlite;
-pub mod chunker;
 pub mod derived;
 #[cfg(test)]
-mod derived_e2e;
+pub(crate) mod derived_e2e;
 #[cfg(test)]
 pub mod e2e;
 #[cfg(feature = "rag")]
@@ -41,6 +40,71 @@ pub struct SearchResult {
     pub score: f32,
     pub chunk: String,
     pub rank: usize,
+    /// The stored `chunk_idx` of the entry: the chunk number of the file's
+    /// default set for an entry built from it (SPEC-0101 DEC-010).
+    pub chunk_idx: u32,
+}
+
+/// One search entry to store: a chunk of the file's default set (SPEC-0101
+/// DEC-009). Engines never cut text: they store what they are given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedChunk {
+    /// The chunk number, 1 based, stored in `chunk_idx`.
+    pub number: u32,
+    /// The indexed text: the header line, a newline, then the chunk text.
+    pub text: String,
+}
+
+impl IndexedChunk {
+    /// The entry of one chunk (DEC-010): `<title>[ > <heading path titles
+    /// joined by " > ">]` on its own line, then the chunk text, so a word of a
+    /// heading or of the title finds the chunk.
+    pub fn from_chunk(c: &crate::chunking::Chunk) -> Self {
+        let mut header = c.document_title.clone();
+        for title in &c.heading_path {
+            header.push_str(" > ");
+            header.push_str(title);
+        }
+        Self { number: c.number, text: format!("{header}\n{}", c.text) }
+    }
+}
+
+/// The entries of `text` as the default structural settings cut it, for the
+/// engine unit tests that used to hand a whole text to the old `index_path`.
+#[cfg(test)]
+pub(crate) fn test_chunks(path: &str, text: &str) -> Vec<IndexedChunk> {
+    use crate::chunking::service::{Requested, Strategy, title};
+    let req = Requested { strategy: Strategy::Structural, settings: Vec::new() };
+    let d = crate::chunking::ChunkDefaults::default();
+    crate::chunking::cut(text, &title(path), &req, &d)
+        .chunks
+        .iter()
+        .map(IndexedChunk::from_chunk)
+        .collect()
+}
+
+/// Entries numbered from 1 holding exactly `texts`, for the tests that need
+/// fixed entries (a failing insert, a counted embedding call).
+#[cfg(test)]
+pub(crate) fn entries(texts: &[&str]) -> Vec<IndexedChunk> {
+    texts
+        .iter()
+        .zip(1..)
+        .map(|(t, number)| IndexedChunk { number, text: (*t).to_string() })
+        .collect()
+}
+
+/// Indexes `text` cut by [`test_chunks`], the guard accepting: the test
+/// stand in of the removed `index_path`. Returns the number of entries stored.
+#[cfg(test)]
+pub(crate) async fn index_text<B: SearchBackend + ?Sized>(
+    b: &B,
+    volume_id: &str,
+    path: &str,
+    text: &str,
+) -> Result<usize> {
+    let chunks = test_chunks(path, text);
+    Ok(b.index_chunks_checked(volume_id, path, &chunks, &|| true).await?.unwrap_or(0))
 }
 
 /// Per-volume index statistics, as reported by `search.status`.
@@ -63,36 +127,20 @@ pub struct IndexStats {
 /// the factory function, not by a wrapper type, so the trait stays flat.
 #[async_trait]
 pub trait SearchBackend: Send + Sync {
-    /// Index the given text under `(volume_id, path)`, splitting into chunks.
-    /// Idempotent: existing chunks for the path are deleted before inserting.
-    /// Returns the number of chunks inserted.
-    async fn index_path(
+    /// Replaces the entries of `(volume_id, path)` by `chunks`, one entry per
+    /// chunk: the text in the engine's text column, the number in `chunk_idx`.
+    /// `still_current` runs after any embedding and right before the commit.
+    /// When it returns false nothing is stored, the previous entries of the
+    /// path stay as they were, and the result is `Ok(None)`. An error before
+    /// the commit also leaves them untouched. Otherwise the result is the
+    /// number of entries stored.
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize>;
-
-    /// Like `index_path`, but `still_current` runs after the chunking and the
-    /// embedding and right before the commit. When it returns false nothing is
-    /// stored, the previous entries of the path stay as they were, and the result
-    /// is `Ok(None)`. An error before the commit also leaves them untouched.
-    ///
-    /// The provided default ignores the guard: `index_path` means "always current".
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
-    ) -> Result<Option<usize>> {
-        let _ = still_current;
-        self.index_path(volume_id, path, text, chunk_size, chunk_overlap).await.map(Some)
-    }
+    ) -> Result<Option<usize>>;
 
     /// Remove all indexed chunks for `path` under `volume_id`.
     /// Returns the number of chunks deleted.
@@ -154,37 +202,23 @@ impl ScheduledBackend {
         store: derived::JobStore,
         stores: Arc<crate::storage::StoreManager>,
         delay_secs: u64,
+        defaults: crate::chunking::ChunkDefaults,
     ) -> Self {
-        let scheduler = derived::Scheduler::new(inner.clone(), store, stores, delay_secs);
+        let scheduler = derived::Scheduler::new(inner.clone(), store, stores, delay_secs, defaults);
         Self { inner, scheduler }
     }
 }
 
 #[async_trait]
 impl SearchBackend for ScheduledBackend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        self.inner.index_path(volume_id, path, text, chunk_size, chunk_overlap).await
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
-        self.inner
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
-            .await
+        self.inner.index_chunks_checked(volume_id, path, chunks, still_current).await
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -366,42 +400,22 @@ struct CombinedBackend {
 #[cfg(feature = "rag")]
 #[async_trait]
 impl SearchBackend for CombinedBackend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        let stored = self
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
-            .await?;
-        Ok(stored.unwrap_or(0))
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
         // The vector side goes first because embedding is what can fail: an error
         // or a refusal there happens before BM25 is touched, so every engine keeps
-        // the old entries. The bm25 chunk count stays the authoritative one.
-        let Some(_) = self
-            .vector
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
-            .await?
+        // the old entries. The bm25 entry count stays the authoritative one.
+        let Some(_) =
+            self.vector.index_chunks_checked(volume_id, path, chunks, still_current).await?
         else {
             return Ok(None);
         };
-        self.bm25
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
-            .await
+        self.bm25.index_chunks_checked(volume_id, path, chunks, still_current).await
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -461,9 +475,16 @@ mod guarded_tests {
     async fn guarded_refusal_keeps_old_entries_tantivy() {
         let dir = tempfile::tempdir().unwrap();
         let b = bm25_sqlite::TantivyBm25Backend::new(dir.path().to_str().unwrap());
-        b.index_path("v", "/a.md", "alpha beta", 1000, 100).await.unwrap();
+        crate::search::index_text(&b, "v", "/a.md", "alpha beta").await.unwrap();
 
-        let r = b.index_path_checked("v", "/a.md", "gamma delta", 1000, 100, &|| false).await;
+        let r = b
+            .index_chunks_checked(
+                "v",
+                "/a.md",
+                &crate::search::test_chunks("/a.md", "gamma delta"),
+                &|| false,
+            )
+            .await;
         assert!(matches!(r, Ok(None)), "a refused guard must answer Ok(None), got {r:?}");
         let alpha = b.query_bm25("v", "alpha", 10).await.unwrap();
         assert_eq!(alpha.len(), 1);
@@ -476,9 +497,16 @@ mod guarded_tests {
     async fn guarded_acceptance_replaces_entries_tantivy() {
         let dir = tempfile::tempdir().unwrap();
         let b = bm25_sqlite::TantivyBm25Backend::new(dir.path().to_str().unwrap());
-        b.index_path("v", "/a.md", "alpha beta", 1000, 100).await.unwrap();
+        crate::search::index_text(&b, "v", "/a.md", "alpha beta").await.unwrap();
 
-        let r = b.index_path_checked("v", "/a.md", "gamma delta", 1000, 100, &|| true).await;
+        let r = b
+            .index_chunks_checked(
+                "v",
+                "/a.md",
+                &crate::search::test_chunks("/a.md", "gamma delta"),
+                &|| true,
+            )
+            .await;
         assert!(matches!(r, Ok(Some(1))), "got {r:?}");
         assert!(b.query_bm25("v", "alpha", 10).await.unwrap().is_empty());
         assert_eq!(b.query_bm25("v", "gamma", 10).await.unwrap().len(), 1);
@@ -532,7 +560,7 @@ mod guarded_tests {
             let dir = tempfile::tempdir().unwrap();
             let up = endpoint(true).await;
             let c = combined(dir.path(), up);
-            c.index_path("v", "/a.md", "alpha", 1000, 100).await.unwrap();
+            crate::search::index_text(&c, "v", "/a.md", "alpha").await.unwrap();
             // The endpoint is stopped: rebuild the combined engine would not share
             // Tantivy handles, so swap only the vector half to a dead endpoint.
             let down = endpoint(false).await;
@@ -541,7 +569,14 @@ mod guarded_tests {
                 vector: combined(dir.path(), down).vector,
                 mode: "both".into(),
             };
-            let r = c2.index_path_checked("v", "/a.md", "gamma", 1000, 100, &|| true).await;
+            let r = c2
+                .index_chunks_checked(
+                    "v",
+                    "/a.md",
+                    &crate::search::test_chunks("/a.md", "gamma"),
+                    &|| true,
+                )
+                .await;
             assert!(r.is_err(), "an unreachable endpoint must fail the update");
             let alpha = c2.query_bm25("v", "alpha", 10).await.unwrap();
             assert_eq!(alpha.len(), 1);
@@ -555,15 +590,22 @@ mod guarded_tests {
             let dir = tempfile::tempdir().unwrap();
             let up = endpoint(true).await;
             let c = combined(dir.path(), up);
-            c.index_path("v", "/a.md", "alpha", 1000, 100).await.unwrap();
+            crate::search::index_text(&c, "v", "/a.md", "alpha").await.unwrap();
 
-            let r = c.index_path_checked("v", "/a.md", "gamma", 1000, 100, &|| false).await;
+            let r = c
+                .index_chunks_checked(
+                    "v",
+                    "/a.md",
+                    &crate::search::test_chunks("/a.md", "gamma"),
+                    &|| false,
+                )
+                .await;
             assert!(matches!(r, Ok(None)), "got {r:?}");
             assert_eq!(c.query_bm25("v", "alpha", 10).await.unwrap().len(), 1);
             assert!(c.query_bm25("v", "gamma", 10).await.unwrap().is_empty());
             let v = c.query_vector("v", "alpha", 10).await.unwrap();
             assert_eq!(v.len(), 1);
-            assert_eq!(v[0].chunk, "alpha", "the vector side keeps the old chunk");
+            assert_eq!(v[0].chunk, "a\nalpha", "the vector side keeps the old entry");
         }
     }
 }

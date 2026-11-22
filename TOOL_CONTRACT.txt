@@ -108,6 +108,11 @@ fs.count_lines
   params: mount_id:string, path:string
   required: ['mount_id', 'path']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.create_chunk_set
+  desc: Create a chunk set of one file with the strategy fixed or structural and optional settings, or return the equal set the file already holds; a file holds at most 5 chunk sets.
+  params: mount_id:string, path:string, strategy:string, settings:object={}
+  required: ['mount_id', 'path', 'strategy']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 fs.create_empty
   desc: Create an empty file (touch).
   params: mount_id:string, path:string, exist_ok:boolean=false
@@ -118,6 +123,11 @@ fs.delete
   params: mount_id:string, path:string, recursive:boolean=false, trash:boolean=true
   required: ['mount_id', 'path']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+fs.delete_chunk_set
+  desc: Delete one chunk set of a file and its chunks; the default chunk set cannot be deleted.
+  params: mount_id:string, path:string, set_id:string
+  required: ['mount_id', 'path', 'set_id']
+  annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 fs.documentize
   desc: Generate the Markdown companion of a stored document.
   params: mount_id:string, path:string, overwrite:boolean=false
@@ -157,6 +167,11 @@ fs.find_references
   desc: Find identifier references (language-aware).
   params: mount_id:string, name:string, root:string="/"
   required: ['mount_id', 'name']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.get_chunk
+  desc: Read one chunk of a chunk set of a file in full, with up to 20 chunks before and after it, in order of number.
+  params: mount_id:string, path:string, set_id:string, number:integer, before:integer=0, after:integer=0
+  required: ['mount_id', 'path', 'set_id', 'number']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.get_document_view
   desc: Get a converted document's whole text with an image line at each image and each table in the chosen table mode.
@@ -207,6 +222,16 @@ fs.list_allowed_roots
   desc: List the volume roots the caller can access.
   params: mount_id:string
   required: ['mount_id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.list_chunk_sets
+  desc: List the chunk sets of one file: id, strategy, settings, whether it is the default set, chunk and token counts, state (current or out_of_date) and build time.
+  params: mount_id:string, path:string
+  required: ['mount_id', 'path']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.list_chunks
+  desc: List the chunks of one chunk set of a file by number, 100 per page, each with its unit, heading path, pages, token count, figures and a preview of its first 200 characters.
+  params: mount_id:string, path:string, set_id:string, marker:string=""
+  required: ['mount_id', 'path', 'set_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.list_derived_jobs
   desc: List the rebuild jobs of derived data (search entries) of a project or of one file: waiting, running and the last finished one per file.
@@ -269,8 +294,8 @@ fs.read_section
   required: ['mount_id', 'path', 'anchor_line']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.recalculate
-  desc: Rebuild the search entries of one file now, without waiting for the settle delay.
-  params: mount_id:string, path:string, kind:string
+  desc: Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks').
+  params: mount_id:string, path:string, kind:string, set_id:string=""
   required: ['mount_id', 'path', 'kind']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 fs.search_replace
@@ -673,7 +698,7 @@ search.delete
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 search.index
   desc: Index a file or directory into the search engine for this volume.
-  params: mount_id:string, path:string, chunk_overlap:integer=100, chunk_size:integer=1000, recursive:boolean=false
+  params: mount_id:string, path:string, recursive:boolean=false
   required: ['mount_id', 'path']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 search.query
@@ -732,8 +757,13 @@ fs.move: {"source": "/copy.txt", "destination": "/moved.txt"}
 fs.delete: {"path": "/moved.txt", "trashed": true, "trash_path": "/.mcp_trash/1785863086054__moved.txt"}
 fs.mkdir: {"path": "/src", "created": true}
 fs.list_allowed_roots: {"person": "admin@example.com", "roots": [{"mount_id": "parity-probe", "root": "/", "owner": "admin@example.com"}]}
+fs.list_chunk_sets: {"sets": [{"set_id": "set-1a2b3c4d", "strategy": "structural", "settings": {"heading_cut_depth": 2, "list_max_items": 40, "max_tokens": 2048}, "default": true, "chunk_count": 12, "token_count": 9840, "state": "current", "built_at": "2026-11-20T10:00:00Z"}]}
+fs.list_chunks: {"chunks": [{"number": 1, "unit": 1, "heading_path": ["Guide", "Install"], "page_start": null, "page_end": null, "token_count": 812, "figures": [], "document_title": "guide", "preview": "Install the server with ..."}], "marker": "WyJzZXQtMWEyYjNjNGQiLDEwMF0"}
+fs.get_chunk: {"chunks": [{"number": 5, "unit": 4, "heading_path": ["Guide", "Usage"], "page_start": 3, "page_end": 4, "token_count": 640, "figures": ["image-2"], "document_title": "guide", "text": "..."}]}
+fs.create_chunk_set: {"set_id": "set-5e6f7a8b", "strategy": "fixed", "settings": {"overlap_tokens": 200, "size_tokens": 1000}, "default": false, "chunk_count": 4, "token_count": 3600, "state": "current", "built_at": "2026-11-20T10:05:00Z"}
+fs.delete_chunk_set: {"deleted": true}
 fs.list_derived_jobs: {"jobs": [{"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "waiting", "cause": "change", "created_at": "2026-11-20T10:01:10Z", "seconds_left": 12}, {"job_id": "<uuid>", "path": "/a.md", "kind": "search_index", "state": "failed", "cause": "change", "created_at": "2026-11-20T10:00:00Z", "ended_at": "2026-11-20T10:00:31Z", "reason": "embedding service unreachable"}]}
-fs.recalculate: {"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "running", "cause": "manual", "created_at": "2026-11-20T10:01:10Z"}
+fs.recalculate: {"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "running", "cause": "manual", "created_at": "2026-11-20T10:01:10Z"} (kind "chunks" adds "set_id": "set-1a2b3c4d")
 fs.audit_log: {"entries": [{"timestamp": "<volatile>", "op": "edit", "path": "/a.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "write", "path": "/dup.txt", "detail": "11 bytes"}, {"timestamp": "<volatile>", "op": "edit", "path": "/dup.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "append", "path
 admin.list_projects: {"projects": [{"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none", "is_owner": true}]}
 admin.list_all_projects: {"projects": [{"project_id": "docling-scripts", "owner": "seb.morand@gmail.com", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "fsa", "owner": "user", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none"}]}

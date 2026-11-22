@@ -17,11 +17,17 @@ CREATE TABLE IF NOT EXISTS "doc_images" ("volume_id" TEXT NOT NULL, "set_id" TEX
 
 CREATE TABLE IF NOT EXISTS "doc_tables" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "caption" TEXT NOT NULL, "row_count" BIGINT NOT NULL, "col_count" BIGINT NOT NULL, "quality" TEXT NOT NULL, "cells" TEXT NOT NULL, "line_start" BIGINT NOT NULL, "line_count" BIGINT NOT NULL, PRIMARY KEY ("volume_id", "set_id", "seq"))
 
+CREATE TABLE IF NOT EXISTS "chunk_sets" ("volume_id" TEXT NOT NULL, "path" TEXT NOT NULL, "request_key" TEXT NOT NULL, "set_id" TEXT NOT NULL, "strategy" TEXT NOT NULL, "settings" TEXT NOT NULL, "requested_strategy" TEXT NOT NULL, "requested_settings" TEXT NOT NULL, "is_default" BIGINT NOT NULL DEFAULT 0, "fallback_from" TEXT, "chunk_count" BIGINT NOT NULL, "token_count" BIGINT NOT NULL, "source_sha" TEXT NOT NULL, "built_at" TEXT NOT NULL, PRIMARY KEY ("volume_id", "path", "request_key"))
+
+CREATE TABLE IF NOT EXISTS "chunks" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "number" BIGINT NOT NULL, "unit" BIGINT NOT NULL, "text" TEXT NOT NULL, "heading_path" TEXT NOT NULL, "page_start" BIGINT, "page_end" BIGINT, "token_count" BIGINT NOT NULL, "figures" TEXT NOT NULL, "document_title" TEXT NOT NULL, PRIMARY KEY ("volume_id", "set_id", "number"))
+
 CREATE INDEX IF NOT EXISTS "idx_nodes_parent" ON "nodes" ("volume_id", "parent")
 
 CREATE INDEX IF NOT EXISTS "idx_trash_entries_deleted_at" ON "trash_entries" ("volume_id", "deleted_at")
 
 CREATE INDEX IF NOT EXISTS "idx_doc_artifact_sets_path" ON "doc_artifact_sets" ("volume_id", "path")
+
+CREATE INDEX IF NOT EXISTS "idx_chunk_sets_id" ON "chunk_sets" ("volume_id", "set_id")
 
 -- store: admin
 CREATE TABLE IF NOT EXISTS "project" ("id" TEXT NOT NULL, "owner" TEXT NOT NULL, "created_at" TEXT NOT NULL, PRIMARY KEY ("id"))
@@ -30,7 +36,7 @@ CREATE TABLE IF NOT EXISTS "project_member" ("project_id" TEXT NOT NULL, "person
 
 CREATE TABLE IF NOT EXISTS "project_purge_config" ("project_id" TEXT NOT NULL, "autopurge_enabled" BIGINT NOT NULL DEFAULT 0, "use_internal_purge" BIGINT NOT NULL DEFAULT 0, "file_retention_days" BIGINT, "project_retention_days" BIGINT, PRIMARY KEY ("project_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
 
-CREATE TABLE IF NOT EXISTS "derived_job" ("job_id" TEXT NOT NULL, "project_id" TEXT NOT NULL, "path" TEXT NOT NULL, "kind" TEXT NOT NULL, "state" TEXT NOT NULL, "cause" TEXT NOT NULL, "hidden" BIGINT NOT NULL DEFAULT 0, "created_at" TEXT NOT NULL, "ended_at" TEXT, "reason" TEXT, PRIMARY KEY ("job_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
+CREATE TABLE IF NOT EXISTS "derived_job" ("job_id" TEXT NOT NULL, "project_id" TEXT NOT NULL, "path" TEXT NOT NULL, "kind" TEXT NOT NULL, "state" TEXT NOT NULL, "cause" TEXT NOT NULL, "hidden" BIGINT NOT NULL DEFAULT 0, "created_at" TEXT NOT NULL, "ended_at" TEXT, "reason" TEXT, "set_id" TEXT, PRIMARY KEY ("job_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
 
 CREATE INDEX IF NOT EXISTS "idx_derived_job_key" ON "derived_job" ("project_id", "path", "kind")
 

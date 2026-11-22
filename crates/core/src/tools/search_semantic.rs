@@ -2,7 +2,8 @@
 //! `search.status`.
 //!
 //! These tools are optional: they are only registered when `search.enabled` is
-//! true in the server config. Each tool authorizes via `state.authorize` before
+//! true in the server config. `index` and `query` are the engines both the MCP
+//! surface and the test registry call. Each tool authorizes via `state.authorize` before
 //! any storage access, exactly like the `fs.*` family.
 //!
 //! Mode dispatch:
@@ -10,12 +11,217 @@
 //! - `rag`   : vector KNN, requires `rag` feature and embedding config
 //! - `both`  : BM25 + vector, RRF merge, optional reranking
 
+#[cfg(test)]
 use crate::config::SearchConfig;
-use crate::errors::ToolError;
+use crate::errors::{Result, ToolError};
 use crate::search::fusion::rrf_merge;
-use crate::tools::registry_support::handler;
-use crate::tools::registry_support::{ToolRegistry, ToolSchema};
+use crate::search::{SearchBackend, SearchResult};
+use crate::state::AppState;
+use crate::storage::VolumeClient;
+#[cfg(test)]
+use crate::tools::registry_support::{ToolRegistry, ToolSchema, handler};
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// The search backend, or the refusal of a server whose search is off.
+fn backend(state: &AppState) -> Result<&Arc<dyn SearchBackend>> {
+    state.search.as_ref().ok_or_else(|| {
+        ToolError::not_supported("search is not enabled; set search.enabled: true in config")
+    })
+}
+
+/// `search.index` (SPEC-0101 FR-NEW-024, DEC-011): each text file gets its
+/// default set, built first when it has none or it is `out_of_date`, and its
+/// entries are that set's chunks, through the same code as the rebuild.
+/// `sizes_passed` is true when the caller sent `chunk_size` or
+/// `chunk_overlap`, which are refused. A single path that holds no text is
+/// refused; inside a folder such a file is skipped and counted. Answers the
+/// number of chunks indexed. Cost: per file, one read, the set (one read, or
+/// one linear cut and one transaction) and the engine's replacement.
+pub(crate) async fn index(
+    state: &AppState,
+    person: &str,
+    mount: &str,
+    raw_path: &str,
+    recursive: bool,
+    sizes_passed: bool,
+) -> Result<Value> {
+    state.authorize(mount, person).await?;
+    if sizes_passed {
+        return Err(ToolError::invalid_argument(
+            "chunk_size and chunk_overlap are no longer accepted",
+        ));
+    }
+    let path = state.safety.normalize_path(raw_path)?;
+    let backend = backend(state)?;
+    let client = state.stores.client(mount).await?;
+
+    let paths: Vec<String> = if recursive {
+        let trash_dir = &state.safety.config().trash_dir;
+        crate::core::fs_ops::iter_files(&client, &path, &[])
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(p, _mtime)| p)
+            .filter(|p| !crate::search::indexer::is_trash_path(p, trash_dir))
+            .collect()
+    } else {
+        vec![path.clone()]
+    };
+
+    let mut indexed = 0usize;
+    let mut skipped = 0usize;
+    for file in &paths {
+        match index_one(state, &client, backend, mount, file).await {
+            Ok(n) => indexed += n,
+            Err(_) if recursive => skipped += 1,
+            Err(e) => return Err(unreachable_text(e)),
+        }
+    }
+    Ok(json!({ "indexed": indexed, "skipped": skipped, "path": path }))
+}
+
+/// Indexes one file through its default set; the number of chunks indexed.
+async fn index_one(
+    state: &AppState,
+    client: &VolumeClient,
+    backend: &Arc<dyn SearchBackend>,
+    mount: &str,
+    path: &str,
+) -> Result<usize> {
+    let text = crate::chunking::service::source_text(state, client, mount, path).await?;
+    let d = state.config.search.chunking();
+    let n = crate::search::indexer::index_default_set(
+        &**backend,
+        &*client.meta,
+        mount,
+        path,
+        text,
+        d,
+        false,
+        &|| true,
+    )
+    .await?;
+    Ok(n.unwrap_or(0))
+}
+
+/// The embedding failure texts read as the service being unreachable, the
+/// reason a rebuild job records (SPEC-0100 DEC-019); any other error is kept.
+fn unreachable_text(e: ToolError) -> ToolError {
+    let reason = crate::search::derived::scheduler::failure_reason(&e);
+    if reason == "embedding service unreachable" { ToolError::internal(reason) } else { e }
+}
+
+/// `search.query`: the engine results, each with its chunk number and the
+/// heading path of that chunk (SPEC-0101 DEC-010). Fusion, ranking and the
+/// number of results are unchanged.
+pub(crate) async fn query(
+    state: &AppState,
+    person: &str,
+    mount: &str,
+    query: &str,
+    mode: Option<String>,
+    top_k: usize,
+) -> Result<Value> {
+    state.authorize(mount, person).await?;
+    let mode = mode.unwrap_or_else(|| state.config.search.mode.clone());
+    let backend = backend(state)?;
+
+    if matches!(mode.as_str(), "rag" | "both") {
+        if state.config.search.embedding.endpoint.is_empty() {
+            return Err(ToolError::not_supported(
+                "mode rag/both requires search.embedding.endpoint to be configured",
+            ));
+        }
+        if !backend.supported_modes().contains(&mode.as_str()) {
+            return Err(ToolError::not_supported(format!(
+                "mode '{mode}' is not supported by the current search backend"
+            )));
+        }
+    }
+
+    let (results, mode_used) = match mode.as_str() {
+        "bm25" => (backend.query_bm25(mount, query, top_k).await?, "bm25"),
+        "rag" => (backend.query_vector(mount, query, top_k).await?, "rag"),
+        "both" => {
+            let bm25 = backend.query_bm25(mount, query, top_k).await.unwrap_or_default();
+            let vec = backend.query_vector(mount, query, top_k).await.unwrap_or_default();
+            (rrf_merge(&bm25, &vec), "both")
+        }
+        other => {
+            return Err(ToolError::invalid_argument(format!(
+                "unknown mode '{other}', expected bm25, rag, or both"
+            )));
+        }
+    };
+
+    let warning: Option<&str> = if matches!(mode_used, "bm25" | "both") {
+        match backend.stats(mount).await {
+            Ok(s) if !s.bm25_warm => {
+                Some("BM25 index is not warm; run search.index to populate it")
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let client = state.stores.client(mount).await?;
+    Ok(json!({
+        "results": result_values(&client, &results).await?,
+        "mode_used": mode_used,
+        "warning": warning,
+    }))
+}
+
+/// The results as `search.query` shows them (DEC-010). An entry of a file
+/// with a default set shows the text after its header line, its chunk number
+/// and that chunk's heading path; an entry of a file with none, built before
+/// the upgrade, shows its text unchanged, chunk number 0 and no heading path
+/// (FR-NEW-026). Cost: one set lookup per distinct path, one chunk lookup per
+/// result of such a file, on primary keys.
+async fn result_values(client: &VolumeClient, results: &[SearchResult]) -> Result<Vec<Value>> {
+    let store = client.meta.chunk_store();
+    let mut sets: HashMap<&str, Option<String>> = HashMap::new();
+    let mut out = Vec::with_capacity(results.len());
+    for r in results {
+        let set_id = match sets.get(r.path.as_str()) {
+            Some(id) => id.clone(),
+            None => {
+                let id = match &store {
+                    Some(store) => store.default_set(&r.path).await?.map(|s| s.set_id),
+                    None => None,
+                };
+                sets.insert(&r.path, id.clone());
+                id
+            }
+        };
+        let (chunk, number, heading_path) = match (&store, set_id) {
+            (Some(store), Some(id)) => {
+                let heading = store
+                    .get_chunk_window(&id, r.chunk_idx, r.chunk_idx)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .map(|c| c.heading_path)
+                    .unwrap_or_default();
+                let text = r.chunk.split_once('\n').map_or(r.chunk.as_str(), |(_, t)| t);
+                (text, r.chunk_idx, heading)
+            }
+            _ => (r.chunk.as_str(), 0, Vec::new()),
+        };
+        out.push(json!({
+            "path": r.path,
+            "score": r.score,
+            "chunk": chunk,
+            "rank": r.rank,
+            "chunk_number": number,
+            "heading_path": heading_path,
+        }));
+    }
+    Ok(out)
+}
 
 /// Register the four `search.*` tools.
 #[cfg(test)]
@@ -28,67 +234,16 @@ pub(crate) fn register(reg: &mut ToolRegistry, _config: &SearchConfig) {
         .req_str("mount_id", "Project/volume id the operation targets.")
         .req_str("path", "Absolute POSIX path to index (file or directory).")
         .opt_bool("recursive", false, "Recurse into subdirectories when path is a directory.")
-        .opt_int("chunk_size", 1000, "Maximum character size of each indexed chunk.")
-        .opt_int("chunk_overlap", 100, "Character overlap between consecutive chunks.")
         .read_only(false)
         .destructive(false)
         .idempotent(true)
         .open_world(false),
         handler(|ctx, a| async move {
+            let sizes = a.raw("chunk_size").is_some() || a.raw("chunk_overlap").is_some();
             let mount = a.str("mount_id")?;
-            ctx.state.authorize(&mount, &ctx.person).await?;
-
-            let path = ctx.state.safety.normalize_path(&a.str("path")?)?;
+            let path = a.str("path")?;
             let recursive = a.bool_or("recursive", false);
-            let chunk_size = a.int_or("chunk_size", 1000) as usize;
-            let chunk_overlap = a.int_or("chunk_overlap", 100) as usize;
-
-            let backend = ctx.state.search.as_ref().ok_or_else(|| {
-                ToolError::not_supported(
-                    "search is not enabled; set search.enabled: true in config",
-                )
-            })?;
-
-            let client = ctx.state.stores.client(&mount).await?;
-
-            let mut indexed = 0usize;
-            let mut skipped = 0usize;
-
-            // Collect paths to index.
-            let paths_to_index: Vec<String> = if recursive {
-                crate::core::fs_ops::iter_files(&client, &path, &[])
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(p, _mtime)| p)
-                    .collect()
-            } else {
-                vec![path.clone()]
-            };
-
-            for file_path in &paths_to_index {
-                // Try to read text content; skip binary or unreadable files.
-                match client.read_text(file_path).await {
-                    Ok(text) => {
-                        match backend
-                            .index_path(&mount, file_path, &text, chunk_size, chunk_overlap)
-                            .await
-                        {
-                            Ok(n) => indexed += n,
-                            Err(_) => skipped += 1,
-                        }
-                    }
-                    Err(_) => {
-                        skipped += 1;
-                    }
-                }
-            }
-
-            Ok(json!({
-                "indexed": indexed,
-                "skipped": skipped,
-                "path": path,
-            }))
+            index(&ctx.state, &ctx.person, &mount, &path, recursive, sizes).await
         }),
     );
 
@@ -107,87 +262,10 @@ pub(crate) fn register(reg: &mut ToolRegistry, _config: &SearchConfig) {
         .open_world(false),
         handler(|ctx, a| async move {
             let mount = a.str("mount_id")?;
-            ctx.state.authorize(&mount, &ctx.person).await?;
-
-            let query = a.str("query")?;
+            let q = a.str("query")?;
             let top_k = a.int_or("top_k", 10) as usize;
             let _rerank = a.bool_or("rerank", true);
-
-            // Resolve mode: explicit param beats the config default.
-            let config_mode = &ctx.state.config.search.mode;
-            let mode = a.opt_str("mode").unwrap_or_else(|| config_mode.clone());
-
-            let backend = ctx.state.search.as_ref().ok_or_else(|| {
-                ToolError::not_supported(
-                    "search is not enabled; set search.enabled: true in config",
-                )
-            })?;
-
-            // Validate that the requested mode is supported.
-            if matches!(mode.as_str(), "rag" | "both") {
-                if ctx.state.config.search.embedding.endpoint.is_empty() {
-                    return Err(ToolError::not_supported(
-                        "mode rag/both requires search.embedding.endpoint to be configured",
-                    ));
-                }
-                if !backend.supported_modes().contains(&mode.as_str()) {
-                    return Err(ToolError::not_supported(format!(
-                        "mode '{mode}' is not supported by the current search backend"
-                    )));
-                }
-            }
-
-            let (results, mode_used) = match mode.as_str() {
-                "bm25" => {
-                    let r = backend.query_bm25(&mount, &query, top_k).await?;
-                    (r, "bm25".to_string())
-                }
-                "rag" => {
-                    let r = backend.query_vector(&mount, &query, top_k).await?;
-                    (r, "rag".to_string())
-                }
-                "both" => {
-                    let bm25 = backend.query_bm25(&mount, &query, top_k).await.unwrap_or_default();
-                    let vec = backend.query_vector(&mount, &query, top_k).await.unwrap_or_default();
-                    let merged = rrf_merge(&bm25, &vec);
-                    (merged, "both".to_string())
-                }
-                other => {
-                    return Err(ToolError::invalid_argument(format!(
-                        "unknown mode '{other}', expected bm25, rag, or both"
-                    )));
-                }
-            };
-
-            // Check whether BM25 was warm, to add a warning.
-            let warning: Option<&str> = if matches!(mode_used.as_str(), "bm25" | "both") {
-                match backend.stats(&mount).await {
-                    Ok(s) if !s.bm25_warm => {
-                        Some("BM25 index is not warm; run search.index to populate it")
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-
-            let result_values: Vec<Value> = results
-                .iter()
-                .map(|r| {
-                    json!({
-                        "path": r.path,
-                        "score": r.score,
-                        "chunk": r.chunk,
-                        "rank": r.rank,
-                    })
-                })
-                .collect();
-
-            Ok(json!({
-                "results": result_values,
-                "mode_used": mode_used,
-                "warning": warning,
-            }))
+            query(&ctx.state, &ctx.person, &mount, &q, a.opt_str("mode"), top_k).await
         }),
     );
 
@@ -250,11 +328,8 @@ pub(crate) fn register(reg: &mut ToolRegistry, _config: &SearchConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SearchConfig;
     use crate::search::bm25_sqlite::TantivyBm25Backend;
-    use crate::tools::registry_support::ToolRegistry;
     use crate::tools::testkit::MOUNT;
-    use std::sync::Arc;
 
     fn reg() -> ToolRegistry {
         let mut r = ToolRegistry::new();
@@ -291,14 +366,9 @@ mod tests {
         h.seed("/doc.md", "the quick brown fox jumps over the lazy dog").await;
 
         // Index through the backend directly.
-        let n = h
-            .state
-            .search
-            .as_ref()
-            .unwrap()
-            .index_path(MOUNT, "/doc.md", "the quick brown fox jumps over the lazy dog", 200, 0)
-            .await
-            .unwrap();
+        let backend = h.state.search.as_ref().unwrap();
+        let text = "the quick brown fox jumps over the lazy dog";
+        let n = crate::search::index_text(&**backend, MOUNT, "/doc.md", text).await.unwrap();
         assert!(n > 0, "expected at least one chunk indexed");
 
         let results = h.state.search.as_ref().unwrap().query_bm25(MOUNT, "fox", 10).await.unwrap();
@@ -309,11 +379,8 @@ mod tests {
     #[tokio::test]
     async fn bm25_delete_removes_doc() {
         let (h, _dir) = search_harness().await;
-        h.state
-            .search
-            .as_ref()
-            .unwrap()
-            .index_path(MOUNT, "/a.md", "hello world search test", 200, 0)
+        let backend = h.state.search.as_ref().unwrap();
+        crate::search::index_text(&**backend, MOUNT, "/a.md", "hello world search test")
             .await
             .unwrap();
         h.state.search.as_ref().unwrap().delete_path(MOUNT, "/a.md").await.unwrap();

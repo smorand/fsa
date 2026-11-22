@@ -27,7 +27,6 @@ use serde_json::Value;
 
 use crate::core::fs_ops;
 use crate::errors::ToolError;
-use crate::search::fusion::rrf_merge;
 use crate::search::indexer;
 use crate::state::AppState;
 use crate::storage::VolumeClient;
@@ -1263,8 +1262,79 @@ pub struct RecalculateArgs {
     pub mount_id: String,
     /// Absolute POSIX path of the file to rebuild.
     pub path: String,
-    /// What to rebuild; only 'search_index' today.
+    /// What to rebuild: 'search_index' (the search entries) or 'chunks' (one chunk set).
     pub kind: String,
+    /// For kind 'chunks': the set to rebuild; empty means the default set.
+    #[serde(default)]
+    pub set_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListChunkSetsArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListChunksArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+    /// Id of the chunk set, as fs.list_chunk_sets returns it.
+    pub set_id: String,
+    /// The marker of the previous answer, to read the next page.
+    #[serde(default)]
+    pub marker: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetChunkArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+    /// Id of the chunk set, as fs.list_chunk_sets returns it.
+    pub set_id: String,
+    /// Number of the chunk in the set, from 1.
+    pub number: i64,
+    /// Chunks to add before it, 0 to 20.
+    #[serde(default)]
+    pub before: i64,
+    /// Chunks to add after it, 0 to 20.
+    #[serde(default)]
+    pub after: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateChunkSetArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+    /// Chunking strategy: 'fixed' or 'structural'.
+    pub strategy: String,
+    /// Settings of the strategy: fixed takes size_tokens and overlap_tokens, structural takes heading_cut_depth, max_tokens and list_max_items; omitted settings take the server defaults.
+    #[serde(default)]
+    #[schemars(schema_with = "chunk_settings_schema")]
+    pub settings: serde_json::Map<String, Value>,
+}
+
+/// `{"type": "object", "default": {}}`, the frozen shape of `settings`.
+fn chunk_settings_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "object", "default": {}})
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteChunkSetArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+    /// Id of the chunk set, as fs.list_chunk_sets returns it.
+    pub set_id: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1520,18 +1590,15 @@ pub struct SearchIndexArgs {
     /// Recurse into subdirectories when path is a directory.
     #[serde(default)]
     pub recursive: bool,
-    /// Maximum character size of each indexed chunk.
-    #[serde(default = "def_chunk_size")]
-    pub chunk_size: i64,
-    /// Character overlap between consecutive chunks.
-    #[serde(default = "def_chunk_overlap")]
-    pub chunk_overlap: i64,
-}
-fn def_chunk_size() -> i64 {
-    1000
-}
-fn def_chunk_overlap() -> i64 {
-    100
+    /// No longer accepted (SPEC-0101 DEC-011): kept only so a caller that
+    /// still sends it is answered with the refusal, not a serde error.
+    #[serde(default)]
+    #[schemars(skip)]
+    pub chunk_size: Option<Value>,
+    /// No longer accepted, as `chunk_size`.
+    #[serde(default)]
+    #[schemars(skip)]
+    pub chunk_overlap: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2380,7 +2447,7 @@ impl McpServer {
 
     #[tool(
         name = "fs.recalculate",
-        description = "Rebuild the search entries of one file now, without waiting for the settle delay."
+        description = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks')."
     )]
     pub(crate) async fn fs_recalculate(
         &self,
@@ -2393,9 +2460,106 @@ impl McpServer {
             &a.mount_id,
             &a.path,
             &a.kind,
+            &a.set_id,
         )
         .await;
         to_call_result("fs.recalculate", out)
+    }
+
+    #[tool(
+        name = "fs.list_chunk_sets",
+        description = "List the chunk sets of one file: id, strategy, settings, whether it is the default set, chunk and token counts, state (current or out_of_date) and build time."
+    )]
+    pub(crate) async fn fs_list_chunk_sets(
+        &self,
+        Parameters(a): Parameters<ListChunkSetsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        // The refusal order of FR-NEW-017 lives in the engine, membership first.
+        let out =
+            crate::tools::chunks::list_chunk_sets(&self.state, &self.person, &a.mount_id, &a.path)
+                .await;
+        to_call_result("fs.list_chunk_sets", out)
+    }
+
+    #[tool(
+        name = "fs.list_chunks",
+        description = "List the chunks of one chunk set of a file by number, 100 per page, each with its unit, heading path, pages, token count, figures and a preview of its first 200 characters."
+    )]
+    pub(crate) async fn fs_list_chunks(
+        &self,
+        Parameters(a): Parameters<ListChunksArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::chunks::list_chunks(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.set_id,
+            &a.marker,
+        )
+        .await;
+        to_call_result("fs.list_chunks", out)
+    }
+
+    #[tool(
+        name = "fs.get_chunk",
+        description = "Read one chunk of a chunk set of a file in full, with up to 20 chunks before and after it, in order of number."
+    )]
+    pub(crate) async fn fs_get_chunk(
+        &self,
+        Parameters(a): Parameters<GetChunkArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::chunks::get_chunk(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.set_id,
+            a.number,
+            a.before,
+            a.after,
+        )
+        .await;
+        to_call_result("fs.get_chunk", out)
+    }
+
+    #[tool(
+        name = "fs.create_chunk_set",
+        description = "Create a chunk set of one file with the strategy fixed or structural and optional settings, or return the equal set the file already holds; a file holds at most 5 chunk sets."
+    )]
+    pub(crate) async fn fs_create_chunk_set(
+        &self,
+        Parameters(a): Parameters<CreateChunkSetArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::chunks::create_chunk_set(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.strategy,
+            a.settings,
+        )
+        .await;
+        to_call_result("fs.create_chunk_set", out)
+    }
+
+    #[tool(
+        name = "fs.delete_chunk_set",
+        description = "Delete one chunk set of a file and its chunks; the default chunk set cannot be deleted."
+    )]
+    pub(crate) async fn fs_delete_chunk_set(
+        &self,
+        Parameters(a): Parameters<DeleteChunkSetArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::chunks::delete_chunk_set(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.set_id,
+        )
+        .await;
+        to_call_result("fs.delete_chunk_set", out)
     }
 
     #[tool(
@@ -2964,9 +3128,12 @@ impl McpServer {
 
             let client = self.state.stores.client(&a.project_id).await?;
             let trash_dir = self.state.safety.config().trash_dir.clone();
-            let reindex_started = crate::search::indexer::ProjectIndexer::new(backend)
-                .on_mode_change(&a.project_id, old_mode, new_mode, client, &trash_dir)
-                .await?;
+            let reindex_started = crate::search::indexer::ProjectIndexer::new(
+                backend,
+                self.state.config.search.chunking(),
+            )
+            .on_mode_change(&a.project_id, old_mode, new_mode, client, &trash_dir)
+            .await?;
 
             Ok(serde_json::json!({
                 "project_id": a.project_id,
@@ -3127,59 +3294,15 @@ impl McpServer {
         &self,
         Parameters(a): Parameters<SearchIndexArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let out = async {
-            self.state.authorize(&a.mount_id, &self.person).await?;
-            let path = self.norm(&a.path)?;
-            let chunk_size = a.chunk_size as usize;
-            let chunk_overlap = a.chunk_overlap as usize;
-
-            let backend = self.state.search.as_ref().ok_or_else(|| {
-                ToolError::not_supported(
-                    "search is not enabled; set search.enabled: true in config",
-                )
-            })?;
-
-            let client = self.state.stores.client(&a.mount_id).await?;
-
-            let mut indexed = 0usize;
-            let mut skipped = 0usize;
-
-            let paths_to_index: Vec<String> = if a.recursive {
-                let trash_dir = &self.state.safety.config().trash_dir;
-                fs_ops::iter_files(&client, &path, &[])
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(p, _mtime)| p)
-                    .filter(|p| !crate::search::indexer::is_trash_path(p, trash_dir))
-                    .collect()
-            } else {
-                vec![path.clone()]
-            };
-
-            for file_path in &paths_to_index {
-                match client.read_text(file_path).await {
-                    Ok(text) => {
-                        match backend
-                            .index_path(&a.mount_id, file_path, &text, chunk_size, chunk_overlap)
-                            .await
-                        {
-                            Ok(n) => indexed += n,
-                            Err(_) => skipped += 1,
-                        }
-                    }
-                    Err(_) => {
-                        skipped += 1;
-                    }
-                }
-            }
-
-            Ok(serde_json::json!({
-                "indexed": indexed,
-                "skipped": skipped,
-                "path": path,
-            }))
-        }
+        let sizes = a.chunk_size.is_some() || a.chunk_overlap.is_some();
+        let out = crate::tools::search_semantic::index(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            a.recursive,
+            sizes,
+        )
         .await;
         to_call_result("search.index", out)
     }
@@ -3192,89 +3315,15 @@ impl McpServer {
         &self,
         Parameters(a): Parameters<SearchQueryArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let out = async {
-            self.state.authorize(&a.mount_id, &self.person).await?;
-
-            let top_k = a.top_k as usize;
-            let _rerank = a.rerank;
-
-            let config_mode = &self.state.config.search.mode;
-            let mode = a.mode.clone().unwrap_or_else(|| config_mode.clone());
-
-            let backend = self.state.search.as_ref().ok_or_else(|| {
-                ToolError::not_supported(
-                    "search is not enabled; set search.enabled: true in config",
-                )
-            })?;
-
-            if matches!(mode.as_str(), "rag" | "both") {
-                if self.state.config.search.embedding.endpoint.is_empty() {
-                    return Err(ToolError::not_supported(
-                        "mode rag/both requires search.embedding.endpoint to be configured",
-                    ));
-                }
-                if !backend.supported_modes().contains(&mode.as_str()) {
-                    return Err(ToolError::not_supported(format!(
-                        "mode '{mode}' is not supported by the current search backend"
-                    )));
-                }
-            }
-
-            let (results, mode_used) = match mode.as_str() {
-                "bm25" => {
-                    let r = backend.query_bm25(&a.mount_id, &a.query, top_k).await?;
-                    (r, "bm25".to_string())
-                }
-                "rag" => {
-                    let r = backend.query_vector(&a.mount_id, &a.query, top_k).await?;
-                    (r, "rag".to_string())
-                }
-                "both" => {
-                    let bm25 =
-                        backend.query_bm25(&a.mount_id, &a.query, top_k).await.unwrap_or_default();
-                    let vec = backend
-                        .query_vector(&a.mount_id, &a.query, top_k)
-                        .await
-                        .unwrap_or_default();
-                    let merged = rrf_merge(&bm25, &vec);
-                    (merged, "both".to_string())
-                }
-                other => {
-                    return Err(ToolError::invalid_argument(format!(
-                        "unknown mode '{other}', expected bm25, rag, or both"
-                    )));
-                }
-            };
-
-            let warning: Option<&str> = if matches!(mode_used.as_str(), "bm25" | "both") {
-                match backend.stats(&a.mount_id).await {
-                    Ok(s) if !s.bm25_warm => {
-                        Some("BM25 index is not warm; run search.index to populate it")
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-
-            let result_values: Vec<Value> = results
-                .iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "path": r.path,
-                        "score": r.score,
-                        "chunk": r.chunk,
-                        "rank": r.rank,
-                    })
-                })
-                .collect();
-
-            Ok(serde_json::json!({
-                "results": result_values,
-                "mode_used": mode_used,
-                "warning": warning,
-            }))
-        }
+        let _rerank = a.rerank;
+        let out = crate::tools::search_semantic::query(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.query,
+            a.mode.clone(),
+            a.top_k as usize,
+        )
         .await;
         to_call_result("search.query", out)
     }
@@ -4154,8 +4203,9 @@ mod tests {
         // fs.extract_archive, 38 to 39; SPEC-0019 adds fs.list_tables, 39 to 40, then fs.get_table, 41,
         // then fs.list_images and fs.get_image, 43, then fs.get_document_view, 44;
         // SPEC-0045 adds fs.diff_files, 45; SPEC-0100 adds fs.list_derived_jobs, 46,
-        // and fs.recalculate, 47.
-        assert_eq!(names.len(), 47, "got: {names:?}");
+        // and fs.recalculate, 47; SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and
+        // fs.get_chunk, 50; fs.create_chunk_set and fs.delete_chunk_set, 52.
+        assert_eq!(names.len(), 52, "got: {names:?}");
     }
 
     #[test]
@@ -4180,12 +4230,13 @@ mod tests {
         // git.remote_push_tag: git 52, total 118. SPEC-0053 adds git.remote_delete_tag: git 53, total 119.
         // SPEC-0054 adds git.remote_push_tags: git 54, total 120.
         // SPEC-0100 adds fs.list_derived_jobs: fs 46, total 121; fs.recalculate: fs 47,
-        // total 122.
-        assert_eq!(fs_count, 47, "got: {names:?}");
+        // total 122. SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and fs.get_chunk:
+        // fs 50, total 125; fs.create_chunk_set and fs.delete_chunk_set: fs 52, total 127.
+        assert_eq!(fs_count, 52, "got: {names:?}");
         assert_eq!(admin_count, 17, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 122, "got: {names:?}");
+        assert_eq!(names.len(), 127, "got: {names:?}");
     }
 
     #[test]
@@ -4522,7 +4573,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 118, "the frozen contract covers 118 non-search tools");
+        assert_eq!(checked, 123, "the frozen contract covers 123 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -4543,8 +4594,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 118, "got: {names:?}");
-        assert_eq!(expected.len(), 118, "the golden contract itself must hold 118 names");
+        assert_eq!(names.len(), 123, "got: {names:?}");
+        assert_eq!(expected.len(), 123, "the golden contract itself must hold 123 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

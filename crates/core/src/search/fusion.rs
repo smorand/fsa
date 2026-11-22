@@ -20,32 +20,34 @@ const K: f32 = 60.0;
 pub fn rrf_merge(bm25: &[SearchResult], vector: &[SearchResult]) -> Vec<SearchResult> {
     // Map path -> cumulative RRF score, best chunk from either list.
     let mut scores: HashMap<String, f32> = HashMap::new();
-    let mut best: HashMap<String, (String, f32)> = HashMap::new(); // path -> (chunk, score)
+    let mut best: HashMap<String, (String, f32, u32)> = HashMap::new(); // path -> (chunk, score, chunk_idx)
 
     for (i, r) in bm25.iter().enumerate() {
         let rrf = 1.0 / (K + (i as f32) + 1.0);
         *scores.entry(r.path.clone()).or_default() += rrf;
         best.entry(r.path.clone())
-            .and_modify(|(c, s)| {
+            .and_modify(|(c, s, n)| {
                 if r.score > *s {
                     *c = r.chunk.clone();
                     *s = r.score;
+                    *n = r.chunk_idx;
                 }
             })
-            .or_insert_with(|| (r.chunk.clone(), r.score));
+            .or_insert_with(|| (r.chunk.clone(), r.score, r.chunk_idx));
     }
 
     for (i, r) in vector.iter().enumerate() {
         let rrf = 1.0 / (K + (i as f32) + 1.0);
         *scores.entry(r.path.clone()).or_default() += rrf;
         best.entry(r.path.clone())
-            .and_modify(|(c, s)| {
+            .and_modify(|(c, s, n)| {
                 if r.score > *s {
                     *c = r.chunk.clone();
                     *s = r.score;
+                    *n = r.chunk_idx;
                 }
             })
-            .or_insert_with(|| (r.chunk.clone(), r.score));
+            .or_insert_with(|| (r.chunk.clone(), r.score, r.chunk_idx));
     }
 
     // Sort by fused score descending, then by path for determinism.
@@ -58,8 +60,8 @@ pub fn rrf_merge(bm25: &[SearchResult], vector: &[SearchResult]) -> Vec<SearchRe
         .into_iter()
         .enumerate()
         .map(|(i, (path, fused_score))| {
-            let (chunk, _orig_score) = best.remove(&path).unwrap_or_default();
-            SearchResult { path, score: fused_score, chunk, rank: i + 1 }
+            let (chunk, _orig_score, chunk_idx) = best.remove(&path).unwrap_or_default();
+            SearchResult { path, score: fused_score, chunk, rank: i + 1, chunk_idx }
         })
         .collect()
 }
@@ -69,7 +71,7 @@ mod tests {
     use super::*;
 
     fn r(path: &str, score: f32, chunk: &str, rank: usize) -> SearchResult {
-        SearchResult { path: path.into(), score, chunk: chunk.into(), rank }
+        SearchResult { path: path.into(), score, chunk: chunk.into(), rank, chunk_idx: 1 }
     }
 
     #[test]

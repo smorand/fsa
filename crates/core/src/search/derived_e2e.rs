@@ -13,7 +13,6 @@ use crate::mcp::server::McpServer;
 use crate::safety::SafetyManager;
 use crate::search::SearchBackend;
 use crate::search::derived::{Job, JobCause, JobKind, JobState, JobStore};
-use crate::search::indexer::{AUTO_CHUNK_OVERLAP, AUTO_CHUNK_SIZE};
 use crate::state::AppState;
 use crate::storage::traits::{AdminBackend, IndexMode};
 use rmcp::handler::server::wrapper::Parameters;
@@ -44,21 +43,25 @@ pub(crate) struct Options {
     /// A configured embedding endpoint, which `admin.set_index_mode` demands
     /// for `rag` and `both`. Never called: the engine is the in process stub.
     pub embedding: bool,
+    /// Any other change to the server configuration, applied last.
+    pub config: fn(&mut ServerConfig),
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { search: true, scheduled: true, delay: 30, embedding: false }
+        Self { search: true, scheduled: true, delay: 30, embedding: false, config: |_| {} }
     }
 }
 
-/// The embedding service seen by a rebuild, in process: a rebuild that goes
-/// through the guarded update first waits the service delay, then fails with
-/// the text of `search::embedding::embed` when the service is down, else stores
-/// in Tantivy. Process local rather than an HTTP server, because the default
+/// The embedding service seen by a rebuild, in process: a rebuild (an index
+/// call made while the scheduler runs a job of that path) first waits the
+/// service delay and is recorded; any index call fails with the text of
+/// `search::embedding::embed` when the service is down, else stores in
+/// Tantivy. Other index calls (full index, move, `search.index`) never wait,
+/// as they did when they went through the unguarded `index_path`. Process local rather than an HTTP server, because the default
 /// build has no embedding client (feature `rag`) and real sockets let a paused
-/// clock jump while a request is in flight. Seeding goes through `index_path`
-/// and never waits.
+/// clock jump while a request is in flight. Seeding goes through the inner
+/// engine and never waits.
 pub(crate) struct Stub {
     inner: crate::search::bm25_sqlite::TantivyBm25Backend,
     /// Delays of the next rebuilds, in order; then `delay`.
@@ -70,6 +73,8 @@ pub(crate) struct Stub {
     /// (path, instant) of every rebuild start and end.
     starts: std::sync::Mutex<Vec<(String, tokio::time::Instant)>>,
     ends: std::sync::Mutex<Vec<(String, tokio::time::Instant)>>,
+    /// The scheduler whose running jobs mark an index call as a rebuild.
+    scheduler: std::sync::Mutex<std::sync::Weak<crate::search::derived::Scheduler>>,
 }
 
 impl Stub {
@@ -83,6 +88,22 @@ impl Stub {
             max_running: Default::default(),
             starts: Default::default(),
             ends: Default::default(),
+            scheduler: Default::default(),
+        }
+    }
+    fn watch(&self, scheduler: &Arc<crate::search::derived::Scheduler>) {
+        *self.scheduler.lock().unwrap() = Arc::downgrade(scheduler);
+    }
+    /// True when the scheduler runs a rebuild of `path` right now.
+    async fn rebuilding(&self, volume_id: &str, path: &str) -> bool {
+        let scheduler = self.scheduler.lock().unwrap().upgrade();
+        match scheduler {
+            Some(s) => s
+                .list(volume_id, &|p| p == path)
+                .await
+                .iter()
+                .any(|l| l.job.state == JobState::Running),
+            None => false,
         }
     }
     pub fn set_delay(&self, secs: u64) {
@@ -107,26 +128,21 @@ impl Stub {
 
 #[async_trait::async_trait]
 impl SearchBackend for Stub {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> crate::errors::Result<usize> {
-        self.inner.index_path(volume_id, path, text, chunk_size, chunk_overlap).await
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[crate::search::IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> crate::errors::Result<Option<usize>> {
+        if !self.rebuilding(volume_id, path).await {
+            if self.down.load(Ordering::SeqCst) {
+                return Err(crate::errors::ToolError::internal(
+                    "embedding request failed: error sending request: connection refused",
+                ));
+            }
+            return self.inner.index_chunks_checked(volume_id, path, chunks, still_current).await;
+        }
         self.starts.lock().unwrap().push((path.to_string(), tokio::time::Instant::now()));
         let n = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_running.fetch_max(n, Ordering::SeqCst);
@@ -138,9 +154,7 @@ impl SearchBackend for Stub {
                 "embedding request failed: error sending request: connection refused",
             ))
         } else {
-            self.inner
-                .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, still_current)
-                .await
+            self.inner.index_chunks_checked(volume_id, path, chunks, still_current).await
         };
         self.running.fetch_sub(1, Ordering::SeqCst);
         self.ends.lock().unwrap().push((path.to_string(), tokio::time::Instant::now()));
@@ -216,6 +230,7 @@ impl Env {
             config.search.enabled = false;
             None
         };
+        (opts.config)(&mut config);
         let config = Arc::new(config);
 
         let admin =
@@ -236,6 +251,7 @@ impl Env {
                     jobs.clone(),
                     stores.clone(),
                     config.search.settle_delay(),
+                    config.search.chunking(),
                 )) as Arc<dyn SearchBackend>
             } else {
                 engine
@@ -243,7 +259,13 @@ impl Env {
         });
         if let Some(scheduler) = search.as_ref().and_then(|s| s.scheduler()) {
             admin.set_project_gone_hook(scheduler.project_hook());
+            if let Some(stub) = &stub {
+                stub.watch(&scheduler);
+            }
         }
+        admin.set_project_deleted_hook(crate::chunking::ChunkStore::project_deleted_hook(
+            stores.clone(),
+        ));
         let safety = Arc::new(SafetyManager::new(config.safety.clone()));
         safety.attach_limits(admin.clone());
         let state = Arc::new(AppState {
@@ -269,23 +291,42 @@ impl Env {
     /// its running rebuilds die with the process), then builds a second over the
     /// same rows, engine and volumes and recovers, as `app.rs` does at boot.
     pub async fn restart(&mut self) {
+        self.restart_with(|_| {}).await;
+    }
+
+    /// A restart after the operator changed the configuration with `change`:
+    /// the stores are opened again over the same files with the new values.
+    pub async fn restart_with(&mut self, change: fn(&mut ServerConfig)) {
         let old = self.state.search.as_ref().and_then(|b| b.scheduler()).expect("a scheduler");
         old.stop();
+        let mut config = (*self.state.config).clone();
+        change(&mut config);
+        let config = Arc::new(config);
+        let stores = Arc::new(crate::storage::StoreManager::new(
+            config.clone(),
+            crate::storage::test_registry(),
+        ));
         let engine: Arc<dyn SearchBackend> = self.stub.clone().expect("search is on");
         let backend = crate::search::ScheduledBackend::new(
             engine,
             self.jobs.clone(),
-            self.state.stores.clone(),
-            self.state.config.search.settle_delay(),
+            stores.clone(),
+            config.search.settle_delay(),
+            config.search.chunking(),
         );
-        backend.scheduler().expect("a scheduler").recover().await.expect("recovery succeeds");
+        let scheduler = backend.scheduler().expect("a scheduler");
+        self.stub().watch(&scheduler);
+        scheduler.recover().await.expect("recovery succeeds");
         // The hook of the stopped scheduler is replaced.
         self.state.admin.set_project_gone_hook(backend.scheduler().unwrap().project_hook());
         let s = &self.state;
+        s.admin.set_project_deleted_hook(crate::chunking::ChunkStore::project_deleted_hook(
+            stores.clone(),
+        ));
         self.state = Arc::new(AppState {
-            config: s.config.clone(),
+            config,
             admin: s.admin.clone(),
-            stores: s.stores.clone(),
+            stores,
             safety: s.safety.clone(),
             identity: s.identity.clone(),
             editors: s.editors.clone(),
@@ -314,10 +355,19 @@ impl Env {
         client.write_text_atomic(path, text).await.unwrap();
         // Alice has seen it, so her save passes the read before write guard.
         self.state.safety.record_read(ALICE, PROJ, path);
-        self.stub()
-            .index_path(PROJ, path, text, AUTO_CHUNK_SIZE, AUTO_CHUNK_OVERLAP)
-            .await
-            .unwrap();
+        // Its default set and entries, as an earlier rebuild left them.
+        crate::search::indexer::index_default_set(
+            &self.stub().inner,
+            &*client.meta,
+            PROJ,
+            path,
+            text.to_string(),
+            self.state.config.search.chunking(),
+            false,
+            &|| true,
+        )
+        .await
+        .unwrap();
     }
 
     /// `fs.write` by Alice with overwrite; asserts it answers at once and returns
@@ -623,10 +673,18 @@ fn states(jobs: &[Value]) -> Vec<&str> {
     jobs.iter().map(|j| j["state"].as_str().unwrap()).collect()
 }
 
-/// `n` repetitions of `word `, and the number of auto index chunks it makes.
+/// `n` repetitions of `word `, under a new `# Part` heading every 200 words,
+/// and the number of chunks its default set holds: one per part (SPEC-0101,
+/// the entries are the chunks of the default set).
 fn words(word: &str, n: usize) -> (String, usize) {
-    let text = format!("{word} ").repeat(n);
-    let chunks = crate::search::chunker::chunk(&text, AUTO_CHUNK_SIZE, AUTO_CHUNK_OVERLAP).len();
+    let parts: Vec<String> = (0..n)
+        .collect::<Vec<_>>()
+        .chunks(200)
+        .enumerate()
+        .map(|(k, part)| format!("# Part {}\n\n{}\n", k + 1, format!("{word} ").repeat(part.len())))
+        .collect();
+    let text = parts.join("\n");
+    let chunks = crate::search::test_chunks("/words.md", &text).len();
     (text, chunks)
 }
 
@@ -1819,11 +1877,11 @@ async fn e2e_0100_012_a_non_member_cannot_rebuild() {
 /// increment are refused alike.
 #[tokio::test(start_paused = true)]
 async fn e2e_0100_013_015_unknown_kinds() {
-    for kind in ["chunks", "conversion"] {
+    for kind in ["concepts", "conversion"] {
         let env = Env::new(with_delay(30)).await;
         env.seed("/notes.md", "alpha").await;
         let r = env.recalc(ALICE, PROJ, "/notes.md", kind).await;
-        assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index'");
+        assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
         env.assert_nothing_started(&[]).await;
     }
 }
@@ -1977,11 +2035,15 @@ async fn e2e_0100_059_the_project_does_not_exist() {
 #[tokio::test(start_paused = true)]
 async fn e2e_0100_069_a_rebuild_by_hand_when_search_is_not_enabled() {
     let env = Env::new(Options { search: false, ..Options::default() }).await;
+    // SPEC-0101/E2E-MOD-003: the refusal comes after "path absent", so the file exists.
+    env.save("/notes.md", "alpha").await;
     let r = env.recalc(ALICE, PROJ, "/notes.md", "search_index").await;
     assert_refused(
         r,
         "ERR_NOT_SUPPORTED: search is not enabled; set search.enabled: true in config",
     );
+    let r = env.recalc(ALICE, PROJ, "/ghost.md", "search_index").await;
+    assert_refused(r, "ERR_NOT_FOUND: file not found: /ghost.md");
     let rows = env.jobs.load_unfinished(None).await.unwrap();
     assert!(rows.is_empty(), "no job started: {rows:?}");
 }
@@ -2007,18 +2069,17 @@ async fn e2e_0100_us0273_refusal_order() {
     let r = env.recalc(DAVE, PROJ, "/nope.md", "chunks").await;
     assert_refused(r, "ERR_FORBIDDEN: 'dave@example.com' is not a member of 'proj'");
     // A bad kind wins over a missing file.
-    let r = env.recalc(ALICE, PROJ, "/nope.md", "chunks").await;
-    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index'");
+    let r = env.recalc(ALICE, PROJ, "/nope.md", "concepts").await;
+    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
     // A missing file wins over indexing off.
     env.state.admin.create_project("plain", ALICE).await.unwrap();
     env.state.stores.provision_volume("plain").await.unwrap();
     let r = env.recalc(ALICE, "plain", "/nope.md", "search_index").await;
     assert_refused(r, "ERR_NOT_FOUND: file not found: /nope.md");
-    // Search off wins over a bad kind.
+    // SPEC-0101/FR-MOD-003: a bad kind and a missing file win over search off.
     let off = Env::new(Options { search: false, ..Options::default() }).await;
-    let r = off.recalc(ALICE, PROJ, "/nope.md", "chunks").await;
-    assert_refused(
-        r,
-        "ERR_NOT_SUPPORTED: search is not enabled; set search.enabled: true in config",
-    );
+    let r = off.recalc(ALICE, PROJ, "/nope.md", "concepts").await;
+    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+    let r = off.recalc(ALICE, PROJ, "/nope.md", "search_index").await;
+    assert_refused(r, "ERR_NOT_FOUND: file not found: /nope.md");
 }

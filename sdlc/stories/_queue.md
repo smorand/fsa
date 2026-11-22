@@ -273,3 +273,12 @@
 | US-0271 | SPEC-0100 | delete and move follow the jobs | US-0268 | 1 | landed |  |  |
 | US-0272 | SPEC-0100 | index mode change and project removal cancel jobs | US-0268 | 2 | landed |  |  |
 | US-0273 | SPEC-0100 | fs.recalculate, docs and contract | US-0268, US-0271 | 1 | landed |  |  |
+| US-0274 | SPEC-0101 | server defaults for the chunking settings | main | 2 | landed |  |  |
+| US-0275 | SPEC-0101 | chunk set store and the read tools | main | 1 | landed |  |  |
+| US-0276 | SPEC-0101 | creating and deleting sets, and the fixed strategy | US-0274, US-0275 | 1 | landed |  |  |
+| US-0277 | SPEC-0101 | the structural strategy: sections, units, merging | US-0276 | 1 | landed |  |  |
+| US-0278 | SPEC-0101 | the structural strategy: oversize pieces and list batches | US-0277 | 1 | landed |  |  |
+| US-0279 | SPEC-0101 | search builds its entries from the default set | US-0278 | 1 | landed |  |  |
+| US-0280 | SPEC-0101 | the rebuild builds the chunk sets before the search entries | US-0274, US-0279 | 1 | landed |  |  |
+| US-0281 | SPEC-0101 | chunk sets follow moves, copies and deletions | US-0280 | 2 | landed |  |  |
+| US-0282 | SPEC-0101 | recalculate chunks by hand, docs and contract | US-0280, US-0281 | 2 | landed |  |  |

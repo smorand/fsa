@@ -88,6 +88,7 @@ pub fn schema() -> SchemaSet {
                     Column::required("created_at", ColumnType::Text),
                     Column::new("ended_at", ColumnType::Text),
                     Column::new("reason", ColumnType::Text),
+                    Column::new("set_id", ColumnType::Text),
                 ],
                 vec!["job_id"],
             )
@@ -123,6 +124,15 @@ pub fn schema() -> SchemaSet {
     })
     // Soft-delete marker for SPEC-0014: null for every existing and newly
     // created project until a later story starts writing it.
+    // SPEC-0101 DEC-012: the chunk set a `chunks` job rebuilds; NULL for every
+    // job of kind `search_index` and for rows written before the column existed.
+    .column_migration(ColumnMigration {
+        table: "derived_job",
+        column: "set_id",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
     .column_migration(ColumnMigration {
         table: "project",
         column: "deleted_at",
@@ -145,13 +155,15 @@ pub struct RelationalAdminStore {
     db: Arc<dyn RelationalDb>,
     /// Set at boot by the composition root, read on every project removal.
     gone: std::sync::Mutex<Option<crate::storage::traits::ProjectGoneHook>>,
+    /// Read on a soft delete only (the chunk sets of the project's files).
+    deleted: std::sync::Mutex<Option<crate::storage::traits::ProjectGoneHook>>,
 }
 
 impl RelationalAdminStore {
     /// The schema is applied by [`AdminBackend::connect`], which the composition
     /// root calls at startup, so constructing a store performs no IO.
     pub fn new(db: Arc<dyn RelationalDb>) -> Self {
-        Self { db, gone: std::sync::Mutex::new(None) }
+        Self { db, gone: std::sync::Mutex::new(None), deleted: std::sync::Mutex::new(None) }
     }
 
     /// Runs the registered hook, if any, once the project change is committed.
@@ -261,6 +273,10 @@ impl AdminBackend for RelationalAdminStore {
 
     fn set_project_gone_hook(&self, hook: crate::storage::traits::ProjectGoneHook) {
         *self.gone.lock().expect("project hook mutex") = Some(hook);
+    }
+
+    fn set_project_deleted_hook(&self, hook: crate::storage::traits::ProjectGoneHook) {
+        *self.deleted.lock().expect("project hook mutex") = Some(hook);
     }
 
     async fn create_project(&self, project_id: &str, owner: &str) -> Result<Project> {
@@ -580,6 +596,10 @@ impl AdminBackend for RelationalAdminStore {
         if affected > 0 {
             // The project row stays, so no cascade fires (DEC-016).
             self.project_gone(project_id).await;
+            let hook = self.deleted.lock().expect("project hook mutex").clone();
+            if let Some(hook) = hook {
+                hook(project_id.to_string()).await;
+            }
         }
         Ok(affected > 0)
     }

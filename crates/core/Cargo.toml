@@ -94,6 +94,7 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
+tiktoken-rs = { workspace = true }
 
 datafusion = { workspace = true }
 arrow = { workspace = true }

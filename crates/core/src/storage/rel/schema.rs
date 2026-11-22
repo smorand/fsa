@@ -450,29 +450,30 @@ mod tests {
     /// before the PostgreSQL migrate change), so SQLite and PostgreSQL deployments
     /// see no difference (BR-005). One deliberate change since: SPEC-0094 added the
     /// nullable `doc_artifact_sets.note` column (table and column migration), which
-    /// moved the two `storage::meta` fingerprints only.
+    /// moved the two `storage::meta` fingerprints only. SPEC-0101 adds `chunk_sets` and `chunks`,
+    /// which moved them again.
     #[test]
     fn production_ddl_is_unchanged_on_every_engine() {
         let expected = [
             (
                 "storage::meta",
                 Dialect::Sqlite,
-                "8ea06b99c55c0a94e4bf645d3034f6c8b6535c6e578b646de44a8058d6a4b30b",
+                "7f418e04eb5220a09761855496313272bf236a7b0c9e59b25bd9c581c22e0152",
             ),
             (
                 "storage::meta",
                 Dialect::Postgres,
-                "8340b15aebab73becc4f57fe056e3ab1de3a883644888d6169a4be7f68d7375c",
+                "6bc23b2d595128bac4a9132df111d6a2dda53f1399b7048bb9c1da47c21cdea0",
             ),
             (
                 "storage::admin",
                 Dialect::Sqlite,
-                "ae4a79d44a8dee3c698a328a00e629734464874125ea80192ff94703669937d4",
+                "432430c92522fb9ca88e4529b22fc3396797cb142805ceabbdad52259202fbf1",
             ),
             (
                 "storage::admin",
                 Dialect::Postgres,
-                "19cd06e760944dec72efaa9a85f0e3484537d56c7020dd14c8f9e5c0a56a6373",
+                "84a829c3372582ec04748d615d1f7746be58f5ff00b8cddfb26a2084a2e5c6ba",
             ),
             (
                 "git::db",

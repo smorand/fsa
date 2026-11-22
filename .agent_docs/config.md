@@ -412,7 +412,28 @@ text and parsed in `validate()` before the `search.enabled` early return, so it 
 even with search off. Anything else (`-5`, `2.5`, `abc`) stops the boot with
 `ERR_INVALID_ARGUMENT: settle delay must be a whole number of seconds, 0 or more`.
 Read only through `SearchConfig::settle_delay()`. No CLI flag. `fs.recalculate` ignores it:
-a rebuild by hand starts at once (or as soon as the running one ends).
+a rebuild by hand, of kind `search_index` or `chunks`, starts at once (or as soon as the running
+one of its kind ends).
+
+## `search.chunking.*` (SPEC-0101)
+
+Server defaults of the chunk sets, five keys, each an integer, float or string scalar
+(`${VAR}` expanded first), read as text and parsed in `validate()` before the
+`search.enabled` early return, so a bad value stops the boot even with search off.
+
+| Key | Default | Range |
+|---|---|---|
+| `fixed_size_tokens` | 2048 | 32..8192 |
+| `fixed_overlap_tokens` | 0 | 0..8191 |
+| `heading_cut_depth` | 2 | 1..6 |
+| `max_tokens` | 2048 | 64..8192 |
+| `list_max_items` | 40 | 2..200 |
+
+Absent or empty means the default. Out of range or not a whole number:
+`ERR_INVALID_ARGUMENT: search.chunking.<key> must be a whole number between <min> and <max>`.
+An overlap not below the size: `ERR_INVALID_ARGUMENT: search.chunking.fixed_overlap_tokens must be
+smaller than search.chunking.fixed_size_tokens`. Read only through `SearchConfig::chunking()`
+(a `chunking::ChunkDefaults`). No CLI flag.
 
 ## Derived paths
 

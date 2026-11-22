@@ -114,9 +114,10 @@ mod tests {
         };
         let config = crate::config::ServerConfig::default();
         super::register_all(&mut reg, &features, &config);
-        // 47 fs (SPEC-0019 adds fs.list_tables, fs.get_table, fs.list_images, fs.get_image,
-        // fs.get_document_view, SPEC-0045 fs.diff_files, SPEC-0100 fs.list_derived_jobs, fs.recalculate) + 17 admin (SPEC-0020, SPEC-0047, SPEC-0049) + 5 web + 2 context7 = 71
-        assert_eq!(reg.len(), 71);
+        // 50 fs (SPEC-0019 adds fs.list_tables, fs.get_table, fs.list_images, fs.get_image,
+        // fs.get_document_view, SPEC-0045 fs.diff_files, SPEC-0100 fs.list_derived_jobs, fs.recalculate, SPEC-0101 fs.list_chunk_sets, fs.list_chunks,
+        // fs.get_chunk, fs.create_chunk_set, fs.delete_chunk_set) + 17 admin (SPEC-0020, SPEC-0047, SPEC-0049) + 5 web + 2 context7 = 76
+        assert_eq!(reg.len(), 76);
         assert!(reg.resolve("web.search").is_some());
         assert!(reg.resolve("context7.resolve_library_id").is_some());
     }
@@ -135,12 +136,12 @@ mod tests {
         };
         let config = crate::config::ServerConfig::default();
         super::register_all(&mut reg, &features, &config);
-        // 47 fs (SPEC-0019, SPEC-0045, SPEC-0100) + 17 admin (SPEC-0020, SPEC-0047, SPEC-0049) + 54 git (44 git.* + 4 git.auth* + 6 git.pr_*)
-        // + 5 web + 2 context7 + 8 sqlite + 5 db = 138
+        // 52 fs (SPEC-0019, SPEC-0045, SPEC-0100, SPEC-0101) + 17 admin (SPEC-0020, SPEC-0047, SPEC-0049) + 54 git (44 git.* + 4 git.auth* + 6 git.pr_*)
+        // + 5 web + 2 context7 + 8 sqlite + 5 db = 143
         // + 2 doc.to_docx / doc.to_pptx if pandoc is in PATH, 0 otherwise
         // + 3 doc.open_editor / doc.close_editor / doc.list_editors always
         let doc_count = if which::which("pandoc").is_ok() { 2 } else { 0 };
-        assert_eq!(reg.len(), 138 + doc_count + 3);
+        assert_eq!(reg.len(), 143 + doc_count + 3);
     }
 
     #[test]
@@ -158,8 +159,8 @@ mod tests {
         let config = crate::config::ServerConfig::default();
         super::register_all(&mut reg, &features, &config);
         let doc_count = if which::which("pandoc").is_ok() { 2 } else { 0 };
-        // Base 138 + doc + 3 editor + 4 search.*
-        assert_eq!(reg.len(), 138 + doc_count + 3 + 4);
+        // Base 143 (SPEC-0101 adds five fs.* tools) + doc + 3 editor + 4 search.*
+        assert_eq!(reg.len(), 143 + doc_count + 3 + 4);
         assert!(reg.resolve("search.index").is_some());
         assert!(reg.resolve("search.query").is_some());
         assert!(reg.resolve("search.delete").is_some());

@@ -121,8 +121,8 @@ path, after the engine has returned. Non UTF-8 destinations are skipped silently
 directories carry no entries of their own.
 
 When the mode is `none`, a write costs one extra `project` row read and nothing else.
-Chunking uses the `search.index` defaults (1000 / 100); there is no per-project chunk
-configuration.
+Entries are the chunks of the file's default set (see "Chunking" below); there is no
+per-project chunk configuration.
 
 The mode decides WHETHER a project is indexed, not by which engine: the backend is
 process wide and serves whatever `search.mode` configured. Setting `bm25` on a server
@@ -170,7 +170,7 @@ Tantivy index directories live at `{tantivy_dir}/{volume_id}/`. The index is:
   restart via `search.index`.
 - **Warm check**: `search.status` reports `bm25_warm: false` when the directory is
   absent. `search.query` adds a `warning` field in this case.
-- **Idempotent**: `search.index` deletes existing chunks for a path before inserting.
+- **Idempotent**: an index call replaces the entries of a path in one commit.
 - **Rebuildable**: call `search.index` with `recursive: true` to re-index a tree.
 
 ## SQLite: sqlite-vec
@@ -185,13 +185,68 @@ table. The DDL uses the `SchemaSet::virtual_tables` field in the schema renderer
 
 ## Chunking
 
-Fixed character window, configurable per call:
+### Entries are the chunks of the default set (SPEC-0101, US-0279, 2026-11-22)
 
-- `chunk_size` (default 1000 chars): maximum chunk length
-- `chunk_overlap` (default 100 chars): overlap between consecutive chunks
+Search never cuts text: the character chunker (`search/chunker.rs`, `AUTO_CHUNK_*`) is gone.
+`SearchBackend::index_chunks_checked(volume, path, &[IndexedChunk], guard)` replaces the path's
+entries by one entry per chunk of the file's default set: the text column holds the indexed text,
+`chunk_idx` the chunk number (1 based). No engine schema change, so an old Tantivy index opens.
+Indexed text (DEC-010): `<document title>[ > <heading path titles joined by " > ">]`, a newline,
+then the chunk text, so a word of a heading or of the file name finds the chunk.
+`CombinedBackend` writes the vector side first (embedding is what fails), then BM25.
 
-The chunker tries to break at sentence boundaries (`.`, newline, space) within a
-50-char tolerance so chunks do not end mid-word. See `search/chunker.rs`.
+`search::indexer::index_default_set` is the one indexing path: `search.index`, the mode change full
+index, the hooks without a scheduler, the companion of a converted document and the scheduler rebuild
+call it. It reads the node's `sha256`; a current default set is indexed as it is unless `recut` (the
+rebuild and the companion recut). Otherwise `chunking::service::rebuild_file_sets` cuts EVERY set of the
+file without writing (default set with the server defaults of the moment, created when missing; extra
+sets from their stored `request_key`, so their settings and key never follow the defaults), the engine
+indexes the default chunks (guarded), and only then `Built::commit` writes the sets, one transaction
+each, guard checked before each. So an embedding failure or a discard leaves the previous sets AND
+entries (FR-NEW-022, US-0280 E2E-002/003). A default whose key changed with the defaults takes the new
+key; `ChunkStore::replace_set` removes, in its transaction, any other set of the file holding that key
+(a hand made set absorbed, DEC-005). The default set is `structural` (a text without heading is the
+`fixed` fallback).
+
+### The rebuild builds the sets (SPEC-0101, US-0280, 2026-11-22)
+
+`Scheduler::new(..., defaults)` takes the `ChunkDefaults` of the start (`app.rs`); a restart with new
+`search.chunking.*` values rebuilds default sets with them. `Scheduler::rebuild_file`: a file gone is
+`done`; a file that is not UTF-8 loses its sets (`ChunkStore::delete_sets_of`) and entries, job `done`,
+unless it has a current artifact set (converted document), which keeps its sets `out_of_date`. A
+project with indexing off schedules nothing, so no automatic default set; a mode change to `none`
+wipes entries but keeps sets; back to active, the full index rebuilds each stale default set. Nothing
+converts at boot: a file indexed before the upgrade keeps its character entries until its first
+rebuild. Known limit: a file without a default set that already holds 5 hand made sets fails its
+rebuild (`a file holds at most 5 chunk sets`). Tests: `chunking/e2e.rs`, US-0280 section
+(`Env::restart_with` changes the config across a restart, `Options::config` at start).
+
+`search.query` results carry `chunk_number` and `heading_path` (`tools/search_semantic.rs::query`,
+shared by the MCP handler and the test registry): for a file with a default set, the text after the
+header line, `chunk_idx` and the heading path of that chunk; for a file without one (entries built
+before the upgrade, FR-NEW-026) the text unchanged, `chunk_number` 0, `heading_path` `[]`. Cost: one
+set lookup per distinct path, one chunk lookup per such result. Fusion and ranking are unchanged
+(`SearchResult::chunk_idx` rides along).
+
+Engine unit tests index through `search::index_text` (cuts with the default structural settings)
+or hand built `IndexedChunk` lists when a test needs exact entries.
+
+### Chunk sets: the structural strategy (SPEC-0101, US-0277, 2026-11-22)
+
+`chunking::cut` (`chunking/mod.rs`) cleans the text (NUL out, CRLF to LF) then dispatches.
+`structural` parses the blocks once (`chunking/blocks.rs`, paragraph v3a 5.1, one pass, first
+matching rule: code, `---` page marker or break, heading, table or metadata table, figure, list,
+paragraph). No `Heading` block (a `#` line inside code is code) means the `fixed` fallback with the
+server fixed defaults, `fallback_from: structural`, the set settings being those fixed defaults; an
+empty text is that fallback with 0 chunks. Otherwise `chunking/structural.rs`: sections cut at a
+heading leaving at most `heading_cut_depth` open (the stack counts open headings, not `#`), heading
+path = first 2 titles of the stack when the section starts, pages from the markers, figures as
+references on the chunk of the last unit starting before them (the first unit if none), units
+(prose runs; table, list, code atomic; a paragraph ending with `:` gives its last line to the list),
+lists above `list_max_items` in batches marked split, then merging when the top level titles are
+equal or both absent (FR-NEW-006, the deliberate difference from v3a 5.4) and the `\n\n` joined text
+fits `max_tokens`. A unit above `max_tokens` stays whole until US-0278 cuts it. Tests: texts with no
+heading begin with `# T` (spec section 9); `chunking::e2e::prose(n)` gives exactly `n` tokens.
 
 ## RRF Fusion
 
@@ -217,8 +272,13 @@ A reranking failure is non-fatal: the original order is returned with a log warn
 3. `search.delete` (removes a path)
 4. `search.status` (reports `bm25_docs`, `vector_chunks`, `bm25_warm`, `mode`)
 
-`search.index` is idempotent: calling it twice on the same path replaces the existing
-chunks. Files that cannot be read as text are silently skipped (counted in `skipped`).
+`search.index(mount_id, path, recursive)` builds or refreshes the default set of each text file
+then indexes it; `indexed` counts the chunks. Calling it twice gives the same count, the same set
+id and chunks. `chunk_size` or `chunk_overlap` are refused: `ERR_INVALID_ARGUMENT: chunk_size and
+chunk_overlap are no longer accepted` (kept in `SearchIndexArgs` with `#[schemars(skip)]`, so not in
+the schema). A single path with no text: `ERR_NOT_SUPPORTED: no text to cut for <path>`; inside a
+recursive call such a file is counted in `skipped`. An embedding failure on a single path answers
+`embedding service unreachable` and leaves entries and set as they were.
 
 ## Authorization
 
@@ -281,9 +341,7 @@ configured backend, `None` when search is disabled.
 
 ## Guarded index update (SPEC-0100, US-0264)
 
-`SearchBackend::index_path_checked(..., still_current)` is a provided method (the default
-ignores the guard and calls `index_path`); the four engines and `CombinedBackend`
-override it, and `index_path` is now the "always current" call of it. The chunking and
+`SearchBackend::index_path_checked(..., still_current)` was a provided method before SPEC-0101; since then `index_chunks_checked` replaces it and `index_path` (the engines and `CombinedBackend` implement the new method). The chunking and
 the embedding run first, then `still_current` (a plain synchronous closure) runs right
 before the commit: false answers `Ok(None)` and stores nothing, an error before the
 commit stores nothing either, so the previous entries of the path stay. Tantivy checks
@@ -325,8 +383,26 @@ with mode `none` schedules nothing.
   rebuild is spawned in the call. A running job: it is marked stale (ends `superseded`), and
   the new job is a listed waiting entry with `due = now` (`seconds_left` 0, not `hidden`,
   DEC-007), started by the dispatcher when the key frees. At most one running job per key.
+- Kind `chunks` (SPEC-0101 US-0282, DEC-012): `Scheduler::recalculate_chunks` uses the key
+  `(project, path, JobKind::Chunks)`, so it has its own slot beside the `search_index` one and
+  neither cancels nor delays it. Manual only. The tool layer resolves the set (the default
+  when `set_id` is empty), reads the text (`chunking::service::source_text`, which needs
+  `AppState` for a converted document) and the file sha, and hands them to the scheduler as a
+  `ChunkWork`; the job cuts that one set with `service::rebuild_one_set` and writes it
+  behind the stale guard (`rebuild_chunk_set`). A default set with `reindex` (search on and
+  the project indexes) first writes the search entries from its new chunks. The row carries
+  `set_id` (nullable column of `derived_job`, additive `ColumnMigration`). A delete treats
+  both kinds of the path, a move drops a `chunks` job (its text belongs to the old path), a
+  restart ends every unfinished `chunks` row `failed` ("interrupted by a server restart")
+  without a new job, since its text lived in memory only.
 - Shutdown aborts the dispatcher; rows stay. Boot recovery is US-0270.
+- Tests of kind `chunks`: `chunking/e2e.rs` (`e2e_0101_110` to `115`, `138`, `052`, `mod003`,
+  `us0282_*`). SPEC-0100 `e2e_0100_069`, `013_015` and `us0273_refusal_order` were updated
+  for the new refusal order and kind text (E2E-MOD-003).
 - Tests: `search/derived_e2e.rs` (`e2e_0100_`), paused clock, `Stub` engine (in process
   embedding stand in with a delay queue, a down switch and start and end instants;
   the default build has no embedding client).
 
+
+### Chunk sets and the lifecycle of their file (SPEC-0101, 2026-11-21)
+Sets follow the node rows in the same storage transaction (`storage/meta.rs`): a move carries them, a delete or a move to the trash removes them, a copy copies none. A soft delete of a project removes every set through a second admin hook (`AdminBackend::set_project_deleted_hook`, wired in `app.rs` whatever the index mode); the first hook (`set_project_gone_hook`) belongs to the scheduler jobs. A hard delete clears the volume tables, chunk tables included.

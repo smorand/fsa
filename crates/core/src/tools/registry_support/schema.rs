@@ -45,6 +45,8 @@ pub enum ParamType {
     Any,
     /// Free-form object array (e.g. `edits`), with a caller-supplied items schema.
     ObjArray(&'static str),
+    /// Free-form object (`fs.create_chunk_set`'s `settings`): `"type": "object"`.
+    Obj,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +171,11 @@ impl ToolSchema {
         self.push(n, d, ParamType::FlexibleStrArray, false, Some(Value::Null))
     }
 
+    /// Optional free-form object with the empty object as its default.
+    pub fn opt_obj(self, n: &'static str, d: &'static str) -> Self {
+        self.push(n, d, ParamType::Obj, false, Some(json!({})))
+    }
+
     /// Optional value of any JSON type (`context_lines`): no `type`, `"default": null`.
     pub fn opt_any(self, n: &'static str, d: &'static str) -> Self {
         self.push(n, d, ParamType::Any, false, Some(Value::Null))
@@ -209,6 +216,9 @@ impl ToolSchema {
                     o.insert("type".into(), json!("integer"));
                 }
                 ParamType::FlexibleStrArray | ParamType::Any => { /* no type, by design */ }
+                ParamType::Obj => {
+                    o.insert("type".into(), json!("object"));
+                }
                 ParamType::ObjArray(items) => {
                     o.insert("type".into(), json!("array"));
                     let items: Value = serde_json::from_str(items)

@@ -591,6 +591,43 @@
       }
     },
     {
+      "name": "fs.create_chunk_set",
+      "description": "Create a chunk set of one file with the strategy fixed or structural and optional settings, or return the equal set the file already holds; a file holds at most 5 chunk sets.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          },
+          "strategy": {
+            "description": "Chunking strategy: 'fixed' or 'structural'.",
+            "type": "string"
+          },
+          "settings": {
+            "description": "Settings of the strategy: fixed takes size_tokens and overlap_tokens, structural takes heading_cut_depth, max_tokens and list_max_items; omitted settings take the server defaults.",
+            "type": "object",
+            "default": {}
+          }
+        },
+        "required": [
+          "mount_id",
+          "path",
+          "strategy"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "fs.create_empty",
       "description": "Create an empty file (touch).",
       "inputSchema": {
@@ -656,6 +693,38 @@
         "destructiveHint": true,
         "readOnlyHint": false,
         "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fs.delete_chunk_set",
+      "description": "Delete one chunk set of a file and its chunks; the default chunk set cannot be deleted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          },
+          "set_id": {
+            "description": "Id of the chunk set, as fs.list_chunk_sets returns it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mount_id",
+          "path",
+          "set_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": false,
         "openWorldHint": false
       }
     },
@@ -991,6 +1060,52 @@
       }
     },
     {
+      "name": "fs.get_chunk",
+      "description": "Read one chunk of a chunk set of a file in full, with up to 20 chunks before and after it, in order of number.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          },
+          "set_id": {
+            "description": "Id of the chunk set, as fs.list_chunk_sets returns it.",
+            "type": "string"
+          },
+          "number": {
+            "description": "Number of the chunk in the set, from 1.",
+            "type": "integer"
+          },
+          "before": {
+            "description": "Chunks to add before it, 0 to 20.",
+            "type": "integer",
+            "default": 0
+          },
+          "after": {
+            "description": "Chunks to add after it, 0 to 20.",
+            "type": "integer",
+            "default": 0
+          }
+        },
+        "required": [
+          "mount_id",
+          "path",
+          "set_id",
+          "number"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "fs.get_document_view",
       "description": "Get a converted document's whole text with an image line at each image and each table in the chosen table mode.",
       "inputSchema": {
@@ -1306,6 +1421,68 @@
         },
         "required": [
           "mount_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fs.list_chunk_sets",
+      "description": "List the chunk sets of one file: id, strategy, settings, whether it is the default set, chunk and token counts, state (current or out_of_date) and build time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mount_id",
+          "path"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fs.list_chunks",
+      "description": "List the chunks of one chunk set of a file by number, 100 per page, each with its unit, heading path, pages, token count, figures and a preview of its first 200 characters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          },
+          "set_id": {
+            "description": "Id of the chunk set, as fs.list_chunk_sets returns it.",
+            "type": "string"
+          },
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "mount_id",
+          "path",
+          "set_id"
         ]
       },
       "annotations": {
@@ -1758,7 +1935,7 @@
     },
     {
       "name": "fs.recalculate",
-      "description": "Rebuild the search entries of one file now, without waiting for the settle delay.",
+      "description": "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks').",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1771,8 +1948,13 @@
             "type": "string"
           },
           "kind": {
-            "description": "What to rebuild; only 'search_index' today.",
+            "description": "What to rebuild: 'search_index' (the search entries) or 'chunks' (one chunk set).",
             "type": "string"
+          },
+          "set_id": {
+            "description": "For kind 'chunks': the set to rebuild; empty means the default set.",
+            "type": "string",
+            "default": ""
           }
         },
         "required": [

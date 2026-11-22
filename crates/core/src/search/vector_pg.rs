@@ -5,7 +5,7 @@
 //! `storage/rel/postgres.rs` (`CREATE EXTENSION IF NOT EXISTS vector`), so it
 //! is already present whenever this backend connects to the same server.
 //!
-//! Both `index_path` and `query_vector` call the configured embedding endpoint
+//! Both `index_chunks_checked` and `query_vector` call the configured embedding endpoint
 //! to produce float vectors; callers never need to pre-compute embeddings.
 //!
 //! Raw `sqlx` is used because the `VECTOR` type and its operators (`<=>`) are
@@ -15,7 +15,7 @@
 
 use crate::config::EmbeddingConfig;
 use crate::errors::{Result, ToolError};
-use crate::search::{IndexStats, SearchBackend, SearchResult, embedding};
+use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult, embedding};
 use async_trait::async_trait;
 use sqlx::AssertSqlSafe;
 use sqlx::Row;
@@ -82,38 +82,21 @@ fn vec_to_pg(v: &[f32]) -> String {
 
 #[async_trait]
 impl SearchBackend for PostgresVectorBackend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        // Always current: the guard accepts, so the update is never refused.
-        let stored = self
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
-            .await?;
-        Ok(stored.unwrap_or(0))
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
-        let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
+        let chunks = chunks.to_vec();
         let n = chunks.len();
 
         // Compute all embeddings before touching the database. Embedding calls
         // are async and must not run inside a database transaction.
         let mut embeddings: Vec<String> = Vec::with_capacity(chunks.len());
-        for chunk_text in &chunks {
-            let emb = embedding::embed(&self.client, &self.embedding_config, chunk_text).await?;
+        for chunk in &chunks {
+            let emb = embedding::embed(&self.client, &self.embedding_config, &chunk.text).await?;
             embeddings.push(vec_to_pg(&emb));
         }
 
@@ -138,7 +121,7 @@ impl SearchBackend for PostgresVectorBackend {
             .await
             .map_err(|e| ToolError::internal(format!("vector_pg: delete: {e}")))?;
 
-        for (idx, (chunk_text, vec_str)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+        for (chunk, vec_str) in chunks.iter().zip(embeddings.iter()) {
             // The embedding is passed as a TEXT parameter and cast to VECTOR with
             // the `::vector` suffix, which is the recommended approach for dynamic
             // vector values in sqlx where no native pgvector type binding exists.
@@ -148,12 +131,14 @@ impl SearchBackend for PostgresVectorBackend {
             ))
             .bind(volume_id)
             .bind(path)
-            .bind(idx as i32)
-            .bind(chunk_text.as_str())
+            .bind(chunk.number as i32)
+            .bind(chunk.text.as_str())
             .bind(vec_str.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(|e| ToolError::internal(format!("vector_pg: insert chunk {idx}: {e}")))?;
+            .map_err(|e| {
+                ToolError::internal(format!("vector_pg: insert chunk {}: {e}", chunk.number))
+            })?;
         }
 
         tx.commit().await.map_err(|e| ToolError::internal(format!("vector_pg: commit: {e}")))?;
@@ -220,7 +205,7 @@ impl SearchBackend for PostgresVectorBackend {
 
         // `<=>` is the cosine distance operator provided by pgvector.
         let rows = sqlx::query(AssertSqlSafe(
-            "SELECT path, chunk_text, \
+            "SELECT path, chunk_text, chunk_idx, \
                     (embedding <=> $1::vector) AS distance \
              FROM search_chunks \
              WHERE volume_id = $2 \
@@ -247,7 +232,11 @@ impl SearchBackend for PostgresVectorBackend {
                 .map_err(|e| ToolError::internal(format!("vector_pg: read distance: {e}")))?;
             // Convert cosine distance [0,2] to a similarity score in [0,1].
             let score = 1.0 - (distance as f32 / 2.0);
-            results.push(SearchResult { path, score, chunk, rank: i + 1 });
+            let idx: i32 = row
+                .try_get("chunk_idx")
+                .map_err(|e| ToolError::internal(format!("vector_pg: read chunk_idx: {e}")))?;
+            let chunk_idx = u32::try_from(idx).unwrap_or(0);
+            results.push(SearchResult { path, score, chunk, rank: i + 1, chunk_idx });
         }
         Ok(results)
     }
@@ -283,7 +272,7 @@ mod tests {
     // Live tests require MCPFS_TEST_PG_DSN and a Postgres instance with the
     // `vector` extension. They skip automatically when the variable is unset.
     //
-    // Tests that call `index_path` or `query_vector` need an embedding endpoint.
+    // Tests that call `index_chunks_checked` or `query_vector` need an embedding endpoint.
     // Rather than require a live LLM, an inline axum stub is spawned that returns
     // a fixed 3-dimensional vector for any input. This keeps the tests self-
     // contained and deterministic.
@@ -360,8 +349,8 @@ mod tests {
         else {
             return;
         };
-        b.index_path("v1", "/a.md", "alpha beta gamma", 200, 0).await.unwrap();
-        b.index_path("v1", "/b.md", "delta epsilon zeta", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "alpha beta gamma").await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "delta epsilon zeta").await.unwrap();
         let s = b.stats("v1").await.unwrap();
         assert_eq!(s.vector_chunks, 2, "expected 2 chunks after indexing 2 files");
     }
@@ -373,7 +362,7 @@ mod tests {
         else {
             return;
         };
-        b.index_path("v1", "/doc.md", "rust is a systems language", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/doc.md", "rust is a systems language").await.unwrap();
         let r = b.query_vector("v1", "systems programming", 10).await.unwrap();
         // The fake embedding server returns the same vector for every input, so
         // the query finds the document (cosine distance 0 = identical vectors).
@@ -390,7 +379,7 @@ mod tests {
         else {
             return;
         };
-        b.index_path("v1", "/c.md", "content to delete", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/c.md", "content to delete").await.unwrap();
         let deleted = b.delete_path("v1", "/c.md").await.unwrap();
         assert!(deleted > 0, "delete must report at least one chunk removed");
         let s = b.stats("v1").await.unwrap();
@@ -404,9 +393,9 @@ mod tests {
         else {
             return;
         };
-        b.index_path("v1", "/d.md", "first content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/d.md", "first content").await.unwrap();
         // Re-index must replace, not duplicate.
-        b.index_path("v1", "/d.md", "second content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/d.md", "second content").await.unwrap();
         let s = b.stats("v1").await.unwrap();
         assert_eq!(s.vector_chunks, 1, "re-index must replace, not append");
     }
@@ -416,8 +405,8 @@ mod tests {
         let base = spawn_fake_embedding_server(3).await;
         let ep = format!("{base}/v1/embeddings");
         let Some(b) = live_backend("fsa_vecpg_iso", 3, &ep).await else { return };
-        b.index_path("vol_a", "/shared.md", "content in a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/shared.md", "content in b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/shared.md", "content in a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/shared.md", "content in b").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().vector_chunks, 1);
         assert_eq!(b.stats("vol_b").await.unwrap().vector_chunks, 1);
         // query_vector must only return rows from the requested volume.
@@ -432,8 +421,8 @@ mod tests {
         else {
             return;
         };
-        b.index_path("v1", "/a.md", "alpha content", 200, 0).await.unwrap();
-        b.index_path("v1", "/b.md", "beta content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "alpha content").await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "beta content").await.unwrap();
         assert_eq!(b.stats("v1").await.unwrap().vector_chunks, 2);
 
         assert_eq!(b.delete_all("v1").await.unwrap(), 2, "delete_all reports what it removed");
@@ -451,8 +440,8 @@ mod tests {
         else {
             return;
         };
-        b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/x.md", "content a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/x.md", "content b").await.unwrap();
         b.delete_all("vol_a").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().vector_chunks, 0);
         assert_eq!(b.stats("vol_b").await.unwrap().vector_chunks, 1, "the other volume survives");
@@ -488,12 +477,13 @@ mod tests {
         };
         let vol = "onetx_vec";
         b.delete_all(vol).await.unwrap();
-        assert_eq!(b.index_path(vol, "/a.md", &"old".repeat(10), 10, 0).await.unwrap(), 3);
+        let old = crate::search::entries(&["oldoldoldo"; 3]);
+        assert_eq!(b.index_chunks_checked(vol, "/a.md", &old, &|| true).await.unwrap(), Some(3));
         assert_eq!(b.stats(vol).await.unwrap().vector_chunks, 3);
 
         // A NUL byte in the last chunk makes the third insert fail.
-        let bad = format!("{}{}\0nnnnnnnn", "n".repeat(10), "n".repeat(10));
-        assert!(b.index_path(vol, "/a.md", &bad, 10, 0).await.is_err());
+        let bad = crate::search::entries(&["nnnnnnnnnn", "nnnnnnnnnn", "\0nnnnnnnn"]);
+        assert!(b.index_chunks_checked(vol, "/a.md", &bad, &|| true).await.is_err());
 
         assert_eq!(b.stats(vol).await.unwrap().vector_chunks, 3, "old rows kept");
         let r = b.query_vector(vol, "old", 10).await.unwrap();

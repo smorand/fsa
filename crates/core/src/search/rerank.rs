@@ -81,6 +81,7 @@ pub async fn rerank(
                 score,
                 chunk: r.chunk.clone(),
                 rank: 0, // assigned below
+                chunk_idx: r.chunk_idx,
             })
         })
         .collect();

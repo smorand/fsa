@@ -12,7 +12,7 @@
 #![cfg(feature = "postgres")]
 
 use crate::errors::{Result, ToolError};
-use crate::search::{IndexStats, SearchBackend, SearchResult};
+use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult};
 use async_trait::async_trait;
 use sqlx::AssertSqlSafe;
 use sqlx::Row;
@@ -53,31 +53,14 @@ impl PostgresBm25Backend {
 
 #[async_trait]
 impl SearchBackend for PostgresBm25Backend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        // Always current: the guard accepts, so the update is never refused.
-        let stored = self
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
-            .await?;
-        Ok(stored.unwrap_or(0))
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
-        let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
+        let chunks = chunks.to_vec();
         let n = chunks.len();
 
         // Before the delete, so a refusal leaves the previous rows in place.
@@ -101,18 +84,20 @@ impl SearchBackend for PostgresBm25Backend {
             .await
             .map_err(|e| ToolError::internal(format!("bm25_pg: delete: {e}")))?;
 
-        for (idx, chunk_text) in chunks.iter().enumerate() {
+        for chunk in &chunks {
             sqlx::query(AssertSqlSafe(
                 "INSERT INTO search_fts (volume_id, path, chunk_idx, chunk_text, tsv) \
                  VALUES ($1, $2, $3, $4, to_tsvector('english', $4))",
             ))
             .bind(volume_id)
             .bind(path)
-            .bind(idx as i32)
-            .bind(chunk_text.as_str())
+            .bind(chunk.number as i32)
+            .bind(chunk.text.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(|e| ToolError::internal(format!("bm25_pg: insert chunk {idx}: {e}")))?;
+            .map_err(|e| {
+                ToolError::internal(format!("bm25_pg: insert chunk {}: {e}", chunk.number))
+            })?;
         }
 
         tx.commit().await.map_err(|e| ToolError::internal(format!("bm25_pg: commit: {e}")))?;
@@ -164,7 +149,7 @@ impl SearchBackend for PostgresBm25Backend {
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         let rows = sqlx::query(AssertSqlSafe(
-            "SELECT path, chunk_text, \
+            "SELECT path, chunk_text, chunk_idx, \
                     ts_rank_cd(tsv, plainto_tsquery('english', $2)) AS score \
              FROM search_fts \
              WHERE volume_id = $1 \
@@ -190,7 +175,11 @@ impl SearchBackend for PostgresBm25Backend {
             let score: f32 = row
                 .try_get("score")
                 .map_err(|e| ToolError::internal(format!("bm25_pg: read score: {e}")))?;
-            results.push(SearchResult { path, score, chunk, rank: i + 1 });
+            let idx: i32 = row
+                .try_get("chunk_idx")
+                .map_err(|e| ToolError::internal(format!("bm25_pg: read chunk_idx: {e}")))?;
+            let chunk_idx = u32::try_from(idx).unwrap_or(0);
+            results.push(SearchResult { path, score, chunk, rank: i + 1, chunk_idx });
         }
         Ok(results)
     }
@@ -252,7 +241,7 @@ mod tests {
     #[tokio::test]
     async fn live_index_and_query() {
         let Some(b) = live_backend("fsa_bm25pg_idx").await else { return };
-        b.index_path("v1", "/a.md", "the quick brown fox jumps", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "the quick brown fox jumps").await.unwrap();
         let r = b.query_bm25("v1", "fox", 10).await.unwrap();
         assert!(!r.is_empty(), "expected at least one result");
         assert_eq!(r[0].path, "/a.md");
@@ -261,8 +250,8 @@ mod tests {
     #[tokio::test]
     async fn live_ranks_start_at_one() {
         let Some(b) = live_backend("fsa_bm25pg_ranks").await else { return };
-        b.index_path("v1", "/a.md", "quick fox", 200, 0).await.unwrap();
-        b.index_path("v1", "/b.md", "quick fox brown", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "quick fox").await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "quick fox brown").await.unwrap();
         let r = b.query_bm25("v1", "fox", 10).await.unwrap();
         assert_eq!(r[0].rank, 1, "first result must have rank 1");
         for (i, res) in r.iter().enumerate() {
@@ -273,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn live_delete_removes_doc() {
         let Some(b) = live_backend("fsa_bm25pg_del").await else { return };
-        b.index_path("v1", "/b.md", "hello world test", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "hello world test").await.unwrap();
         let deleted = b.delete_path("v1", "/b.md").await.unwrap();
         assert!(deleted > 0, "delete must report at least one chunk removed");
         let r = b.query_bm25("v1", "hello", 10).await.unwrap();
@@ -292,8 +281,8 @@ mod tests {
     async fn live_stats_counts_chunks_after_index() {
         let Some(b) = live_backend("fsa_bm25pg_stats2").await else { return };
         // Two files, each one chunk at this size.
-        b.index_path("v1", "/a.md", "alpha beta gamma", 200, 0).await.unwrap();
-        b.index_path("v1", "/b.md", "delta epsilon zeta", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "alpha beta gamma").await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "delta epsilon zeta").await.unwrap();
         let s = b.stats("v1").await.unwrap();
         assert_eq!(s.bm25_docs, 2, "expected 2 chunks");
         assert!(s.bm25_warm, "non-empty volume must be warm");
@@ -302,9 +291,9 @@ mod tests {
     #[tokio::test]
     async fn live_idempotent_reindex() {
         let Some(b) = live_backend("fsa_bm25pg_idem").await else { return };
-        b.index_path("v1", "/a.md", "first version content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "first version content").await.unwrap();
         // Re-index the same path: should replace, not duplicate.
-        b.index_path("v1", "/a.md", "second version content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "second version content").await.unwrap();
         let s = b.stats("v1").await.unwrap();
         assert_eq!(s.bm25_docs, 1, "re-index must replace, not append");
         // The old content must be gone.
@@ -318,8 +307,8 @@ mod tests {
     #[tokio::test]
     async fn live_volume_isolation() {
         let Some(b) = live_backend("fsa_bm25pg_iso").await else { return };
-        b.index_path("vol_a", "/shared.md", "document in volume a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/shared.md", "document in volume b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/shared.md", "document in volume a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/shared.md", "document in volume b").await.unwrap();
         // Query vol_a must not return vol_b rows.
         let ra = b.query_bm25("vol_a", "document", 10).await.unwrap();
         assert!(ra.iter().all(|r| r.path == "/shared.md"), "vol_a results must come from vol_a");
@@ -332,8 +321,8 @@ mod tests {
     #[tokio::test]
     async fn live_delete_all_removes_every_chunk_of_the_volume() {
         let Some(b) = live_backend("fsa_bm25pg_delall").await else { return };
-        b.index_path("v1", "/a.md", "alpha content", 200, 0).await.unwrap();
-        b.index_path("v1", "/b.md", "beta content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "v1", "/a.md", "alpha content").await.unwrap();
+        crate::search::index_text(&b, "v1", "/b.md", "beta content").await.unwrap();
         assert_eq!(b.stats("v1").await.unwrap().bm25_docs, 2);
 
         assert_eq!(b.delete_all("v1").await.unwrap(), 2, "delete_all reports what it removed");
@@ -346,8 +335,8 @@ mod tests {
     #[tokio::test]
     async fn live_delete_all_is_scoped_to_one_volume() {
         let Some(b) = live_backend("fsa_bm25pg_delall_iso").await else { return };
-        b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/x.md", "content a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/x.md", "content b").await.unwrap();
         b.delete_all("vol_a").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().bm25_docs, 0);
         assert_eq!(b.stats("vol_b").await.unwrap().bm25_docs, 1, "the other volume survives");
@@ -370,13 +359,14 @@ mod tests {
         let Some(b) = live_backend("fsa_bm25pg_onetx").await else { return };
         let vol = "onetx_bm25";
         b.delete_all(vol).await.unwrap();
-        // 3 chunks of 10 chars, no space so the cut points are fixed.
-        assert_eq!(b.index_path(vol, "/a.md", &"old".repeat(10), 10, 0).await.unwrap(), 3);
+        // 3 fixed entries.
+        let old = crate::search::entries(&["oldoldoldo"; 3]);
+        assert_eq!(b.index_chunks_checked(vol, "/a.md", &old, &|| true).await.unwrap(), Some(3));
         assert_eq!(b.stats(vol).await.unwrap().bm25_docs, 3);
 
         // A NUL byte in the last chunk makes the third insert fail.
-        let bad = format!("{}{}\0nnnnnnnn", "n".repeat(10), "n".repeat(10));
-        assert!(b.index_path(vol, "/a.md", &bad, 10, 0).await.is_err());
+        let bad = crate::search::entries(&["nnnnnnnnnn", "nnnnnnnnnn", "\0nnnnnnnn"]);
+        assert!(b.index_chunks_checked(vol, "/a.md", &bad, &|| true).await.is_err());
 
         assert_eq!(b.stats(vol).await.unwrap().bm25_docs, 3, "old rows kept");
         let r = b.query_bm25(vol, "oldoldoldo", 10).await.unwrap();

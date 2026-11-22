@@ -10,7 +10,7 @@
 //! blocks the async executor.
 
 use crate::errors::{Result, ToolError};
-use crate::search::{IndexStats, SearchBackend, SearchResult};
+use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -97,32 +97,15 @@ impl TantivyBm25Backend {
 
 #[async_trait]
 impl SearchBackend for TantivyBm25Backend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        // Always current: the guard accepts, so the update is never refused.
-        let stored = self
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
-            .await?;
-        Ok(stored.unwrap_or(0))
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
         let backend = self.get_or_open_volume(volume_id)?;
-        let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
+        let chunks = chunks.to_vec();
         let n = chunks.len();
         let path_owned = path.to_string();
         let _writing = backend.write_lock.lock().await;
@@ -156,11 +139,11 @@ impl SearchBackend for TantivyBm25Backend {
                 // Idempotent: delete existing chunks for this path before inserting.
                 writer.delete_term(Term::from_field_text(path_field, &path_owned));
 
-                for (idx, chunk_text) in chunks.iter().enumerate() {
+                for chunk in &chunks {
                     let mut doc = TantivyDocument::default();
                     doc.add_text(path_field, &path_owned);
-                    doc.add_u64(chunk_idx_field, idx as u64);
-                    doc.add_text(chunk_text_field, chunk_text);
+                    doc.add_u64(chunk_idx_field, u64::from(chunk.number));
+                    doc.add_text(chunk_text_field, &chunk.text);
                     writer
                         .add_document(doc)
                         .map_err(|e| ToolError::internal(format!("tantivy: add document: {e}")))?;
@@ -227,7 +210,7 @@ impl SearchBackend for TantivyBm25Backend {
         // left to count.
         let count = self.stats(volume_id).await?.bm25_docs;
 
-        // Behind the same lock as the writers, so an in flight index_path cannot
+        // Behind the same lock as the writers, so an in flight index_chunks_checked cannot
         // commit into a directory that is about to be removed.
         let volume = self.get_or_open_volume(volume_id)?;
         let _writing = volume.write_lock.lock().await;
@@ -272,6 +255,10 @@ impl SearchBackend for TantivyBm25Backend {
                 .schema
                 .get_field("chunk_text")
                 .map_err(|e| ToolError::internal(format!("tantivy: get chunk_text field: {e}")))?;
+            let chunk_idx_field = backend
+                .schema
+                .get_field("chunk_idx")
+                .map_err(|e| ToolError::internal(format!("tantivy: get chunk_idx field: {e}")))?;
 
             let reader = backend
                 .index
@@ -303,7 +290,19 @@ impl SearchBackend for TantivyBm25Backend {
                     .unwrap_or("")
                     .to_string();
 
-                results.push(SearchResult { path, score, chunk, rank: results.len() + 1 });
+                let chunk_idx = doc
+                    .get_first(chunk_idx_field)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0);
+
+                results.push(SearchResult {
+                    path,
+                    score,
+                    chunk,
+                    rank: results.len() + 1,
+                    chunk_idx,
+                });
             }
             // Re-number ranks after collecting.
             for (i, r) in results.iter_mut().enumerate() {
@@ -376,9 +375,14 @@ mod tests {
     #[tokio::test]
     async fn index_and_query_returns_results() {
         let (b, _d) = backend().await;
-        b.index_path("vol1", "/a.md", "the quick brown fox jumps over the lazy dog", 200, 0)
-            .await
-            .unwrap();
+        crate::search::index_text(
+            &b,
+            "vol1",
+            "/a.md",
+            "the quick brown fox jumps over the lazy dog",
+        )
+        .await
+        .unwrap();
         let results = b.query_bm25("vol1", "fox", 10).await.unwrap();
         assert!(!results.is_empty(), "expected at least one result");
         assert_eq!(results[0].path, "/a.md");
@@ -387,9 +391,14 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_doc_from_results() {
         let (b, _d) = backend().await;
-        b.index_path("vol1", "/a.md", "the quick brown fox jumps over the lazy dog", 200, 0)
-            .await
-            .unwrap();
+        crate::search::index_text(
+            &b,
+            "vol1",
+            "/a.md",
+            "the quick brown fox jumps over the lazy dog",
+        )
+        .await
+        .unwrap();
         b.delete_path("vol1", "/a.md").await.unwrap();
         let results = b.query_bm25("vol1", "fox", 10).await.unwrap();
         assert!(results.is_empty(), "deleted doc must not appear in results");
@@ -398,8 +407,8 @@ mod tests {
     #[tokio::test]
     async fn delete_all_removes_every_chunk_of_the_volume() {
         let (b, _d) = backend().await;
-        b.index_path("vol1", "/a.md", "alpha content about foxes", 200, 0).await.unwrap();
-        b.index_path("vol1", "/b.md", "beta content about foxes", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "alpha content about foxes").await.unwrap();
+        crate::search::index_text(&b, "vol1", "/b.md", "beta content about foxes").await.unwrap();
         assert_eq!(b.stats("vol1").await.unwrap().bm25_docs, 2);
 
         let deleted = b.delete_all("vol1").await.unwrap();
@@ -411,7 +420,7 @@ mod tests {
         assert!(b.query_bm25("vol1", "foxes", 10).await.unwrap().is_empty());
 
         // The volume must be usable again straight after the wipe.
-        b.index_path("vol1", "/c.md", "gamma content about foxes", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/c.md", "gamma content about foxes").await.unwrap();
         assert_eq!(b.stats("vol1").await.unwrap().bm25_docs, 1);
     }
 
@@ -426,7 +435,7 @@ mod tests {
         for i in 0..5u32 {
             let b = b.clone();
             tasks.push(tokio::task::spawn(async move {
-                b.index_path("vol1", &format!("/f{i}.md"), "shared marker text", 200, 0)
+                crate::search::index_text(&*b, "vol1", &format!("/f{i}.md"), "shared marker text")
                     .await
                     .expect("a concurrent index call must not fail")
             }));
@@ -445,8 +454,8 @@ mod tests {
     #[tokio::test]
     async fn delete_all_is_scoped_to_one_volume() {
         let (b, _d) = backend().await;
-        b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/x.md", "content a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/x.md", "content b").await.unwrap();
         b.delete_all("vol_a").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().bm25_docs, 0);
         assert_eq!(b.stats("vol_b").await.unwrap().bm25_docs, 1, "the other volume survives");
@@ -466,7 +475,7 @@ mod tests {
         let s0 = b.stats("vol1").await.unwrap();
         assert!(!s0.bm25_warm, "fresh volume should not be warm");
 
-        b.index_path("vol1", "/a.md", "hello world", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "hello world").await.unwrap();
         let s1 = b.stats("vol1").await.unwrap();
         assert!(s1.bm25_warm);
         assert!(s1.bm25_docs > 0);

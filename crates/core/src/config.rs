@@ -4,6 +4,7 @@
 //! `${VAR}` and `${VAR:-default}` are expanded from the environment in the raw
 //! YAML **before** parsing, so secrets never live in committed config files.
 
+use crate::chunking::ChunkDefaults;
 use crate::errors::{Result, ToolError};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -851,6 +852,75 @@ pub struct SearchConfig {
     /// from `validate()` instead of a serde error; read through `settle_delay()`.
     #[serde(deserialize_with = "de_scalar_text")]
     pub settle_delay_seconds: String,
+    /// Server defaults of the chunk sets (SPEC-0101), read through `chunking()`.
+    pub chunking: ChunkingConfig,
+}
+
+/// The `search.chunking.*` keys, kept as text like the settle delay so a bad
+/// value reaches the spec's message from `validate()` instead of a serde error.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChunkingConfig {
+    #[serde(deserialize_with = "de_scalar_text")]
+    pub fixed_size_tokens: String,
+    #[serde(deserialize_with = "de_scalar_text")]
+    pub fixed_overlap_tokens: String,
+    #[serde(deserialize_with = "de_scalar_text")]
+    pub heading_cut_depth: String,
+    #[serde(deserialize_with = "de_scalar_text")]
+    pub max_tokens: String,
+    #[serde(deserialize_with = "de_scalar_text")]
+    pub list_max_items: String,
+}
+
+/// One key: name, default, minimum, maximum.
+fn parse_chunk_key(name: &str, raw: &str, default: u32, min: u32, max: u32) -> Result<u32> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Ok(default);
+    }
+    match t.parse::<u32>() {
+        Ok(v) if (min..=max).contains(&v) => Ok(v),
+        _ => Err(ToolError::invalid_argument(format!(
+            "search.chunking.{name} must be a whole number between {min} and {max}"
+        ))),
+    }
+}
+
+impl ChunkingConfig {
+    fn parse(&self) -> Result<ChunkDefaults> {
+        let d = ChunkDefaults {
+            fixed_size_tokens: parse_chunk_key(
+                "fixed_size_tokens",
+                &self.fixed_size_tokens,
+                2048,
+                32,
+                8192,
+            )?,
+            fixed_overlap_tokens: parse_chunk_key(
+                "fixed_overlap_tokens",
+                &self.fixed_overlap_tokens,
+                0,
+                0,
+                8191,
+            )?,
+            heading_cut_depth: parse_chunk_key(
+                "heading_cut_depth",
+                &self.heading_cut_depth,
+                2,
+                1,
+                6,
+            )?,
+            max_tokens: parse_chunk_key("max_tokens", &self.max_tokens, 2048, 64, 8192)?,
+            list_max_items: parse_chunk_key("list_max_items", &self.list_max_items, 40, 2, 200)?,
+        };
+        if d.fixed_overlap_tokens >= d.fixed_size_tokens {
+            return Err(ToolError::invalid_argument(
+                "search.chunking.fixed_overlap_tokens must be smaller than search.chunking.fixed_size_tokens",
+            ));
+        }
+        Ok(d)
+    }
 }
 
 /// Default settle delay, in seconds, when the key is absent or empty.
@@ -870,6 +940,12 @@ fn de_scalar_text<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result
 }
 
 impl SearchConfig {
+    /// The chunk set defaults. Only meaningful after `validate()`; a value
+    /// validation refuses reads as the built in defaults.
+    pub fn chunking(&self) -> ChunkDefaults {
+        self.chunking.parse().unwrap_or_default()
+    }
+
     /// The settle delay in seconds. Only meaningful after `validate()`; an
     /// unparsable value (which validation refuses) reads as the default.
     pub fn settle_delay(&self) -> u64 {
@@ -894,6 +970,7 @@ impl Default for SearchConfig {
             embedding: EmbeddingConfig::default(),
             reranking: RerankConfig::default(),
             settle_delay_seconds: String::new(),
+            chunking: ChunkingConfig::default(),
         }
     }
 }
@@ -1208,10 +1285,11 @@ fn validate_store(section: &str, backend: &str, dsn: &Dsn) -> Result<()> {
     }
 }
 
-/// Check the `search` block. The settle delay is checked first, whatever `enabled`
+/// Check the `search` block. The settle delay and the chunking defaults are checked first, whatever `enabled`
 /// says (SPEC-0100): a bad value must stop the boot even while search is off.
 fn validate_search(cfg: &SearchConfig) -> Result<()> {
     parse_settle_delay(&cfg.settle_delay_seconds)?;
+    cfg.chunking.parse()?;
     if !cfg.enabled {
         return Ok(());
     }
@@ -1899,8 +1977,8 @@ infra:
         assert_eq!(format!("{parsed:?}"), MINIO_TEMPLATE_SNAPSHOT);
     }
 
-    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: "", secret_key: "", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "" } }"#;
-    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: "test-access", secret_key: "test-secret", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "" } }"#;
+    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: "", secret_key: "", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
+    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: "test-access", secret_key: "test-secret", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
 
     // ── doc service ─────────────────────────────────────────────────────────────
 

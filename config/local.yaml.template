@@ -77,6 +77,13 @@ extract:
 # unchanged before its derived data is rebuilt. 30 when absent. Checked even when search is off.
 # search:
 #   settle_delay_seconds: 30
+#   # Chunk set defaults (SPEC-0101), whole numbers, checked even when search is off.
+#   chunking:
+#     fixed_size_tokens: 2048      # 32..8192
+#     fixed_overlap_tokens: 0      # 0..8191, must stay below fixed_size_tokens
+#     heading_cut_depth: 2         # 1..6
+#     max_tokens: 2048             # 64..8192
+#     list_max_items: 40           # 2..200
 
 # Web tools (DuckDuckGo search, web.fetch, web.download). Off by default.
 # The two lists limit the sites web.fetch and web.download can reach. An entry is a host name,

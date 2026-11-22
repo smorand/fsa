@@ -1,4 +1,4 @@
-# Tool reference (118 tools)
+# Tool reference (123 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -144,7 +144,7 @@ owner.
 | `fs.trash_list` | list trashed files, paginated | `path_prefix:string=""`, `limit:int=200`, `offset:int=0` | `entries[{trash_path, original_path, size, kind, deleted_at, deleted_by, purge_in_days}]`, `total` | RO,I,!OW | member |
 | `fs.trash_restore` | restore a trashed entry to its original path | `trash_path` | `restored_path`, `trash_path` | !D,!RO,!I,!OW | member |
 | `fs.list_derived_jobs` | rebuild jobs of derived data (SPEC-0100), 100 per page | `path:string=""`, `marker:string=""` | `jobs[{job_id, path, kind, state, cause, created_at, seconds_left?, ended_at?, reason?}]`, `marker?` | RO,I,!OW | member |
-| `fs.recalculate` | rebuild the search entries of one file now (SPEC-0100); a waiting rebuild is replaced, a running one ends `superseded` | `path`, `kind` (`search_index` only) | the job: `job_id, path, kind, state, cause, created_at, seconds_left?, ended_at?, reason?` | !D,!RO,!I,!OW | member |
+| `fs.recalculate` | rebuild the search entries (`search_index`, SPEC-0100) or one chunk set (`chunks`, SPEC-0101) of one file now; a waiting rebuild of the kind is replaced, a running one ends `superseded` | `path`, `kind` (`search_index` or `chunks`), `set_id:string=""` (kind `chunks` only) | the job: `job_id, path, kind, state, cause, created_at, set_id? (chunks), seconds_left?, ended_at?, reason?` | !D,!RO,!I,!OW | member |
 
 `trash=false` needs `safety.allow_hard_delete` on the server, otherwise
 `ERR_NOT_SUPPORTED`. `fs.list_allowed_roots` and `fs.audit_log` still take and
@@ -159,15 +159,55 @@ original path rather than failing (SPEC-0011).
 `fs.recalculate` (2026-11-21, SPEC-0100 FR-NEW-008, FR-NEW-009) is MCP only, like
 `fs.list_derived_jobs` (DEC-012). Refusals, first match wins, nothing changed:
 project absent or deleted `ERR_PROJECT_NOT_FOUND`; non member `ERR_FORBIDDEN`;
-search off `ERR_NOT_SUPPORTED: search is not enabled; set search.enabled: true in
-config`; kind other than `search_index` `ERR_INVALID_ARGUMENT: kind must be
-'search_index'`; `ERR_NOT_FOUND: file not found: <path>`; a folder (the root
-included) `ERR_INVALID_ARGUMENT: path must be a file`; index mode `none`
-`ERR_NOT_SUPPORTED: search indexing is not active for project <mount_id>`. Each
+kind other than `search_index` or `chunks` `ERR_INVALID_ARGUMENT: kind must be
+'search_index' or 'chunks'`; `ERR_NOT_FOUND: file not found: <path>`; a folder (the root
+included) `ERR_INVALID_ARGUMENT: path must be a file`; then for `search_index`: `set_id` given
+`ERR_INVALID_ARGUMENT: set_id applies to kind 'chunks' only`, search off `ERR_NOT_SUPPORTED:
+search is not enabled; set search.enabled: true in config`, index mode `none`
+`ERR_NOT_SUPPORTED: search indexing is not active for project <mount_id>`; for `chunks`:
+set unknown (or of another file) `ERR_NOT_FOUND: chunk set not found: <set_id>`, no default set
+(empty `set_id`) `ERR_NOT_FOUND: the file has no default chunk set`, no text
+`ERR_NOT_SUPPORTED: no text to cut for <path>`. (SPEC-0101 FR-MOD-003, FR-NEW-019: before it,
+search off came right after the member check; `chunks` works with search off and in a
+project that does not index.) Each
 call creates a job (cause `manual`) and drops the file's waiting job without a
 record. Nothing running: it starts in the call, answered `running`. A rebuild
 running: that one ends `superseded` and the answer is `waiting` with
-`seconds_left` 0, started when the running one ends.
+`seconds_left` 0, started when the running one ends. A `chunks` job is one per file and kind
+whatever the set, never touches the waiting `search_index` job, and answers `set_id`. With
+search off no scheduler exists: the cut runs on a task of its own and the job is not
+recorded, so `fs.list_derived_jobs` (empty with search off) never shows it.
+
+## fs chunks (5)
+
+| Tool | Purpose | Params | Returns | Annotations | Who |
+|---|---|---|---|---|---|
+| `fs.list_chunk_sets` | chunk sets of one file (SPEC-0101); default set first, then `built_at` oldest first, then `set_id` | `path` | `sets[{set_id, strategy, settings, default, fallback_from?, chunk_count, token_count, state, built_at}]` | RO,I,!OW | member |
+| `fs.list_chunks` | chunks of one set by number, 100 per page, preview of the first 200 characters | `path`, `set_id`, `marker:string=""` | `chunks[{number, unit, heading_path, page_start, page_end, token_count, figures, document_title, preview}]`, `marker?` | RO,I,!OW | member |
+| `fs.get_chunk` | chunk `number` in full with `before` and `after` neighbours (0 to 20 each) | `path`, `set_id`, `number:int`, `before:int=0`, `after:int=0` | `chunks[{number, unit, heading_path, page_start, page_end, token_count, figures, document_title, text}]` | RO,I,!OW | member |
+| `fs.create_chunk_set` | the set of this strategy and settings, built from the file text when absent, else the equal set (SPEC-0101 FR-NEW-013, FR-NEW-029) | `path`, `strategy` (`fixed` or `structural`), `settings:object={}` | `Set` as in `fs.list_chunk_sets` | !D,!RO,I,!OW | member |
+| `fs.delete_chunk_set` | removes an extra set and its chunks; the default set is refused | `path`, `set_id` | `{deleted: true}` | D,!RO,!I,!OW | member |
+
+(2026-11-22, SPEC-0101 US-0276) `fs.create_chunk_set` checks, in order: strategy, each setting in
+request order (unknown, does not apply, not a whole number, out of range), the overlap against the
+size, then the text (UTF-8 bytes, else the document view of a current conversion, else
+`ERR_NOT_SUPPORTED: no text to cut for <path>`), then at most 5 sets per file inside the insert
+transaction (`ChunkStore::insert_set`). The equal request is found on the primary key
+`(volume_id, path, request_key)`, so two members racing get one set. `fixed` cuts in `cl100k_base`
+tokens (`chunking::tokens`, `tiktoken-rs`) on the blocking pool. `structural` is validated, then
+answers `ERR_INTERNAL_ERROR: strategy structural is not implemented` until US-0277.
+
+(2026-11-22, SPEC-0101 US-0275) MCP only (DEC-015); engines in `tools/chunks.rs`, rows in the
+volume meta tables `chunk_sets` and `chunks` through `chunking::ChunkStore`
+(`MetaBackend::chunk_store()`). `state` is computed: `out_of_date` when the set's
+`source_sha` differs from the file's `sha256`. A set is reached only through its own file.
+Refusals, first match wins, nothing changed: `ERR_PROJECT_NOT_FOUND`; `ERR_FORBIDDEN:
+'<person>' is not a member of '<mount_id>'`; `ERR_NOT_FOUND: file not found: <path>`;
+a folder (the root included) `ERR_INVALID_ARGUMENT: path must be a file`; `ERR_NOT_FOUND:
+chunk set not found: <set_id>`; `ERR_NOT_FOUND: chunk <number> not found in set <set_id>`;
+`ERR_INVALID_ARGUMENT: before and after must be between 0 and 20`; `ERR_INVALID_ARGUMENT:
+marker is not valid` (the marker is base64 url safe of `["<set_id>", <last number>]`, valid
+for its own set only). No tool builds sets yet, so a file lists `{sets: []}` until later stories.
 
 ## fs export (1)
 
@@ -699,6 +739,23 @@ separate boolean, never folded into `state`), `base`, `head`, `author`, `url`,
 payload untouched, already scrubbed of the credential). Details and the mapping
 rules: [`git.md`](git.md#the-pull-request-surface-gitpr_-us-025).
 
+## search (4, served when search is enabled)
+
+(2026-11-22, SPEC-0101 US-0279) Engines in `tools/search_semantic.rs` (`index`, `query`), shared by
+the `#[tool]` handlers and the test registry. Details in [`search.md`](search.md#chunking).
+
+| Tool | Purpose | Key params | Returns |
+|---|---|---|---|
+| `search.index` | build or refresh the default chunk set of each text file, then index its chunks | `path`, `recursive:bool=false` | `indexed` (chunks), `skipped`, `path` |
+| `search.query` | ranked entries | `query`, `mode=null`, `top_k:int=10`, `rerank:bool=true` | `results[{path, score, chunk, rank, chunk_number, heading_path}]`, `mode_used`, `warning` |
+| `search.delete` | drop the entries of a path | `path`, `recursive:bool=false` | `deleted` |
+| `search.status` | index statistics | | `bm25_docs`, `vector_chunks`, `mode`, `bm25_warm` |
+
+`search.index` refuses `chunk_size` and `chunk_overlap`: `ERR_INVALID_ARGUMENT: chunk_size and
+chunk_overlap are no longer accepted` (hidden from the schema); a single path with no text:
+`ERR_NOT_SUPPORTED: no text to cut for <path>`. A result of a file with no default set (entries built
+before the upgrade) has `chunk_number` 0, `heading_path` `[]` and its text unchanged.
+
 ## Served set per configuration (2026-10-14, SPEC-0027)
 
 `McpServer::new` serves exactly what the flags enable; a tool not served is
@@ -707,11 +764,11 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 64 (47 `fs.*`, 17 `admin.*`) |
-| git flag on | 118 |
-| git and search flags on | 120 |
-| every flag, pandoc on `PATH` | 142 (140 without pandoc: `doc.*` registers nothing) |
-| one optional family alone | 62 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
+| default | 69 (52 `fs.*`, 17 `admin.*`) |
+| git flag on | 123 |
+| git and search flags on | 127 |
+| every flag, pandoc on `PATH` | 149 (147 without pandoc: `doc.*` registers nothing) |
+| one optional family alone | 69 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
 `#[tool]` methods: `add_optional_families` in `mcp/server.rs` runs each enabled
@@ -720,7 +777,7 @@ family's production `register()` into one shared `ToolRegistry`, and adds one
 family's own `ToolSchema::to_list_entry()`, so the served schema equals
 `catalog()` (what `/api/swagger.json` reads); the call goes through
 `ToolRegistry::call` then `to_call_result`. The family handlers authorize
-`mount_id` themselves, unchanged. They are outside the 118 tool golden
+`mount_id` themselves, unchanged. They are outside the 123 tool golden
 contract. Tests: `tools/tool_surface_e2e.rs`.
 
 (2026-11-12, SPEC-0093) Remote answers of `web.*` and `context7.*` are read by `tools::web::read_answer`

@@ -16,16 +16,19 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 use std::str::FromStr;
 
-/// What a job rebuilds. One value today; later kinds add a variant (DEC-011).
+/// What a job rebuilds: the search entries of a file (and its chunk sets), or
+/// one chunk set by hand (SPEC-0101 DEC-012). Later kinds add a variant (DEC-011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JobKind {
     SearchIndex,
+    Chunks,
 }
 
 impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SearchIndex => "search_index",
+            Self::Chunks => "chunks",
         }
     }
 }
@@ -35,7 +38,8 @@ impl FromStr for JobKind {
     fn from_str(s: &str) -> Result<Self> {
         match s {
             "search_index" => Ok(Self::SearchIndex),
-            _ => Err(ToolError::invalid_argument("kind must be 'search_index'")),
+            "chunks" => Ok(Self::Chunks),
+            _ => Err(ToolError::invalid_argument("kind must be 'search_index' or 'chunks'")),
         }
     }
 }
@@ -122,6 +126,8 @@ pub struct Job {
     pub created_at: String,
     pub ended_at: Option<String>,
     pub reason: Option<String>,
+    /// The chunk set a `chunks` job rebuilds; `None` for every other kind.
+    pub set_id: Option<String>,
 }
 
 impl Job {
@@ -138,6 +144,7 @@ impl Job {
             created_at: now_secs(),
             ended_at: None,
             reason: None,
+            set_id: None,
         }
     }
 
@@ -153,6 +160,9 @@ impl Job {
             "created_at": self.created_at,
         });
         let obj = v.as_object_mut().expect("a json object");
+        if let Some(set_id) = &self.set_id {
+            obj.insert("set_id".into(), json!(set_id));
+        }
         if self.state == JobState::Waiting {
             obj.insert("seconds_left".into(), json!(seconds_left.unwrap_or(0)));
         }
@@ -264,6 +274,6 @@ mod tests {
     #[test]
     fn an_unknown_kind_is_refused_with_the_contract_text() {
         let e = JobKind::from_str("thumbnail").unwrap_err();
-        assert_eq!(e.to_string(), "ERR_INVALID_ARGUMENT: kind must be 'search_index'");
+        assert_eq!(e.to_string(), "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
     }
 }

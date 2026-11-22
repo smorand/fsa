@@ -289,6 +289,47 @@ pub fn schema() -> SchemaSet {
                 ],
                 vec!["volume_id", "set_id", "seq"],
             ),
+            // SPEC-0101 DEC-004, DEC-005: the chunk sets of a file. The request
+            // key is in the primary key so two equal requests cannot coexist on
+            // either engine; `state` is not stored, it is computed from
+            // `source_sha` against the node's `sha256`.
+            Table::new(
+                "chunk_sets",
+                vec![
+                    Column::required("volume_id", ColumnType::Text),
+                    Column::required("path", ColumnType::Text),
+                    Column::required("request_key", ColumnType::Text),
+                    Column::required("set_id", ColumnType::Text),
+                    Column::required("strategy", ColumnType::Text),
+                    Column::required("settings", ColumnType::Text),
+                    Column::required("requested_strategy", ColumnType::Text),
+                    Column::required("requested_settings", ColumnType::Text),
+                    Column::required("is_default", ColumnType::BigInt).default("0"),
+                    Column::new("fallback_from", ColumnType::Text),
+                    Column::required("chunk_count", ColumnType::BigInt),
+                    Column::required("token_count", ColumnType::BigInt),
+                    Column::required("source_sha", ColumnType::Text),
+                    Column::required("built_at", ColumnType::Text),
+                ],
+                vec!["volume_id", "path", "request_key"],
+            ),
+            Table::new(
+                "chunks",
+                vec![
+                    Column::required("volume_id", ColumnType::Text),
+                    Column::required("set_id", ColumnType::Text),
+                    Column::required("number", ColumnType::BigInt),
+                    Column::required("unit", ColumnType::BigInt),
+                    Column::required("text", ColumnType::Text),
+                    Column::required("heading_path", ColumnType::Text),
+                    Column::new("page_start", ColumnType::BigInt),
+                    Column::new("page_end", ColumnType::BigInt),
+                    Column::required("token_count", ColumnType::BigInt),
+                    Column::required("figures", ColumnType::Text),
+                    Column::required("document_title", ColumnType::Text),
+                ],
+                vec!["volume_id", "set_id", "number"],
+            ),
         ],
         vec![
             Index {
@@ -307,6 +348,12 @@ pub fn schema() -> SchemaSet {
                 name: "idx_doc_artifact_sets_path",
                 table: "doc_artifact_sets",
                 columns: vec!["volume_id", "path"],
+            },
+            Index {
+                name: "idx_chunk_sets_id",
+                table: "chunk_sets",
+                // The chunk tools name a set by id.
+                columns: vec!["volume_id", "set_id"],
             },
         ],
     )
@@ -1562,6 +1609,59 @@ fn read_trash_row(r: &RowValues) -> Result<TrashEntryRow> {
     })
 }
 
+/// Removes the chunk sets of one file and their chunks inside the caller's
+/// transaction (SPEC-0101 DEC-007): the sets live and die with the node row, in
+/// every index mode, which a search hook gated by the mode could not promise.
+async fn tx_delete_sets(tx: &mut dyn RelationalTx, volume: &str, path: &str) -> Result<()> {
+    tx.execute(
+        &Query::new(
+            "DELETE FROM chunks WHERE volume_id=?1 AND set_id IN \
+             (SELECT set_id FROM chunk_sets WHERE volume_id=?1 AND path=?2)",
+        )
+        .bind(volume)
+        .bind(path),
+    )
+    .await?;
+    tx.execute(
+        &Query::new("DELETE FROM chunk_sets WHERE volume_id=?1 AND path=?2")
+            .bind(volume)
+            .bind(path),
+    )
+    .await?;
+    Ok(())
+}
+
+/// [`tx_delete_sets`] for `path` and everything below it. `volume_id` is in
+/// both the subquery and the outer statement, so another volume's sets stay.
+async fn tx_delete_sets_under(
+    tx: &mut dyn RelationalTx,
+    volume: &str,
+    path: &str,
+    sm: &SubtreeMatch,
+) -> Result<()> {
+    let within = sm.clause("path", 3, 4);
+    tx.execute(
+        &Query::new(format!(
+            "DELETE FROM chunks WHERE volume_id=?1 AND set_id IN \
+             (SELECT set_id FROM chunk_sets WHERE volume_id=?1 AND (path=?2 OR {within}))"
+        ))
+        .bind(volume)
+        .bind(path)
+        .bind(&sm.like)
+        .bind(&sm.prefix),
+    )
+    .await?;
+    tx.execute(
+        &Query::new(format!("DELETE FROM chunk_sets WHERE volume_id=?1 AND (path=?2 OR {within})"))
+            .bind(volume)
+            .bind(path)
+            .bind(&sm.like)
+            .bind(&sm.prefix),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Move `src` (and its subtree) to `dst` inside the caller's transaction. Shared
 /// by `rename` and `rename_into_trash` so the move logic exists once (SPEC-0044
 /// DR-001). `sm` is the case exact selection of `src` and what lies below it (SPEC-0050).
@@ -1572,6 +1672,7 @@ async fn tx_rename(
     src: &str,
     dst: &str,
     sm: &SubtreeMatch,
+    carry_sets: bool,
 ) -> Result<()> {
     // Shortest path first, so a parent is renamed before its children and no
     // intermediate state collides with a row that has not moved yet.
@@ -1615,6 +1716,18 @@ async fn tx_rename(
             .bind(&old),
         )
         .await?;
+        // A plain move keeps the sets and their ids: only the path changes, and
+        // `source_sha` stays, so a moved file is still `current`. The destination
+        // held no node, hence no set, so the new key cannot collide.
+        if carry_sets {
+            tx.execute(
+                &Query::new("UPDATE chunk_sets SET path=?1 WHERE volume_id=?2 AND path=?3")
+                    .bind(&new)
+                    .bind(volume)
+                    .bind(&old),
+            )
+            .await?;
+        }
     }
     Ok(())
 }
@@ -1872,6 +1985,10 @@ pub(crate) async fn select_expired_export_links(
 
 #[async_trait]
 impl MetaBackend for RelationalMetaStore {
+    fn chunk_store(&self) -> Option<crate::chunking::ChunkStore> {
+        Some(crate::chunking::ChunkStore::new(self.db.clone(), self.volume_id.clone()))
+    }
+
     async fn get(&self, path: &str) -> Result<Option<NodeRow>> {
         let row = self
             .db
@@ -2100,6 +2217,7 @@ impl MetaBackend for RelationalMetaStore {
                         .bind(&path),
                 )
                 .await?;
+                tx_delete_sets(tx, &volume, &path).await?;
                 tx_add_usage(tx, &volume, -size).await?;
                 Ok(gc)
             })
@@ -2124,6 +2242,7 @@ impl MetaBackend for RelationalMetaStore {
             let (volume, path) = (volume.clone(), path.clone());
             let (select_sql, delete_sql) = (select_sql.clone(), delete_sql.clone());
             let (like, prefix) = (sm.like.clone(), sm.prefix.clone());
+            let sm = sm.clone();
             // The accumulator is built inside the body, so a retry starts from an
             // empty list instead of appending to the previous attempt's result.
             Box::pin(async move {
@@ -2151,6 +2270,7 @@ impl MetaBackend for RelationalMetaStore {
                     &Query::new(delete_sql).bind(&volume).bind(&path).bind(&like).bind(&prefix),
                 )
                 .await?;
+                tx_delete_sets_under(tx, &volume, &path, &sm).await?;
                 tx_add_usage(tx, &volume, -removed).await?;
                 Ok(gc)
             })
@@ -2222,7 +2342,7 @@ impl MetaBackend for RelationalMetaStore {
         let (src, dst) = (src.to_string(), dst.to_string());
         run_retrying(&*self.db, move |tx| {
             let (volume, src, dst, sm) = (volume.clone(), src.clone(), dst.clone(), sm.clone());
-            Box::pin(async move { tx_rename(tx, dialect, &volume, &src, &dst, &sm).await })
+            Box::pin(async move { tx_rename(tx, dialect, &volume, &src, &dst, &sm, true).await })
         })
         .await
     }
@@ -2237,7 +2357,10 @@ impl MetaBackend for RelationalMetaStore {
                 (volume.clone(), src.clone(), dst.clone(), sm.clone(), entry.clone());
             Box::pin(async move {
                 // One transaction: the row exists exactly when the move does.
-                tx_rename(tx, dialect, &volume, &src, &dst, &sm).await?;
+                // The sets go with the file: a restore brings back the file, and
+                // its next rebuild makes the sets again.
+                tx_delete_sets_under(tx, &volume, &src, &sm).await?;
+                tx_rename(tx, dialect, &volume, &src, &dst, &sm, false).await?;
                 insert_trash_entry(
                     tx,
                     &volume,
@@ -2419,6 +2542,8 @@ mod tests {
                 "doc_artifact_sets",
                 "doc_images",
                 "doc_tables",
+                "chunk_sets",
+                "chunks",
             ]
         );
     }

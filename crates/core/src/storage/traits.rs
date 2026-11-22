@@ -196,6 +196,12 @@ pub struct PutFileResult {
 /// A volume's metadata tree plus content-addressed blob reference counts.
 #[async_trait]
 pub trait MetaBackend: Send + Sync {
+    /// The chunk sets of this volume (SPEC-0101 DEC-004), held in the same
+    /// database as the nodes. `None` for a store without them (a test double),
+    /// whose files then list no set.
+    fn chunk_store(&self) -> Option<crate::chunking::ChunkStore> {
+        None
+    }
     async fn get(&self, path: &str) -> Result<Option<NodeRow>>;
     async fn list_children(&self, parent: &str) -> Result<Vec<NodeRow>>;
     async fn subtree(&self, root: &str) -> Result<Vec<NodeRow>>;
@@ -317,6 +323,11 @@ pub trait AdminBackend: Send + Sync {
     /// caller did it: tool, purge sweep or CLI. A later call replaces the hook.
     /// A store that cannot hold one ignores it.
     fn set_project_gone_hook(&self, _hook: ProjectGoneHook) {}
+    /// Registers what runs after a project is soft deleted, and only then: the
+    /// chunk sets of its files go with it (SPEC-0101 FR-NEW-025), whatever the
+    /// index mode and with or without a rebuild scheduler, so this slot is
+    /// separate from [`AdminBackend::set_project_gone_hook`].
+    fn set_project_deleted_hook(&self, _hook: ProjectGoneHook) {}
     async fn create_project(&self, project_id: &str, owner: &str) -> Result<Project>;
 
     /// Same as [`AdminBackend::create_project`], plus applying `config` as the

@@ -146,8 +146,9 @@ fn tool_contract_golden_is_current() {
     // SPEC-0052 adds git.tag_create: 50 git, so 112; git.tag_delete: 51 git, so 113;
     // git.remote_push_tag: 52 git, so 114. SPEC-0053 adds git.remote_delete_tag: 53 git, so 115.
     // SPEC-0054 adds git.remote_push_tags: 54 git, so 116. SPEC-0100 adds fs.list_derived_jobs: 46 fs, so 117,
-    // and fs.recalculate: 47 fs, so 118.
-    assert_eq!(reg.len(), 118, "the frozen contract covers 47 fs, 17 admin and 54 git tools");
+    // and fs.recalculate: 47 fs, so 118. SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and
+    // fs.get_chunk: 50 fs, so 121; fs.create_chunk_set and fs.delete_chunk_set: 52 fs, so 123.
+    assert_eq!(reg.len(), 123, "the frozen contract covers 52 fs, 17 admin and 54 git tools");
     let rendered = render(&reg);
 
     if std::env::var_os(REWRITE_ENV).is_some() {
@@ -269,7 +270,8 @@ fn e2e_new_960_the_thirty_one_enumerated_names_are_exactly_the_new_tool_set() {
     git_enumeration_verdict(reg.names()).expect("the git family must match the enumeration");
 
     assert_eq!(PRE_SPEC_GIT_TOOLS.len() + NEW_GIT_TOOLS.len() + TAG_GIT_TOOLS.len(), 54);
-    assert_eq!(reg.len(), 118);
+    // SPEC-0101 adds five fs.* chunk tools: 123.
+    assert_eq!(reg.len(), 123);
 
     // Every new tool is frozen, and carries the family's required mount_id.
     let Some(frozen) = frozen_tools() else {
@@ -325,7 +327,7 @@ fn e2e_new_931_every_hardcoded_tool_count_site_reports_the_new_numbers() {
     let admin_family = reg.names().iter().filter(|n| n.starts_with("admin.")).count();
 
     // contract_golden.rs's own total, and the subtotals all.rs asserts.
-    assert_eq!(reg.len(), 118);
+    assert_eq!(reg.len(), 123);
     assert_eq!(git_family, 54);
     assert_eq!(fs_family + admin_family + git_family, reg.len());
 
@@ -339,7 +341,7 @@ fn e2e_new_931_every_hardcoded_tool_count_site_reports_the_new_numbers() {
         eprintln!("skipped: {PATH} is absent");
         return;
     };
-    assert_eq!(frozen.len(), 118, "the golden file holds one entry per registered tool");
+    assert_eq!(frozen.len(), 123, "the golden file holds one entry per registered tool");
 
     // The contract text documents the same names, set for set.
     let text =

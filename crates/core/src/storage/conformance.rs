@@ -1155,6 +1155,100 @@ async fn rename_into_trash_is_atomic(engine: &Engine, tag: &str) -> Result<()> {
     Ok(())
 }
 
+/// SPEC-0101 DEC-007: chunk sets follow their file through a move, a delete, a
+/// folder delete and a move to the trash, in one transaction, and never touch
+/// another volume's sets, on every engine.
+async fn chunk_sets_follow_the_node(engine: &Engine, tag: &str) -> Result<()> {
+    use crate::chunking::{Chunk, Set};
+    use crate::storage::traits::{MetaBackend, TrashEntry};
+    let who = engine.name();
+    let db = engine.db().await?;
+    let (m, other) = (
+        RelationalMetaStore::open(db.clone(), format!("{tag}-cs")).await?,
+        RelationalMetaStore::open(db, format!("{tag}-cs-other")).await?,
+    );
+    let set = |id: &str, path: &str, key: &str, default: bool| Set {
+        set_id: id.to_string(),
+        path: path.to_string(),
+        request_key: key.to_string(),
+        strategy: "fixed".into(),
+        settings: "{}".into(),
+        requested_strategy: "fixed".into(),
+        requested_settings: "{}".into(),
+        is_default: default,
+        fallback_from: None,
+        chunk_count: 0,
+        token_count: 0,
+        source_sha: "s".into(),
+        built_at: "2026-11-20T10:00:00Z".into(),
+    };
+    let chunk = |n: u32| Chunk {
+        number: n,
+        unit: n,
+        text: format!("chunk {n}"),
+        heading_path: vec![],
+        page_start: None,
+        page_end: None,
+        token_count: 2,
+        figures: vec![],
+        document_title: String::new(),
+    };
+    let (cs, other_cs) = (m.chunk_store().unwrap(), other.chunk_store().unwrap());
+    for (store, meta, pfx) in [(&cs, &m, "m"), (&other_cs, &other, "o")] {
+        meta.mkdirs("/d", true).await?;
+        meta.mkdirs("/.trash", true).await?;
+        for p in ["/a.txt", "/d/x.txt", "/d/y.txt", "/t.txt"] {
+            meta.put_file(p, None, 0, MODE_FILE).await?;
+            let id = |k: &str| format!("{pfx}-{tag}-{p}-{k}");
+            store.insert_set(&set(&id("0"), p, "k0", true), &[chunk(1), chunk(2)]).await?;
+            store.insert_set(&set(&id("1"), p, "k1", false), &[chunk(1)]).await?;
+        }
+    }
+
+    // A move keeps the ids and the chunks under the new path.
+    let before: Vec<String> = cs.list_sets("/a.txt").await?.into_iter().map(|s| s.set_id).collect();
+    m.rename("/a.txt", "/b.txt").await?;
+    assert!(cs.list_sets("/a.txt").await?.is_empty(), "{who}: old path holds no set");
+    let moved = cs.list_sets("/b.txt").await?;
+    assert_eq!(moved.iter().map(|s| s.set_id.clone()).collect::<Vec<_>>(), before, "{who}");
+    assert_eq!(cs.list_chunks(&moved[0].set_id, 0, 10).await?.len(), 2, "{who}: chunks kept");
+
+    // A folder move rewrites every path below it.
+    m.rename("/d", "/e").await?;
+    assert!(cs.list_sets("/d/x.txt").await?.is_empty(), "{who}");
+    assert_eq!(cs.list_sets("/e/x.txt").await?.len(), 2, "{who}");
+    assert_eq!(cs.list_sets("/e/y.txt").await?.len(), 2, "{who}");
+
+    // A file delete removes the sets and the chunks.
+    let gone = cs.list_sets("/b.txt").await?;
+    m.delete_file("/b.txt").await?;
+    assert!(cs.list_sets("/b.txt").await?.is_empty(), "{who}");
+    assert!(cs.list_chunks(&gone[0].set_id, 0, 10).await?.is_empty(), "{who}: chunks removed");
+
+    // A trash move removes the sets of the file.
+    let entry = TrashEntry {
+        original_path: "/t.txt".into(),
+        size: 0,
+        kind: "file".into(),
+        deleted_at: "2026-10-19T00:00:00.000000+00:00".into(),
+        deleted_by: None,
+    };
+    m.rename_into_trash("/t.txt", "/.trash/t", &entry).await?;
+    assert!(cs.list_sets("/.trash/t").await?.is_empty(), "{who}: trash holds no set");
+    assert!(cs.list_sets("/t.txt").await?.is_empty(), "{who}");
+
+    // A subtree delete removes every set below it.
+    m.remove_subtree("/e").await?;
+    assert!(cs.list_sets("/e/x.txt").await?.is_empty(), "{who}");
+    assert!(cs.list_sets("/e/y.txt").await?.is_empty(), "{who}");
+
+    // The other volume, same paths, kept every set.
+    for p in ["/a.txt", "/d/x.txt", "/d/y.txt", "/t.txt"] {
+        assert_eq!(other_cs.list_sets(p).await?.len(), 2, "{who}: {p} of the other volume");
+    }
+    Ok(())
+}
+
 // ── the suite ───────────────────────────────────────────────────────────────────
 
 async fn run_suite(engine: &Engine) -> Result<()> {
@@ -1179,6 +1273,7 @@ async fn run_suite(engine: &Engine) -> Result<()> {
     meta_schema_applies_twice(engine, &tag).await?;
     trash_timestamps_round_trip(engine, &tag).await?;
     rename_into_trash_is_atomic(engine, &tag).await?;
+    chunk_sets_follow_the_node(engine, &tag).await?;
     Ok(())
 }
 

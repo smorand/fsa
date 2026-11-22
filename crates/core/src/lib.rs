@@ -10,6 +10,7 @@
 
 pub mod api;
 pub mod app;
+pub mod chunking;
 pub mod cli;
 pub mod config;
 pub mod core;

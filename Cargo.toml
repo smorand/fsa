@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/fsa", "crates/core", "crates/agent"]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.94.1"
 license = "MIT"
@@ -129,6 +129,9 @@ async-trait = "0.1"
 futures = "0.3"
 tempfile = "3"
 which = "6"
+# The cl100k_base ruler of the chunk sets (SPEC-0101 DEC-001): its ranks are
+# embedded, so no file or network is read at runtime.
+tiktoken-rs = "0.12.1"
 
 # ── analytics ─────────────────────────────────────────────────────────────────
 # Pinned to an apache/datafusion main revision because no released datafusion

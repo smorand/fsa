@@ -18,13 +18,15 @@
 //! configured with (`search.mode`). A project's mode decides WHETHER its content
 //! is indexed, not which engine indexes it.
 
+use crate::chunking::ChunkDefaults;
+use crate::chunking::service::{cut, default_request, rebuild_file_sets, title};
 use crate::core::fs_ops;
 use crate::errors::Result;
-use crate::search::SearchBackend;
 use crate::search::derived::JobCause;
+use crate::search::{IndexedChunk, SearchBackend};
 use crate::state::AppState;
 use crate::storage::VolumeClient;
-use crate::storage::traits::IndexMode;
+use crate::storage::traits::{IndexMode, MetaBackend};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -40,11 +42,53 @@ pub(crate) fn is_trash_path(path: &str, trash_dir: &str) -> bool {
     path == prefix || path.starts_with(&format!("{prefix}/"))
 }
 
-/// Chunk window used by auto indexing, matching the `search.index` tool defaults.
-/// There is no per project chunk configuration in this iteration.
-pub const AUTO_CHUNK_SIZE: usize = 1000;
-/// Overlap between consecutive auto indexed chunks, matching `search.index`.
-pub const AUTO_CHUNK_OVERLAP: usize = 100;
+/// Replaces the search entries of `path` by the chunks of its default set,
+/// one entry per chunk (SPEC-0101 DEC-009, DEC-011): the one indexing path of
+/// `search.index`, the full index, the write hooks, the companion and the
+/// rebuild. A current default set is indexed as it is unless `recut`, as a
+/// rebuild asks; otherwise every set of the file is cut again from `text`
+/// (FR-NEW-021), the entries are written, and only then the sets, so an engine
+/// failure or a discard leaves the previous sets and entries (FR-NEW-022).
+/// `still_current` is checked before the engine's commit and before each set's
+/// transaction; `Ok(None)` means it refused. Cost: one node lookup, the sets
+/// (one read, or one linear cut per set and one transaction per set), then the
+/// engine's replacement.
+#[allow(clippy::too_many_arguments)]
+pub async fn index_default_set(
+    backend: &dyn SearchBackend,
+    meta: &dyn MetaBackend,
+    volume_id: &str,
+    path: &str,
+    text: String,
+    d: ChunkDefaults,
+    recut: bool,
+    still_current: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<Option<usize>> {
+    let sha = meta.get(path).await?.and_then(|n| n.sha256).unwrap_or_default();
+    let Some(store) = meta.chunk_store() else {
+        // A meta store that holds no sets (a test double) still gets entries cut
+        // the way its default set would be.
+        let chunks = cut(text, title(path), default_request(), d).await?.chunks;
+        let entries: Vec<IndexedChunk> = chunks.iter().map(IndexedChunk::from_chunk).collect();
+        return backend.index_chunks_checked(volume_id, path, &entries, still_current).await;
+    };
+    if !recut && let Some(set) = store.default_set(path).await?.filter(|s| s.source_sha == sha) {
+        let chunks = store.get_chunk_window(&set.set_id, 1, u32::MAX).await?;
+        let entries: Vec<IndexedChunk> = chunks.iter().map(IndexedChunk::from_chunk).collect();
+        return backend.index_chunks_checked(volume_id, path, &entries, still_current).await;
+    }
+    let built = rebuild_file_sets(&store, path, &sha, &text, d).await?;
+    let entries: Vec<IndexedChunk> =
+        built.default_chunks.iter().map(IndexedChunk::from_chunk).collect();
+    let Some(n) = backend.index_chunks_checked(volume_id, path, &entries, still_current).await?
+    else {
+        return Ok(None);
+    };
+    if !built.commit(&store, still_current).await? {
+        return Ok(None);
+    }
+    Ok(Some(n))
+}
 
 /// The side effect engine for one search backend.
 ///
@@ -52,11 +96,13 @@ pub const AUTO_CHUNK_OVERLAP: usize = 100;
 /// the duration of one call.
 pub struct ProjectIndexer<'a> {
     backend: &'a Arc<dyn SearchBackend>,
+    /// The chunk set defaults a default set is cut with.
+    defaults: ChunkDefaults,
 }
 
 impl<'a> ProjectIndexer<'a> {
-    pub fn new(backend: &'a Arc<dyn SearchBackend>) -> Self {
-        Self { backend }
+    pub fn new(backend: &'a Arc<dyn SearchBackend>, defaults: ChunkDefaults) -> Self {
+        Self { backend, defaults }
     }
 
     /// Apply a mode change. Returns true when a background full index was started.
@@ -103,8 +149,9 @@ impl<'a> ProjectIndexer<'a> {
         let backend = self.backend.clone();
         let vol = volume_id.to_string();
         let trash_dir = trash_dir.to_string();
+        let d = self.defaults;
         tokio::task::spawn(async move {
-            match full_index(&backend, &vol, &client, &trash_dir).await {
+            match full_index(&backend, &vol, &client, &trash_dir, d).await {
                 Ok(n) => {
                     tracing::info!(volume_id = %vol, chunks = n, "initial full index finished")
                 }
@@ -116,19 +163,40 @@ impl<'a> ProjectIndexer<'a> {
         Ok(true)
     }
 
-    /// Index one file's new content, without waiting for it.
+    /// Index one file's new content through its default set, without waiting
+    /// for it. `meta` is the file's volume store, which holds the set.
     ///
     /// The returned handle exists so a test can await the work; production callers
     /// drop it, which detaches the task.
-    pub fn on_write(&self, volume_id: &str, path: &str, text: &str) -> JoinHandle<()> {
+    pub fn on_write(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        meta: Arc<dyn MetaBackend>,
+    ) -> JoinHandle<()> {
+        self.spawn_index(volume_id, path, text, meta, false)
+    }
+
+    /// The task of [`Self::on_write`]; `recut` cuts every set again, as the
+    /// companion of a converted document asks (FR-NEW-021).
+    fn spawn_index(
+        &self,
+        volume_id: &str,
+        path: &str,
+        text: &str,
+        meta: Arc<dyn MetaBackend>,
+        recut: bool,
+    ) -> JoinHandle<()> {
         let backend = self.backend.clone();
         let vol = volume_id.to_string();
         let p = path.to_string();
         let t = text.to_string();
+        let d = self.defaults;
         tokio::task::spawn(async move {
-            if let Err(e) =
-                backend.index_path(&vol, &p, &t, AUTO_CHUNK_SIZE, AUTO_CHUNK_OVERLAP).await
-            {
+            let indexed =
+                index_default_set(&*backend, &*meta, &vol, &p, t, d, recut, &|| true).await;
+            if let Err(e) = indexed {
                 tracing::warn!(volume_id = %vol, path = %p, error = %e, "auto index write failed");
             }
         })
@@ -156,6 +224,7 @@ pub async fn full_index(
     volume_id: &str,
     client: &VolumeClient,
     trash_dir: &str,
+    d: ChunkDefaults,
 ) -> Result<usize> {
     let files = fs_ops::iter_files(client, "/", &[]).await?;
     let mut chunks = 0usize;
@@ -164,9 +233,13 @@ pub async fn full_index(
             continue;
         }
         let Some(text) = read_utf8(client, &path).await else { continue };
-        match backend.index_path(volume_id, &path, &text, AUTO_CHUNK_SIZE, AUTO_CHUNK_OVERLAP).await
-        {
-            Ok(n) => chunks += n,
+        let indexed =
+            index_default_set(&**backend, &*client.meta, volume_id, &path, text, d, false, &|| {
+                true
+            })
+            .await;
+        match indexed {
+            Ok(n) => chunks += n.unwrap_or(0),
             Err(e) => {
                 tracing::warn!(volume_id, path = %path, error = %e, "full index skipped a file");
             }
@@ -213,7 +286,19 @@ pub async fn after_write(state: &AppState, volume_id: &str, path: &str, text: &s
     if let Some(backend) = active_backend(state, volume_id).await {
         match backend.scheduler() {
             Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
-            None => drop(ProjectIndexer::new(backend).on_write(volume_id, path, text)),
+            None => match state.stores.client(volume_id).await {
+                Ok(client) => {
+                    drop(ProjectIndexer::new(backend, state.config.search.chunking()).on_write(
+                        volume_id,
+                        path,
+                        text,
+                        client.meta.clone(),
+                    ))
+                }
+                Err(e) => {
+                    tracing::warn!(volume_id, error = %e, "auto index cannot open the volume")
+                }
+            },
         }
     }
 }
@@ -233,7 +318,9 @@ pub async fn after_write_reread(
     if let Some(backend) = active_backend(state, volume_id).await {
         match backend.scheduler() {
             Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
-            None => index_now(backend, volume_id, path, client).await,
+            None => {
+                index_now(backend, volume_id, path, client, state.config.search.chunking()).await
+            }
         }
     }
 }
@@ -244,9 +331,10 @@ async fn index_now(
     volume_id: &str,
     path: &str,
     client: &VolumeClient,
+    d: ChunkDefaults,
 ) {
     if let Some(text) = read_utf8(client, path).await {
-        drop(ProjectIndexer::new(backend).on_write(volume_id, path, &text));
+        drop(ProjectIndexer::new(backend, d).on_write(volume_id, path, &text, client.meta.clone()));
     }
 }
 
@@ -272,9 +360,14 @@ pub async fn after_companion(
         _ => payload,
     };
     let Some(md_path) = report["md_path"].as_str() else { return };
-    // Indexed at once, never scheduled: SPEC-0100 leaves the companion out (DEC-015).
-    if let Some(backend) = active_backend(state, volume_id).await {
-        index_now(backend, volume_id, md_path, client).await;
+    // Indexed at once, never scheduled: SPEC-0100 leaves the companion out
+    // (DEC-015). Its sets are cut again first, its default set included
+    // (SPEC-0101 FR-NEW-021).
+    if let Some(backend) = active_backend(state, volume_id).await
+        && let Some(text) = read_utf8(client, md_path).await
+    {
+        let indexer = ProjectIndexer::new(backend, state.config.search.chunking());
+        drop(indexer.spawn_index(volume_id, md_path, &text, client.meta.clone(), true));
     }
 }
 
@@ -307,7 +400,9 @@ pub async fn after_delete(state: &AppState, volume_id: &str, path: &str) {
         if let Some(s) = backend.scheduler() {
             s.forget_path(volume_id, path).await;
         }
-        drop(ProjectIndexer::new(backend).on_delete(volume_id, path));
+        drop(
+            ProjectIndexer::new(backend, state.config.search.chunking()).on_delete(volume_id, path),
+        );
     }
 }
 
@@ -322,7 +417,7 @@ pub async fn after_delete_many(state: &AppState, volume_id: &str, paths: &[Strin
                 s.forget_path(volume_id, path).await;
             }
         }
-        let indexer = ProjectIndexer::new(backend);
+        let indexer = ProjectIndexer::new(backend, state.config.search.chunking());
         for path in paths {
             drop(indexer.on_delete(volume_id, path));
         }
@@ -411,7 +506,8 @@ pub async fn after_move<'a>(
             }
         }
     }
-    let indexer = ProjectIndexer::new(backend);
+    let d = state.config.search.chunking();
+    let indexer = ProjectIndexer::new(backend, d);
     let clears: Vec<JoinHandle<()>> =
         sources.iter().map(|path| indexer.on_delete(volume_id, path)).collect();
 
@@ -430,7 +526,7 @@ pub async fn after_move<'a>(
     }
 
     let trash_dir = &state.safety.config().trash_dir;
-    index_tree(backend, volume_id, destination, client, trash_dir).await;
+    index_tree(backend, volume_id, destination, client, trash_dir, d).await;
 }
 
 /// The part of `path` after `root` when `path` is `root` or below it.
@@ -449,7 +545,8 @@ pub async fn after_copy(
 ) {
     if let Some(backend) = active_backend(state, volume_id).await {
         let trash_dir = &state.safety.config().trash_dir;
-        arrive(backend, volume_id, destination, client, trash_dir).await;
+        let d = state.config.search.chunking();
+        arrive(backend, volume_id, destination, client, trash_dir, d).await;
     }
 }
 
@@ -470,10 +567,11 @@ pub async fn after_restore(
         return;
     }
     // Awaited so the clear cannot land after the scheduled rebuild.
-    if let Err(e) = ProjectIndexer::new(backend).on_delete(volume_id, trash_path).await {
+    let d = state.config.search.chunking();
+    if let Err(e) = ProjectIndexer::new(backend, d).on_delete(volume_id, trash_path).await {
         tracing::warn!(volume_id, error = %e, "an index clear task failed during a restore");
     }
-    arrive(backend, volume_id, restored_path, client, &state.safety.config().trash_dir).await;
+    arrive(backend, volume_id, restored_path, client, &state.safety.config().trash_dir, d).await;
 }
 
 /// A tree has arrived at `root`: schedule each of its files when the backend
@@ -484,9 +582,10 @@ async fn arrive(
     root: &str,
     client: &VolumeClient,
     trash_dir: &str,
+    d: ChunkDefaults,
 ) {
     let Some(scheduler) = backend.scheduler() else {
-        index_tree(backend, volume_id, root, client, trash_dir).await;
+        index_tree(backend, volume_id, root, client, trash_dir, d).await;
         return;
     };
     for path in files_under(client, root).await {
@@ -520,14 +619,15 @@ async fn index_tree(
     root: &str,
     client: &VolumeClient,
     trash_dir: &str,
+    d: ChunkDefaults,
 ) {
-    let indexer = ProjectIndexer::new(backend);
+    let indexer = ProjectIndexer::new(backend, d);
     for path in files_under(client, root).await {
         if is_trash_path(&path, trash_dir) {
             continue;
         }
         let Some(text) = read_utf8(client, &path).await else { continue };
-        drop(indexer.on_write(volume_id, &path, &text));
+        drop(indexer.on_write(volume_id, &path, &text, client.meta.clone()));
     }
 }
 
@@ -543,7 +643,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingBackend {
         calls: Mutex<Vec<String>>,
-        /// When set, every index_path call fails, to prove errors stay contained.
+        /// When set, every index call fails, to prove errors stay contained.
         fail_index: bool,
         /// Latency added to every delete, recorded on completion. A real backend
         /// delete is a network round trip, so a test that needs the "delete lands
@@ -564,19 +664,22 @@ mod tests {
 
     #[async_trait]
     impl SearchBackend for RecordingBackend {
-        async fn index_path(
+        async fn index_chunks_checked(
             &self,
             volume_id: &str,
             path: &str,
-            text: &str,
-            chunk_size: usize,
-            chunk_overlap: usize,
-        ) -> Result<usize> {
-            self.record(format!("index {volume_id} {path} '{text}' {chunk_size}/{chunk_overlap}"));
+            chunks: &[IndexedChunk],
+            _still_current: &(dyn Fn() -> bool + Send + Sync),
+        ) -> Result<Option<usize>> {
+            // Recorded as the chunk texts without their header lines, so a test
+            // reads the content it wrote.
+            let body: Vec<&str> =
+                chunks.iter().map(|c| c.text.split_once('\n').map_or("", |(_, t)| t)).collect();
+            self.record(format!("index {volume_id} {path} '{}'", body.join("|")));
             if self.fail_index {
                 return Err(ToolError::internal("embedding endpoint is down"));
             }
-            Ok(1)
+            Ok(Some(chunks.len()))
         }
 
         async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {
@@ -607,15 +710,6 @@ mod tests {
         }
     }
 
-    /// US-0264/T3: the provided default ignores the guard and runs `index_path`.
-    #[tokio::test]
-    async fn guarded_default_method_ignores_the_guard() {
-        let (backend, rec) = recording();
-        let r = backend.index_path_checked("v", "/a.md", "text", 1000, 100, &|| false).await;
-        assert!(matches!(r, Ok(Some(1))), "got {r:?}");
-        assert_eq!(rec.calls().iter().filter(|c| c.starts_with("index ")).count(), 1);
-    }
-
     fn recording() -> (Arc<dyn SearchBackend>, Arc<RecordingBackend>) {
         with_delete_delay(std::time::Duration::ZERO)
     }
@@ -627,20 +721,27 @@ mod tests {
         (inner.clone() as Arc<dyn SearchBackend>, inner)
     }
 
+    /// SPEC-0101: the hook indexes the chunks of the file's default set, which
+    /// it builds.
     #[tokio::test]
-    async fn on_write_hook_indexes_the_file_with_the_auto_chunk_window() {
+    async fn on_write_hook_indexes_the_default_set_of_the_file() {
         let (backend, rec) = recording();
-        ProjectIndexer::new(&backend)
-            .on_write("proj", "/a.md", "hello")
+        let client = client().await;
+        client.write_text_atomic("/a.md", "hello").await.expect("seed");
+        ProjectIndexer::new(&backend, ChunkDefaults::default())
+            .on_write("proj", "/a.md", "hello", client.meta.clone())
             .await
             .expect("the task must not panic");
-        assert_eq!(rec.calls(), vec!["index proj /a.md 'hello' 1000/100"]);
+        assert_eq!(rec.calls(), vec!["index proj /a.md 'hello'"]);
+        let store = client.meta.chunk_store().expect("a relational meta store");
+        let set = store.default_set("/a.md").await.unwrap().expect("the default set was built");
+        assert_eq!(set.chunk_count, 1);
     }
 
     #[tokio::test]
     async fn on_delete_hook_removes_the_path() {
         let (backend, rec) = recording();
-        ProjectIndexer::new(&backend)
+        ProjectIndexer::new(&backend, ChunkDefaults::default())
             .on_delete("proj", "/a.md")
             .await
             .expect("the task must not panic");
@@ -652,8 +753,9 @@ mod tests {
     async fn a_failing_index_call_is_contained_in_the_task() {
         let inner = Arc::new(RecordingBackend { fail_index: true, ..Default::default() });
         let backend = inner.clone() as Arc<dyn SearchBackend>;
-        ProjectIndexer::new(&backend)
-            .on_write("proj", "/a.md", "hello")
+        let client = client().await;
+        ProjectIndexer::new(&backend, ChunkDefaults::default())
+            .on_write("proj", "/a.md", "hello", client.meta.clone())
             .await
             .expect("a backend error must not panic the task");
         assert_eq!(inner.calls().len(), 1);
@@ -663,7 +765,7 @@ mod tests {
     async fn on_mode_change_to_none_wipes_and_starts_nothing() {
         let (backend, rec) = recording();
         let client = client().await;
-        let started = ProjectIndexer::new(&backend)
+        let started = ProjectIndexer::new(&backend, ChunkDefaults::default())
             .on_mode_change("proj", IndexMode::Bm25, IndexMode::None, client, ".mcp_trash")
             .await
             .expect("the wipe must succeed");
@@ -678,7 +780,7 @@ mod tests {
         client.write_text_atomic("/a.md", "alpha").await.expect("seed");
         client.write_text_atomic("/b.md", "beta").await.expect("seed");
 
-        let started = ProjectIndexer::new(&backend)
+        let started = ProjectIndexer::new(&backend, ChunkDefaults::default())
             .on_mode_change("proj", IndexMode::None, IndexMode::Bm25, client, ".mcp_trash")
             .await
             .expect("the transition must succeed");
@@ -695,7 +797,7 @@ mod tests {
     async fn the_same_mode_twice_touches_nothing() {
         let (backend, rec) = recording();
         let client = client().await;
-        let started = ProjectIndexer::new(&backend)
+        let started = ProjectIndexer::new(&backend, ChunkDefaults::default())
             .on_mode_change("proj", IndexMode::Both, IndexMode::Both, client, ".mcp_trash")
             .await
             .expect("a no op must succeed");
@@ -712,7 +814,9 @@ mod tests {
         client.write_text_atomic("/good.md", "readable").await.expect("seed");
         client.write_bytes_atomic("/bad.bin", &[0xFF, 0xFE, 0x00]).await.expect("seed");
 
-        full_index(&backend, "proj", &client, ".mcp_trash").await.expect("the pass must succeed");
+        full_index(&backend, "proj", &client, ".mcp_trash", ChunkDefaults::default())
+            .await
+            .expect("the pass must succeed");
         let calls = rec.calls();
         assert_eq!(calls.len(), 1, "only the readable file is indexed: {calls:?}");
         assert!(calls[0].contains("/good.md"), "{calls:?}");
@@ -725,9 +829,10 @@ mod tests {
         let client = client().await;
         client.write_text_atomic("/moved.md", "arrived").await.expect("seed");
 
-        index_tree(&backend, "proj", "/moved.md", &client, ".mcp_trash").await;
+        index_tree(&backend, "proj", "/moved.md", &client, ".mcp_trash", ChunkDefaults::default())
+            .await;
         let calls = wait_for(&rec, 1).await;
-        assert_eq!(calls, vec!["index proj /moved.md 'arrived' 1000/100"]);
+        assert_eq!(calls, vec!["index proj /moved.md 'arrived'"]);
     }
 
     /// A tree move or copy must reach every file at every depth, not just the root.
@@ -738,7 +843,7 @@ mod tests {
         client.write_text_atomic("/dst/a.md", "alpha").await.expect("seed");
         client.write_text_atomic("/dst/deep/b.md", "beta").await.expect("seed");
 
-        index_tree(&backend, "proj", "/dst", &client, ".mcp_trash").await;
+        index_tree(&backend, "proj", "/dst", &client, ".mcp_trash", ChunkDefaults::default()).await;
         let calls = wait_for(&rec, 2).await;
         assert!(calls.iter().any(|c| c.contains("index proj /dst/a.md 'alpha'")), "{calls:?}");
         assert!(calls.iter().any(|c| c.contains("index proj /dst/deep/b.md 'beta'")), "{calls:?}");
@@ -752,7 +857,7 @@ mod tests {
         client.write_text_atomic("/dst/good.md", "readable").await.expect("seed");
         client.write_bytes_atomic("/dst/bad.bin", &[0xFF, 0xFE, 0x00]).await.expect("seed");
 
-        index_tree(&backend, "proj", "/dst", &client, ".mcp_trash").await;
+        index_tree(&backend, "proj", "/dst", &client, ".mcp_trash", ChunkDefaults::default()).await;
         let calls = wait_for(&rec, 1).await;
         assert_eq!(calls.len(), 1, "only the readable file is indexed: {calls:?}");
         assert!(calls[0].contains("/dst/good.md"), "{calls:?}");
@@ -764,7 +869,15 @@ mod tests {
     async fn index_tree_on_a_missing_path_indexes_nothing() {
         let (backend, rec) = recording();
         let client = client().await;
-        index_tree(&backend, "proj", "/nowhere.md", &client, ".mcp_trash").await;
+        index_tree(
+            &backend,
+            "proj",
+            "/nowhere.md",
+            &client,
+            ".mcp_trash",
+            ChunkDefaults::default(),
+        )
+        .await;
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(rec.calls().is_empty(), "{:?}", rec.calls());
     }

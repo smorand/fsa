@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 const COLS: &str =
-    "job_id, project_id, path, kind, state, cause, hidden, created_at, ended_at, reason";
+    "job_id, project_id, path, kind, state, cause, hidden, created_at, ended_at, reason, set_id";
 
 /// The states a finished row can hold, inlined as literals (never user text).
 const FINISHED: &str = "('done', 'failed', 'superseded')";
@@ -38,6 +38,7 @@ impl JobStore {
             created_at: r.text(7)?,
             ended_at: r.opt_text(8)?,
             reason: r.opt_text(9)?,
+            set_id: r.opt_text(10)?,
         })
     }
 
@@ -45,7 +46,7 @@ impl JobStore {
         self.db
             .execute(
                 &Query::new(format!(
-                    "INSERT INTO derived_job ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                    "INSERT INTO derived_job ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
                 ))
                 .bind(&job.job_id)
                 .bind(&job.project_id)
@@ -56,7 +57,8 @@ impl JobStore {
                 .bind(i64::from(job.hidden))
                 .bind(&job.created_at)
                 .bind(job.ended_at.clone())
-                .bind(job.reason.clone()),
+                .bind(job.reason.clone())
+                .bind(job.set_id.clone()),
             )
             .await?;
         Ok(())
@@ -230,6 +232,21 @@ mod tests {
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].job_id, next.job_id);
         assert_eq!(page[0].reason.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn a_chunks_job_keeps_its_set_id_and_a_finished_row_per_kind() {
+        let s = store().await;
+        let mut job = Job::new_waiting("proj", "/a.md", JobKind::Chunks, JobCause::Manual);
+        job.set_id = Some("set-1a2b3c4d".into());
+        s.insert(&job).await.unwrap();
+        s.insert(&finished("/a.md", "2026-11-20T10:00:00Z")).await.unwrap();
+        s.finish(&job.job_id, JobState::Done, "2026-11-20T10:01:00Z", None).await.unwrap();
+        let page = s.list_finished_page("proj", None, None, 10).await.unwrap();
+        assert_eq!(page.len(), 2, "one finished row per file and kind");
+        let chunks = page.iter().find(|j| j.kind == JobKind::Chunks).unwrap();
+        assert_eq!(chunks.set_id.as_deref(), Some("set-1a2b3c4d"));
+        assert_eq!(page.iter().find(|j| j.kind == JobKind::SearchIndex).unwrap().set_id, None);
     }
 
     #[tokio::test]

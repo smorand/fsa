@@ -52,6 +52,7 @@ pub(crate) mod artifacts;
 #[cfg(test)]
 mod case_paths_e2e;
 pub mod catalog;
+pub(crate) mod chunks;
 pub mod context7;
 #[cfg(test)]
 pub(crate) mod contract_golden;
@@ -110,7 +111,6 @@ pub(crate) mod read;
 pub mod registry_support;
 #[cfg(test)]
 pub(crate) mod search;
-#[cfg(test)]
 pub(crate) mod search_semantic;
 pub mod sqlite;
 #[cfg(test)]
@@ -160,6 +160,7 @@ pub(crate) fn register_fs(reg: &mut crate::tools::registry_support::ToolRegistry
     archive::register(reg);
     artifacts::register(reg);
     derived::register(reg);
+    chunks::register(reg);
 }
 
 /// Read `mount_id`, enforce project membership, open the volume.
@@ -477,6 +478,11 @@ mod tests {
         "fs.get_document_view",
         "fs.list_derived_jobs",
         "fs.recalculate",
+        "fs.list_chunk_sets",
+        "fs.list_chunks",
+        "fs.get_chunk",
+        "fs.create_chunk_set",
+        "fs.delete_chunk_set",
     ];
 
     #[test]
@@ -485,8 +491,10 @@ mod tests {
         register_fs(&mut reg);
         // 44 since SPEC-0019 US-0008 added fs.get_document_view, 45 with
         // SPEC-0045 fs.diff_files, 46 with SPEC-0100 fs.list_derived_jobs, 47 with
-        // SPEC-0100 fs.recalculate.
-        assert_eq!(reg.len(), 47);
+        // SPEC-0100 fs.recalculate, 50 with SPEC-0101 fs.list_chunk_sets,
+        // fs.list_chunks and fs.get_chunk, 52 with fs.create_chunk_set and
+        // fs.delete_chunk_set.
+        assert_eq!(reg.len(), 52);
         assert_eq!(reg.names(), FS_TOOLS);
     }
 
@@ -563,8 +571,10 @@ mod tests {
             |name| name.starts_with("fs."),
             // 44 since SPEC-0019 added fs.list_tables, fs.get_table, fs.list_images,
             // fs.get_image and fs.get_document_view; 45 with SPEC-0045 fs.diff_files;
-            // 46 with SPEC-0100 fs.list_derived_jobs; 47 with fs.recalculate.
-            47,
+            // 46 with SPEC-0100 fs.list_derived_jobs; 47 with fs.recalculate;
+            // 50 with SPEC-0101 fs.list_chunk_sets, fs.list_chunks, fs.get_chunk;
+            // 52 with fs.create_chunk_set and fs.delete_chunk_set.
+            52,
             "fs.* tools",
         );
     }

@@ -4,7 +4,7 @@
 //! table. The sqlite-vec extension is registered once at process startup via
 //! `sqlite3_auto_extension` (see `storage/sqlite.rs`).
 //!
-//! Each `index_path` call embeds every chunk via the configured embedding
+//! Each `index_chunks_checked` call embeds every chunk via the configured embedding
 //! endpoint before storing the resulting float vector. `query_vector` likewise
 //! embeds the query string before running the KNN `MATCH` scan, so callers
 //! never need to produce their own vectors.
@@ -13,7 +13,7 @@
 
 use crate::config::EmbeddingConfig;
 use crate::errors::{Result, ToolError};
-use crate::search::{IndexStats, SearchBackend, SearchResult, embedding};
+use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult, embedding};
 use async_trait::async_trait;
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
@@ -92,32 +92,15 @@ impl SqliteVecBackend {
 
 #[async_trait]
 impl SearchBackend for SqliteVecBackend {
-    async fn index_path(
+    async fn index_chunks_checked(
         &self,
         volume_id: &str,
         path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
-    ) -> Result<usize> {
-        // Always current: the guard accepts, so the update is never refused.
-        let stored = self
-            .index_path_checked(volume_id, path, text, chunk_size, chunk_overlap, &|| true)
-            .await?;
-        Ok(stored.unwrap_or(0))
-    }
-
-    async fn index_path_checked(
-        &self,
-        volume_id: &str,
-        path: &str,
-        text: &str,
-        chunk_size: usize,
-        chunk_overlap: usize,
+        chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
         let vc = self.get_or_open(volume_id)?;
-        let chunks = crate::search::chunker::chunk(text, chunk_size, chunk_overlap);
+        let chunks = chunks.to_vec();
         let n = chunks.len();
         let vol = volume_id.to_string();
         let path_owned = path.to_string();
@@ -125,8 +108,8 @@ impl SearchBackend for SqliteVecBackend {
         // Compute embeddings before entering the blocking closure: embedding
         // calls are async and must not be made from within spawn_blocking.
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
-        for chunk_text in &chunks {
-            let emb = embedding::embed(&self.client, &self.embedding_config, chunk_text).await?;
+        for chunk in &chunks {
+            let emb = embedding::embed(&self.client, &self.embedding_config, &chunk.text).await?;
             embeddings.push(emb);
         }
 
@@ -159,13 +142,13 @@ impl SearchBackend for SqliteVecBackend {
             )
             .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
 
-            for (idx, (chunk_text, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
+            for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
                 // Insert metadata row first; its auto-increment rowid is used
                 // to link the vec0 table row.
                 tx.execute(
                     "INSERT INTO search_vec_meta (volume_id, path, chunk_idx, chunk_text) \
                          VALUES (?1, ?2, ?3, ?4)",
-                    params![vol, path_owned, idx as i64, chunk_text],
+                    params![vol, path_owned, i64::from(chunk.number), chunk.text],
                 )
                 .map_err(|e| ToolError::internal(format!("sqlite-vec: insert meta: {e}")))?;
 
@@ -308,7 +291,7 @@ impl SearchBackend for SqliteVecBackend {
             let mut stmt = guard
                 .conn
                 .prepare(
-                    "SELECT m.path, m.chunk_text, v.distance \
+                    "SELECT m.path, m.chunk_text, v.distance, m.chunk_idx \
                      FROM search_vec v \
                      JOIN search_vec_meta m ON m.rowid = v.rowid \
                      WHERE m.volume_id = ?1 \
@@ -320,17 +303,23 @@ impl SearchBackend for SqliteVecBackend {
 
             let rows: Vec<SearchResult> = stmt
                 .query_map(params![vol, rusqlite::types::Value::Blob(bytes), top_k as i64], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, f64>(2)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
                 })
                 .map_err(|e| ToolError::internal(format!("sqlite-vec: query: {e}")))?
                 .enumerate()
                 .filter_map(|(i, r)| {
-                    r.ok().map(|(path, chunk, distance)| SearchResult {
+                    r.ok().map(|(path, chunk, distance, idx)| SearchResult {
                         path,
                         // Convert cosine distance to a similarity score in [0,1].
                         score: 1.0 - distance as f32,
                         chunk,
                         rank: i + 1,
+                        chunk_idx: u32::try_from(idx).unwrap_or(0),
                     })
                 })
                 .collect();
@@ -442,7 +431,7 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol1", "/a.md", "hello world test", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "hello world test").await.unwrap();
         let s = b.stats("vol1").await.unwrap();
         assert_eq!(s.vector_chunks, 1);
     }
@@ -452,7 +441,7 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol1", "/a.md", "some text to delete", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "some text to delete").await.unwrap();
         let deleted = b.delete_path("vol1", "/a.md").await.unwrap();
         assert!(deleted > 0, "delete must report at least one chunk removed");
         let s = b.stats("vol1").await.unwrap();
@@ -464,8 +453,8 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol1", "/a.md", "first content", 200, 0).await.unwrap();
-        b.index_path("vol1", "/a.md", "second content", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "first content").await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "second content").await.unwrap();
         let s = b.stats("vol1").await.unwrap();
         assert_eq!(s.vector_chunks, 1, "re-index must replace, not append");
     }
@@ -475,7 +464,7 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol1", "/doc.md", "rust systems programming", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/doc.md", "rust systems programming").await.unwrap();
         // The fake server returns the same vector for every input, so cosine
         // distance between query and stored embedding is 0 (identical).
         let r = b.query_vector("vol1", "systems programming", 10).await.unwrap();
@@ -489,8 +478,8 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/x.md", "content a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/x.md", "content b").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().vector_chunks, 1);
         assert_eq!(b.stats("vol_b").await.unwrap().vector_chunks, 1);
     }
@@ -500,8 +489,8 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol1", "/a.md", "alpha", 200, 0).await.unwrap();
-        b.index_path("vol1", "/b.md", "beta", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/a.md", "alpha").await.unwrap();
+        crate::search::index_text(&b, "vol1", "/b.md", "beta").await.unwrap();
         assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 2);
 
         assert_eq!(b.delete_all("vol1").await.unwrap(), 2);
@@ -509,7 +498,7 @@ mod tests {
         assert!(b.query_vector("vol1", "alpha", 10).await.unwrap().is_empty());
 
         // Usable again straight after the wipe.
-        b.index_path("vol1", "/c.md", "gamma", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol1", "/c.md", "gamma").await.unwrap();
         assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 1);
     }
 
@@ -518,8 +507,8 @@ mod tests {
         register_extension();
         let base = spawn_fake_embedding(3).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 3);
-        b.index_path("vol_a", "/x.md", "content a", 200, 0).await.unwrap();
-        b.index_path("vol_b", "/x.md", "content b", 200, 0).await.unwrap();
+        crate::search::index_text(&b, "vol_a", "/x.md", "content a").await.unwrap();
+        crate::search::index_text(&b, "vol_b", "/x.md", "content b").await.unwrap();
         b.delete_all("vol_a").await.unwrap();
         assert_eq!(b.stats("vol_a").await.unwrap().vector_chunks, 0);
         assert_eq!(b.stats("vol_b").await.unwrap().vector_chunks, 1);
@@ -575,12 +564,12 @@ mod tests {
         // sixth is short; call 7 is the query.
         let base = spawn_short_on_call(4, 6).await;
         let (b, _d) = backend(&format!("{base}/v1/embeddings"), 4);
-        let old = "old".repeat(10);
-        assert_eq!(b.index_path("vol1", "/a.md", &old, 10, 0).await.unwrap(), 3);
+        let old = crate::search::entries(&["oldoldoldo"; 3]);
+        assert_eq!(b.index_chunks_checked("vol1", "/a.md", &old, &|| true).await.unwrap(), Some(3));
         assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 3);
 
-        let new = "n".repeat(30);
-        let res = b.index_path("vol1", "/a.md", &new, 10, 0).await;
+        let new = crate::search::entries(&["nnnnnnnnnn"; 3]);
+        let res = b.index_chunks_checked("vol1", "/a.md", &new, &|| true).await;
         assert!(res.is_err(), "the short embedding must fail the replacement");
 
         assert_eq!(b.stats("vol1").await.unwrap().vector_chunks, 3, "old chunks kept");

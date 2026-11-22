@@ -14,9 +14,9 @@
 //! Only `tokio::time` is used for due times, so a test can pause the clock.
 
 use super::{Job, JobCause, JobKind, JobState, JobStore};
+use crate::chunking::ChunkDefaults;
 use crate::errors::ToolError;
 use crate::search::SearchBackend;
-use crate::search::indexer::{AUTO_CHUNK_OVERLAP, AUTO_CHUNK_SIZE};
 use crate::storage::StoreManager;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +33,22 @@ type Key = (String, String, JobKind);
 struct Waiting {
     job: Job,
     due: Instant,
+    /// What a `chunks` job cuts; `None` for a `search_index` job.
+    work: Option<ChunkWork>,
+}
+
+/// The text a manual `chunks` job cuts, read when the member asked: the
+/// scheduler holds no application state to read a converted document with
+/// (SPEC-0101 DEC-012). The sha is the file's at that read, so a later save
+/// leaves the set `out_of_date` rather than wrongly `current`.
+#[derive(Debug, Clone)]
+pub struct ChunkWork {
+    pub set_id: String,
+    pub sha: String,
+    pub text: String,
+    /// The set is the default one and the project indexes: the search entries
+    /// follow its new chunks (FR-NEW-019).
+    pub reindex: bool,
 }
 
 struct Running {
@@ -82,6 +98,9 @@ pub struct Scheduler {
     store: JobStore,
     stores: Arc<StoreManager>,
     delay: Duration,
+    /// The chunk set defaults of this start: a default set is rebuilt with
+    /// them (SPEC-0101 DEC-012, FR-NEW-027).
+    defaults: ChunkDefaults,
     slots: Mutex<HashMap<Key, Slot>>,
     wake: Arc<Notify>,
     /// Job times follow the tokio clock from this wall clock origin, so the
@@ -100,9 +119,11 @@ impl Scheduler {
         store: JobStore,
         stores: Arc<StoreManager>,
         delay_secs: u64,
+        defaults: ChunkDefaults,
     ) -> Arc<Self> {
         let s = Arc::new(Self {
             backend,
+            defaults,
             store,
             stores,
             delay: Duration::from_secs(delay_secs),
@@ -144,18 +165,31 @@ impl Scheduler {
         let rows = self.store.load_unfinished(None).await?;
         let (running, waiting): (Vec<Job>, Vec<Job>) =
             rows.into_iter().partition(|j| j.state == JobState::Running);
+        let mut chunk_rows: Vec<Job> = Vec::new();
         {
             let mut slots = self.slots.lock().await;
             let due = Instant::now() + self.delay;
             for mut job in waiting {
+                // A `chunks` job holds its text in memory only: nothing to resume.
+                if job.kind == JobKind::Chunks {
+                    chunk_rows.push(job);
+                    continue;
+                }
                 let key = (job.project_id.clone(), job.path.clone(), job.kind);
                 let slot = slots.entry(key).or_default();
                 if slot.waiting.is_none() {
                     // The row may predate a change of the configured delay.
                     job.hidden = self.delay.is_zero();
-                    slot.waiting = Some(Waiting { job, due });
+                    slot.waiting = Some(Waiting { job, due, work: None });
                 }
             }
+        }
+        let (chunk_running, running): (Vec<Job>, Vec<Job>) =
+            running.into_iter().partition(|j| j.kind == JobKind::Chunks);
+        for job in chunk_rows.into_iter().chain(chunk_running) {
+            self.store
+                .finish(&job.job_id, JobState::Failed, &self.now_secs(), Some(RESTART_REASON))
+                .await?;
         }
         for job in running {
             self.store
@@ -174,6 +208,9 @@ impl Scheduler {
         let elapsed = chrono::Duration::from_std(self.origin.elapsed()).unwrap_or_default();
         (self.origin_wall + elapsed).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
+
+    /// The kinds a file can hold a job of: a delete or a move treats each.
+    const KINDS: [JobKind; 2] = [JobKind::SearchIndex, JobKind::Chunks];
 
     /// Rule 1: a change creates the waiting job, or pushes its due time back
     /// without a row write; a running job of the key becomes stale. The caller
@@ -202,7 +239,29 @@ impl Scheduler {
     /// the dispatcher starts when the running one ends. Returns the job as the
     /// member sees it. Cost: at most three row writes under the lock.
     pub async fn recalculate(self: &Arc<Self>, project: &str, path: &str) -> serde_json::Value {
-        let key = (project.to_string(), path.to_string(), JobKind::SearchIndex);
+        self.recalculate_kind(project, path, JobKind::SearchIndex, None).await
+    }
+
+    /// FR-NEW-019: as [`Self::recalculate`] for the kind `chunks`, one job per
+    /// file whatever the set. Its key is its own, so a waiting `search_index`
+    /// rebuild of the file neither goes nor waits. Cost: as `recalculate`.
+    pub async fn recalculate_chunks(
+        self: &Arc<Self>,
+        project: &str,
+        path: &str,
+        work: ChunkWork,
+    ) -> serde_json::Value {
+        self.recalculate_kind(project, path, JobKind::Chunks, Some(work)).await
+    }
+
+    async fn recalculate_kind(
+        self: &Arc<Self>,
+        project: &str,
+        path: &str,
+        kind: JobKind,
+        work: Option<ChunkWork>,
+    ) -> serde_json::Value {
+        let key = (project.to_string(), path.to_string(), kind);
         let now = Instant::now();
         let mut slots = self.slots.lock().await;
         let slot = slots.entry(key.clone()).or_default();
@@ -214,14 +273,15 @@ impl Scheduler {
         if let Some(r) = &slot.running {
             r.stale.store(true, Ordering::SeqCst);
         }
-        let mut job = Job::new_waiting(project, path, JobKind::SearchIndex, JobCause::Manual);
+        let mut job = Job::new_waiting(project, path, kind, JobCause::Manual);
         job.created_at = self.now_secs();
+        job.set_id = work.as_ref().map(|w| w.set_id.clone());
         if slot.busy() {
             if let Err(e) = self.store.insert(&job).await {
                 tracing::warn!(project, path, error = %e, "cannot record a rebuild job");
             }
             let answer = job.to_json(Some(0));
-            slot.waiting = Some(Waiting { job, due: now });
+            slot.waiting = Some(Waiting { job, due: now, work });
             drop(slots);
             self.wake.notify_one();
             return answer;
@@ -233,7 +293,7 @@ impl Scheduler {
             tracing::warn!(project, path, error = %e, "cannot record a rebuild job");
         }
         let stale = Arc::new(AtomicBool::new(false));
-        let task = tokio::spawn(self.clone().rebuild(key, job.clone(), stale.clone()));
+        let task = tokio::spawn(self.clone().rebuild(key, job.clone(), stale.clone(), work));
         let answer = job.to_json(None);
         slot.running = Some(Running { job, stale, task, clear_at_end: true });
         answer
@@ -255,7 +315,7 @@ impl Scheduler {
             // The rebuild still runs from memory; only its record is missing.
             tracing::warn!(project, path, error = %e, "cannot record a rebuild job");
         }
-        Waiting { job, due }
+        Waiting { job, due, work: None }
     }
 
     /// FR-NEW-005: a file is deleted. Its waiting job is dropped, its running
@@ -269,8 +329,9 @@ impl Scheduler {
     }
 
     async fn forget_locked(&self, slots: &mut HashMap<Key, Slot>, project: &str, path: &str) {
-        let key = (project.to_string(), path.to_string(), JobKind::SearchIndex);
-        if let Some(mut slot) = slots.remove(&key) {
+        for kind in Self::KINDS {
+            let key = (project.to_string(), path.to_string(), kind);
+            let Some(mut slot) = slots.remove(&key) else { continue };
             slot.waiting = None;
             if let Some(mut r) = slot.running.take() {
                 r.stale.store(true, Ordering::SeqCst);
@@ -354,6 +415,7 @@ impl Scheduler {
         if let Err(e) = self.store.move_path(project, from, to).await {
             tracing::warn!(project, from, to, error = %e, "cannot move the jobs of a file");
         }
+        self.drop_chunks_locked(&mut slots, project, from).await;
         let from_key = (project.to_string(), from.to_string(), JobKind::SearchIndex);
         let Some(mut src) = slots.remove(&from_key) else { return };
         // A rebuild already removed keeps clearing the old path when it ends.
@@ -383,6 +445,27 @@ impl Scheduler {
         slot.running = dest.running;
         drop(slots);
         self.wake.notify_one();
+    }
+
+    /// A `chunks` job of a file that moved: its text belongs to the old path, so
+    /// the waiting one goes and the running one is staled, ending with no record
+    /// and no write (its guard refuses). The sets themselves moved with the file.
+    async fn drop_chunks_locked(&self, slots: &mut HashMap<Key, Slot>, project: &str, path: &str) {
+        let key = (project.to_string(), path.to_string(), JobKind::Chunks);
+        let Some(mut slot) = slots.remove(&key) else { return };
+        if let Some(w) = slot.waiting.take()
+            && let Err(e) = self.store.delete(&w.job.job_id).await
+        {
+            tracing::warn!(job_id = %w.job.job_id, error = %e, "cannot remove a moved job");
+        }
+        if let Some(mut r) = slot.running.take() {
+            r.stale.store(true, Ordering::SeqCst);
+            r.job.state = JobState::Superseded;
+            slot.removed.push(r);
+        }
+        if !slot.removed.is_empty() {
+            slots.insert(key, slot);
+        }
     }
 
     /// The listed waiting and running jobs of a project whose path passes
@@ -423,37 +506,44 @@ impl Scheduler {
                 next = Some(next.map_or(due, |n| n.min(due)));
                 continue;
             }
-            let Waiting { mut job, .. } = slot.waiting.take().expect("a waiting job");
+            let Waiting { mut job, work, .. } = slot.waiting.take().expect("a waiting job");
             job.state = JobState::Running;
             if let Err(e) = self.store.set_state(&job.job_id, JobState::Running).await {
                 tracing::warn!(job_id = %job.job_id, error = %e, "cannot record a job start");
             }
             let stale = Arc::new(AtomicBool::new(false));
-            let task = tokio::spawn(self.clone().rebuild(key.clone(), job.clone(), stale.clone()));
+            let task =
+                tokio::spawn(self.clone().rebuild(key.clone(), job.clone(), stale.clone(), work));
             slot.running = Some(Running { job, stale, task, clear_at_end: true });
         }
         next
     }
 
     /// Rule 3: rebuild, then record the outcome and free the key.
-    async fn rebuild(self: Arc<Self>, key: Key, job: Job, stale: Arc<AtomicBool>) {
-        let (project, path, _) = &key;
-        let outcome = match self.read(project, path).await {
-            // Not text, or gone: nothing to index, which is a finished rebuild.
-            None => Ok(Some(0)),
-            Some(text) => {
-                let guard = || !stale.load(Ordering::SeqCst);
-                self.backend
-                    .index_path_checked(
-                        project,
-                        path,
-                        &text,
-                        AUTO_CHUNK_SIZE,
-                        AUTO_CHUNK_OVERLAP,
-                        &guard,
-                    )
-                    .await
+    async fn rebuild(
+        self: Arc<Self>,
+        key: Key,
+        job: Job,
+        stale: Arc<AtomicBool>,
+        work: Option<ChunkWork>,
+    ) {
+        let (project, path, kind) = &key;
+        let guard = || !stale.load(Ordering::SeqCst);
+        let outcome = match work {
+            Some(work) if *kind == JobKind::Chunks => {
+                let backend = Some(&*self.backend);
+                rebuild_chunk_set(
+                    &self.stores,
+                    backend,
+                    project,
+                    path,
+                    &work,
+                    self.defaults,
+                    &guard,
+                )
+                .await
             }
+            _ => self.rebuild_file(project, path, &guard).await,
         };
         let (state, reason) = match outcome {
             Ok(None) => (JobState::Superseded, None),
@@ -498,8 +588,10 @@ impl Scheduler {
         // DEC-010: a commit may have slipped between the guard and the clear of
         // a delete or a move, so the old path is cleared once more, unless a
         // newer job of that path will write its entries again.
-        let clear_old = ((was_removed && clear_at_end)
-            || at.as_ref().is_some_and(|k| k.1 != *path))
+        // A `chunks` job never wrote search entries other than the default set's
+        // own, which a delete clears through the `search_index` key.
+        let clear_old = job.kind == JobKind::SearchIndex
+            && ((was_removed && clear_at_end) || at.as_ref().is_some_and(|k| k.1 != *path))
             && slots.get(&key).is_none_or(|s| s.waiting.is_none() && s.running.is_none());
         for k in at.iter().chain(std::iter::once(&key)) {
             if slots.get(k).is_some_and(Slot::is_empty) {
@@ -514,10 +606,85 @@ impl Scheduler {
         self.wake.notify_one();
     }
 
-    async fn read(&self, project: &str, path: &str) -> Option<String> {
-        let client = self.stores.client(project).await.ok()?;
-        crate::search::indexer::read_utf8(&client, path).await
+    /// SPEC-0101 design 3.2: every set of the file is cut again from its
+    /// current text, then the default set's chunks are indexed, then the sets
+    /// are written; the guard is the last check before each commit. A file
+    /// gone has nothing to rebuild; a file that is no longer text loses its
+    /// sets and entries unless it is a converted document. Both are a finished
+    /// rebuild (`Ok(Some(0))`).
+    async fn rebuild_file(
+        &self,
+        project: &str,
+        path: &str,
+        guard: &(dyn Fn() -> bool + Send + Sync),
+    ) -> crate::errors::Result<Option<usize>> {
+        let Ok(client) = self.stores.client(project).await else { return Ok(Some(0)) };
+        let Ok(bytes) = client.read_bytes(path).await else { return Ok(Some(0)) };
+        if let Ok(text) = String::from_utf8(bytes) {
+            return crate::search::indexer::index_default_set(
+                &*self.backend,
+                &*client.meta,
+                project,
+                path,
+                text,
+                self.defaults,
+                true,
+                guard,
+            )
+            .await;
+        }
+        let Some(store) = client.meta.chunk_store() else { return Ok(Some(0)) };
+        if crate::chunking::service::drop_file_sets(&client, &store, path, guard).await? {
+            self.backend.delete_path(project, path).await?;
+        } else if !guard() {
+            return Ok(None);
+        }
+        Ok(Some(0))
     }
+}
+
+/// The body of a manual `chunks` job (FR-NEW-019): cut one set from the text
+/// read at the request and write it, the guard being the last check before the
+/// write. The default set also feeds the search entries first, in the same order
+/// as a rebuild of the file, when `work.reindex`. A set removed meanwhile or a
+/// file gone leaves nothing to do (`Ok(Some(0))`). Cost: one lookup, one linear
+/// cut, one transaction of one row per chunk, plus the entries of the default set.
+pub async fn rebuild_chunk_set(
+    stores: &StoreManager,
+    backend: Option<&dyn SearchBackend>,
+    project: &str,
+    path: &str,
+    work: &ChunkWork,
+    defaults: ChunkDefaults,
+    guard: &(dyn Fn() -> bool + Send + Sync),
+) -> crate::errors::Result<Option<usize>> {
+    let Ok(client) = stores.client(project).await else { return Ok(Some(0)) };
+    let Some(store) = client.meta.chunk_store() else { return Ok(Some(0)) };
+    let Some(built) = crate::chunking::service::rebuild_one_set(
+        &store,
+        path,
+        &work.set_id,
+        &work.sha,
+        &work.text,
+        defaults,
+    )
+    .await?
+    else {
+        return Ok(Some(0));
+    };
+    let mut written = 0;
+    if let Some(backend) = backend.filter(|_| work.reindex && built.first_is_default()) {
+        let entries: Vec<crate::search::IndexedChunk> =
+            built.default_chunks.iter().map(crate::search::IndexedChunk::from_chunk).collect();
+        match backend.index_chunks_checked(project, path, &entries, guard).await? {
+            Some(n) => written = n,
+            None => return Ok(None),
+        }
+    }
+    if !built.commit(&store, guard).await? {
+        return Ok(None);
+    }
+    Ok(Some(written))
 }
 
 /// True when `slot` holds the running or removed job `job_id`.

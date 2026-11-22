@@ -374,6 +374,9 @@ async fn bt_010(engine: Engine, test: &str) {
         f.write(OLIVIA, project, "/memo.docx", b"PK docx").await;
         f.convert(OLIVIA, project, "/memo.docx").await;
         f.export(OLIVIA, project, &["/plan.txt"]).await;
+        // SPEC-0101: the chunk tables are volume scoped metadata too.
+        let args = json!({"mount_id": project, "path": "/plan.txt", "strategy": "fixed"});
+        f.call(OLIVIA, "fs.create_chunk_set", args).await.unwrap();
     }
     let before = counts(&f, ATLAS).await;
     assert!(

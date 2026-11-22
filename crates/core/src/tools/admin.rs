@@ -613,9 +613,10 @@ async fn set_index_mode(ctx: &ToolCtx, project_id: &str, mode: &str) -> Result<V
 
     let client = ctx.state.stores.client(project_id).await?;
     let trash_dir = ctx.state.safety.config().trash_dir.clone();
-    let reindex_started = crate::search::indexer::ProjectIndexer::new(backend)
-        .on_mode_change(project_id, old_mode, new_mode, client, &trash_dir)
-        .await?;
+    let reindex_started =
+        crate::search::indexer::ProjectIndexer::new(backend, ctx.state.config.search.chunking())
+            .on_mode_change(project_id, old_mode, new_mode, client, &trash_dir)
+            .await?;
 
     Ok(json!({
         "project_id": project_id,

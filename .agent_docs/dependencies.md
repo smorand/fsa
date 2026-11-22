@@ -15,3 +15,6 @@
 - RUSTSEC-2026-0457, 0461 and 0462 (rmcp up to 3.6, 3.7 and 3.9) and RUSTSEC-2026-0459 (libsqlite3-sys 0.35, fixed in 0.39) made `cargo audit` and the `security_gate` tests red. `rmcp` went 3.5.0 to 3.9.0 (`cargo update -p rmcp`, same `^3.5.0` requirement) and `rusqlite` 0.37 to 0.41 (libsqlite3-sys 0.39.1, `Cargo.toml`).
 - Code changes: `usize` no longer implements `FromSql` (the two COUNT reads in `search/vector_sqlite.rs` read `i64`), `Statement::column_names()` returns an iterator.
 - Wire change: a bare call without `initialize` now gets HTTP 400 `Bad Request: Session ID is required` (it was 422 `Unexpected message, expect initialize request`); tests in `app.rs` and `architecture.md` updated.
+
+## tiktoken-rs 0.12.1 (2026-11-22, SPEC-0101 DEC-001)
+- The `cl100k_base` ruler of the chunk sets (`chunking/tokens.rs`): `cl100k_base_singleton()`, `CoreBPE::encode_ordinary` (special token spellings stay plain text), `CoreBPE::decode_bytes` then a lossy UTF-8 read. The ranks are `include_str!` in the crate, so no file or network at runtime; MIT. Adds `fancy-regex`, `bit-set` and `bit-vec` to `Cargo.lock`.
