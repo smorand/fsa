@@ -358,7 +358,7 @@ mod shared {
             dims,
             tantivy_dir.path().to_str().expect("temp dir has valid utf-8 path"),
             client,
-            cfg,
+            Arc::new(crate::search::embedding::StaticTargets(cfg)),
         )) as Arc<dyn crate::search::SearchBackend>;
 
         let endpoint_for_config = format!("{embedding_url}/v1/embeddings");
@@ -441,9 +441,14 @@ mod shared {
             dimensions: dims,
         };
         let backend = Arc::new(
-            PostgresVectorBackend::new(pool.clone(), dims, client, cfg)
-                .await
-                .expect("PostgresVectorBackend::new failed — check that pgvector is installed"),
+            PostgresVectorBackend::new(
+                pool.clone(),
+                dims,
+                client,
+                Arc::new(crate::search::embedding::StaticTargets(cfg)),
+            )
+            .await
+            .expect("PostgresVectorBackend::new failed — check that pgvector is installed"),
         ) as Arc<dyn crate::search::SearchBackend>;
 
         let endpoint_for_config = format!("{embedding_url}/v1/embeddings");

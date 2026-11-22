@@ -134,7 +134,13 @@ pub enum Command {
 
 /// Parse the process arguments, run the selected verb, map failure to exit code 1.
 pub async fn run() -> ExitCode {
-    match dispatch(Cli::parse()).await {
+    run_with(Cli::parse()).await
+}
+
+/// [`run`] on an already parsed CLI, so a test checks the exit path a start
+/// failure takes (SPEC-0102 E2E-013).
+pub async fn run_with(cli: Cli) -> ExitCode {
+    match dispatch(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -214,7 +220,16 @@ async fn cmd_purge(
     // the sweep (BR-004): an unreachable search backend must not stop a file
     // purge that never depended on it, so it is a warning there.
     let http = std::sync::Arc::new(reqwest::Client::new());
-    let search = crate::search::build_backend(&config, &relational, http).await;
+    let search = crate::search::build_backend(
+        &config,
+        &relational,
+        http,
+        // A purge only deletes entries, it never embeds, so the YAML block will do.
+        std::sync::Arc::new(crate::search::embedding::StaticTargets(
+            config.search.embedding.clone(),
+        )),
+    )
+    .await;
 
     match project {
         Some(project_id) => {

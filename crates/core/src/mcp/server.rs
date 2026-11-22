@@ -1558,6 +1558,124 @@ pub struct GetProjectQuotaArgs {
     pub project_id: String,
 }
 
+fn default_auth_scheme() -> String {
+    "none".into()
+}
+
+// No `Debug` on the two provider inputs: they carry a secret, and a derived
+// `Debug` would print it (SPEC-0102 DEC-005).
+#[derive(Deserialize, JsonSchema)]
+pub struct CreateProviderArgs {
+    /// Name of the provider, 1 to 64 characters, unique without regard to case.
+    pub name: String,
+    /// Base address of the service, http or https, for example http://localhost:9010/v1.
+    pub endpoint: String,
+    /// Authentication scheme: 'none' or 'bearer'.
+    #[serde(default = "default_auth_scheme")]
+    pub auth_scheme: String,
+    /// Secret sent as a bearer token; required for 'bearer', refused for 'none'. Never returned.
+    #[serde(default)]
+    pub secret: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateProviderArgs {
+    /// Id of the provider to change.
+    pub provider_id: String,
+    /// New name, 1 to 64 characters.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New base address of the service.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// New authentication scheme: 'none' or 'bearer'.
+    #[serde(default)]
+    pub auth_scheme: Option<String>,
+    /// New secret; empty keeps the stored one. Never returned.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// True removes the stored secret.
+    #[serde(default)]
+    pub clear_secret: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProviderIdArgs {
+    /// Id of the provider to delete.
+    pub provider_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateModelArgs {
+    /// Id of the provider of the model.
+    pub provider_id: String,
+    /// Name of the model, 1 to 128 characters, unique within its provider without regard to case.
+    pub name: String,
+    /// Kind: text_embedding, image_embedding, reranker, ocr or chat.
+    pub kind: String,
+    /// Size of the vectors, 1 to 8192; required for the two embedding kinds, refused for the others.
+    #[serde(default)]
+    pub dimension: Option<i64>,
+    /// Largest input in tokens, 1 to 1000000; absent means no limit.
+    #[serde(default)]
+    pub max_input_tokens: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateModelArgs {
+    /// Id of the model to change.
+    pub model_id: String,
+    /// New name, 1 to 128 characters.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New size of the vectors, 1 to 8192; embedding kinds only.
+    #[serde(default)]
+    pub dimension: Option<i64>,
+    /// New largest input in tokens, 1 to 1000000; 0 removes the limit.
+    #[serde(default)]
+    pub max_input_tokens: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ModelIdArgs {
+    /// Id of the model to delete.
+    pub model_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetDefaultModelArgs {
+    /// Kind of the default: text_embedding or reranker.
+    pub kind: String,
+    /// Id of the model, which must be of that kind.
+    pub model_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ClearDefaultModelArgs {
+    /// Kind whose default is removed: text_embedding or reranker.
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListModelsArgs {
+    /// Only the models of this provider.
+    #[serde(default)]
+    pub provider_id: String,
+    /// Only the models of this kind.
+    #[serde(default)]
+    pub kind: String,
+    /// The marker of the previous answer, to read the next page.
+    #[serde(default)]
+    pub marker: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MarkerArgs {
+    /// The marker of the previous answer, to read the next page.
+    #[serde(default)]
+    pub marker: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetProjectDiskUsageArgs {
     /// Id of the project whose files are listed by size.
@@ -3249,6 +3367,199 @@ impl McpServer {
     }
 
     #[tool(
+        name = "admin.create_provider",
+        description = "Register a model provider: a name, the base address of its service, an authentication scheme ('none' or 'bearer') and, for 'bearer', a secret that is stored encrypted and never returned (platform admin only)."
+    )]
+    pub(crate) async fn admin_create_provider(
+        &self,
+        Parameters(a): Parameters<CreateProviderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let secret = crate::settings::SecretText::new(a.secret);
+        let out = crate::tools::models::create_provider(
+            &self.state,
+            &self.person,
+            a.name,
+            a.endpoint,
+            a.auth_scheme,
+            secret,
+        )
+        .await;
+        to_call_result("admin.create_provider", out)
+    }
+
+    #[tool(
+        name = "admin.update_provider",
+        description = "Change the fields given of a model provider; a field not given keeps its value; clear_secret removes the secret (platform admin only)."
+    )]
+    pub(crate) async fn admin_update_provider(
+        &self,
+        Parameters(a): Parameters<UpdateProviderArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let update = crate::settings::ProviderUpdate {
+            name: a.name,
+            endpoint: a.endpoint,
+            auth_scheme: a.auth_scheme,
+            secret: a.secret.map(crate::settings::SecretText::new),
+            clear_secret: a.clear_secret,
+        };
+        let out = crate::tools::models::update_provider(
+            &self.state,
+            &self.person,
+            &a.provider_id,
+            update,
+        )
+        .await;
+        to_call_result("admin.update_provider", out)
+    }
+
+    #[tool(
+        name = "admin.delete_provider",
+        description = "Delete a model provider that has no model, with its secret (platform admin only)."
+    )]
+    pub(crate) async fn admin_delete_provider(
+        &self,
+        Parameters(a): Parameters<ProviderIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::models::delete_provider(&self.state, &self.person, &a.provider_id).await;
+        to_call_result("admin.delete_provider", out)
+    }
+
+    #[tool(
+        name = "admin.list_providers",
+        description = "List the model providers ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only)."
+    )]
+    pub(crate) async fn admin_list_providers(
+        &self,
+        Parameters(a): Parameters<MarkerArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::models::list_providers(&self.state, &self.person, &a.marker).await;
+        to_call_result("admin.list_providers", out)
+    }
+
+    #[tool(
+        name = "admin.create_model",
+        description = "Register a model of a provider: a name, a kind (text_embedding, image_embedding, reranker, ocr or chat), for the embedding kinds a dimension, and optionally a limit of input tokens (platform admin only)."
+    )]
+    pub(crate) async fn admin_create_model(
+        &self,
+        Parameters(a): Parameters<CreateModelArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let input = crate::settings::ModelInput {
+            provider_id: a.provider_id,
+            name: a.name,
+            kind: a.kind,
+            dimension: a.dimension,
+            max_input_tokens: a.max_input_tokens,
+        };
+        let out = crate::tools::models::create_model(&self.state, &self.person, input).await;
+        to_call_result("admin.create_model", out)
+    }
+
+    #[tool(
+        name = "admin.update_model",
+        description = "Change the name, the dimension or the input token limit of a model; a field not given keeps its value; max_input_tokens 0 removes the limit (platform admin only)."
+    )]
+    pub(crate) async fn admin_update_model(
+        &self,
+        Parameters(a): Parameters<UpdateModelArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let update = crate::settings::ModelUpdate {
+            name: a.name,
+            dimension: a.dimension,
+            max_input_tokens: a.max_input_tokens,
+        };
+        let out =
+            crate::tools::models::update_model(&self.state, &self.person, &a.model_id, update)
+                .await;
+        to_call_result("admin.update_model", out)
+    }
+
+    #[tool(
+        name = "admin.delete_model",
+        description = "Delete a model that is not a server default (platform admin only)."
+    )]
+    pub(crate) async fn admin_delete_model(
+        &self,
+        Parameters(a): Parameters<ModelIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::models::delete_model(&self.state, &self.person, &a.model_id).await;
+        to_call_result("admin.delete_model", out)
+    }
+
+    #[tool(
+        name = "admin.list_models",
+        description = "List the models ordered by provider name then model name without regard to case, 100 per answer, optionally of one provider or one kind (platform admin only)."
+    )]
+    pub(crate) async fn admin_list_models(
+        &self,
+        Parameters(a): Parameters<ListModelsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::models::list_models(
+            &self.state,
+            &self.person,
+            &a.provider_id,
+            &a.kind,
+            &a.marker,
+        )
+        .await;
+        to_call_result("admin.list_models", out)
+    }
+
+    #[tool(
+        name = "admin.set_default_model",
+        description = "Make a model the server default of its kind, text_embedding or reranker, replacing the previous default; a text embedding model must have the dimension of the vector store (platform admin only)."
+    )]
+    pub(crate) async fn admin_set_default_model(
+        &self,
+        Parameters(a): Parameters<SetDefaultModelArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::models::set_default_model(
+            &self.state,
+            &self.person,
+            &a.kind,
+            &a.model_id,
+        )
+        .await;
+        to_call_result("admin.set_default_model", out)
+    }
+
+    #[tool(
+        name = "admin.clear_default_model",
+        description = "Remove the server default of a kind, text_embedding or reranker; a kind with no default is not an error (platform admin only)."
+    )]
+    pub(crate) async fn admin_clear_default_model(
+        &self,
+        Parameters(a): Parameters<ClearDefaultModelArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::models::clear_default_model(&self.state, &self.person, &a.kind).await;
+        to_call_result("admin.clear_default_model", out)
+    }
+
+    #[tool(
+        name = "admin.get_default_models",
+        description = "Read the server default text embedding model and the server default reranker, null for a kind with none (platform admin only)."
+    )]
+    pub(crate) async fn admin_get_default_models(&self) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::models::get_default_models(&self.state, &self.person).await;
+        to_call_result("admin.get_default_models", out)
+    }
+
+    #[tool(
+        name = "admin.list_setting_changes",
+        description = "List the record of changes of the platform settings, newest first, 100 per answer: who changed what, when, and which fields (platform admin only)."
+    )]
+    pub(crate) async fn admin_list_setting_changes(
+        &self,
+        Parameters(a): Parameters<MarkerArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::models::list_setting_changes(&self.state, &self.person, &a.marker).await;
+        to_call_result("admin.list_setting_changes", out)
+    }
+
+    #[tool(
         name = "admin.get_project_disk_usage",
         description = "List a project's files from the largest to the smallest (platform admin \
              or project owner), with the limit in MB (null when unlimited), the bytes used, the \
@@ -3315,7 +3626,6 @@ impl McpServer {
         &self,
         Parameters(a): Parameters<SearchQueryArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let _rerank = a.rerank;
         let out = crate::tools::search_semantic::query(
             &self.state,
             &self.person,
@@ -3323,6 +3633,7 @@ impl McpServer {
             &a.query,
             a.mode.clone(),
             a.top_k as usize,
+            a.rerank,
         )
         .await;
         to_call_result("search.query", out)
@@ -4232,11 +4543,13 @@ mod tests {
         // SPEC-0100 adds fs.list_derived_jobs: fs 46, total 121; fs.recalculate: fs 47,
         // total 122. SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and fs.get_chunk:
         // fs 50, total 125; fs.create_chunk_set and fs.delete_chunk_set: fs 52, total 127.
+        // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
+        // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139.
         assert_eq!(fs_count, 52, "got: {names:?}");
-        assert_eq!(admin_count, 17, "got: {names:?}");
+        assert_eq!(admin_count, 29, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 127, "got: {names:?}");
+        assert_eq!(names.len(), 139, "got: {names:?}");
     }
 
     #[test]
@@ -4573,7 +4886,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 123, "the frozen contract covers 123 non-search tools");
+        assert_eq!(checked, 135, "the frozen contract covers 135 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -4594,8 +4907,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 123, "got: {names:?}");
-        assert_eq!(expected.len(), 123, "the golden contract itself must hold 123 names");
+        assert_eq!(names.len(), 135, "got: {names:?}");
+        assert_eq!(expected.len(), 135, "the golden contract itself must hold 135 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

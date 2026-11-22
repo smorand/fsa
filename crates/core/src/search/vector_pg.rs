@@ -13,7 +13,6 @@
 
 #![cfg(feature = "rag")]
 
-use crate::config::EmbeddingConfig;
 use crate::errors::{Result, ToolError};
 use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult, embedding};
 use async_trait::async_trait;
@@ -29,7 +28,8 @@ pub struct PostgresVectorBackend {
     #[allow(dead_code)]
     dimensions: u32,
     client: Arc<reqwest::Client>,
-    embedding_config: EmbeddingConfig,
+    /// Where to embed, asked on every call (SPEC-0102 DEC-007).
+    targets: Arc<dyn embedding::EmbedTargets>,
 }
 
 impl PostgresVectorBackend {
@@ -42,7 +42,7 @@ impl PostgresVectorBackend {
         pool: sqlx::PgPool,
         dimensions: u32,
         client: Arc<reqwest::Client>,
-        embedding_config: EmbeddingConfig,
+        targets: Arc<dyn embedding::EmbedTargets>,
     ) -> Result<Self> {
         // The VECTOR(N) column type requires the dimension to be part of the
         // DDL string; it cannot be passed as a bind parameter.
@@ -70,7 +70,7 @@ impl PostgresVectorBackend {
         .await
         .map_err(|e| ToolError::internal(format!("vector_pg: create index: {e}")))?;
 
-        Ok(Self { pool, dimensions, client, embedding_config })
+        Ok(Self { pool, dimensions, client, targets })
     }
 }
 
@@ -95,8 +95,9 @@ impl SearchBackend for PostgresVectorBackend {
         // Compute all embeddings before touching the database. Embedding calls
         // are async and must not run inside a database transaction.
         let mut embeddings: Vec<String> = Vec::with_capacity(chunks.len());
+        let target = self.targets.target().await?;
         for chunk in &chunks {
-            let emb = embedding::embed(&self.client, &self.embedding_config, &chunk.text).await?;
+            let emb = embedding::embed(&self.client, &target, &chunk.text).await?;
             embeddings.push(vec_to_pg(&emb));
         }
 
@@ -200,7 +201,8 @@ impl SearchBackend for PostgresVectorBackend {
         query: &str,
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
-        let emb = embedding::embed(&self.client, &self.embedding_config, query).await?;
+        let target = self.targets.target().await?;
+        let emb = embedding::embed(&self.client, &target, query).await?;
         let vec_str = vec_to_pg(&emb);
 
         // `<=>` is the cosine distance operator provided by pgvector.
@@ -303,7 +305,16 @@ mod tests {
             api_key_env: String::new(),
             dimensions: dims,
         };
-        Some(PostgresVectorBackend::new(db.pool().clone(), dims, client, cfg).await.unwrap())
+        Some(
+            PostgresVectorBackend::new(
+                db.pool().clone(),
+                dims,
+                client,
+                Arc::new(crate::search::embedding::StaticTargets(cfg)),
+            )
+            .await
+            .unwrap(),
+        )
     }
 
     /// Spawn a minimal axum server that returns a fixed 3-dim embedding for any

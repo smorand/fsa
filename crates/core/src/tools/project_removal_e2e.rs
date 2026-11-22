@@ -456,7 +456,7 @@ fn sqlite_vec(config: &ServerConfig) -> Arc<dyn SearchBackend> {
         DIMS,
         &config.search.tantivy_dir,
         Arc::new(reqwest::Client::new()),
-        config.search.embedding.clone(),
+        Arc::new(crate::search::embedding::StaticTargets(config.search.embedding.clone())),
     ))
 }
 
@@ -491,9 +491,14 @@ async fn pg_vector(pool: sqlx::PgPool, config: &ServerConfig) -> Arc<dyn SearchB
     let client = Arc::new(reqwest::Client::new());
     let embedding = config.search.embedding.clone();
     Arc::new(
-        crate::search::vector_pg::PostgresVectorBackend::new(pool, DIMS, client, embedding)
-            .await
-            .unwrap(),
+        crate::search::vector_pg::PostgresVectorBackend::new(
+            pool,
+            DIMS,
+            client,
+            Arc::new(crate::search::embedding::StaticTargets(embedding)),
+        )
+        .await
+        .unwrap(),
     )
 }
 

@@ -71,6 +71,25 @@ pub async fn build(config: ServerConfig) -> anyhow::Result<Router> {
 pub(crate) async fn build_with_state(
     config: ServerConfig,
 ) -> anyhow::Result<(Router, Arc<AppState>)> {
+    build_with_env(config, &|name| std::env::var(name).ok()).await
+}
+
+/// The master key of the registry secrets (SPEC-0102 DEC-003). A key that is
+/// present but malformed stops the start with the cipher's own words, so the
+/// operator reads `FSA_TOKEN_KEY must be valid base64.` rather than an error
+/// code, whether or not the git token store is enabled.
+pub(crate) fn boot_master_key(
+    env: &dyn Fn(&str) -> Option<String>,
+) -> anyhow::Result<Option<[u8; 32]>> {
+    crate::settings::secrets::master_key_with(env).map_err(|e| anyhow::anyhow!(e.message))
+}
+
+/// [`build_with_state`] reading the environment through `env`, so a test can
+/// give the master key without touching the process environment.
+pub(crate) async fn build_with_env(
+    config: ServerConfig,
+    env: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> anyhow::Result<(Router, Arc<AppState>)> {
     let config = Arc::new(config);
 
     // One registry for the whole process, so the ACL store, every volume and the
@@ -80,6 +99,7 @@ pub(crate) async fn build_with_state(
     let relational = Arc::new(crate::storage::RelationalRegistry::new());
     let admin = crate::storage::build_admin_store(&config, &relational).await?;
     admin.connect().await?;
+    admin.set_master_key(boot_master_key(env)?);
 
     let stores = Arc::new(StoreManager::new(config.clone(), relational.clone()));
     let safety = Arc::new(SafetyManager::new(config.safety.clone()));
@@ -109,7 +129,13 @@ pub(crate) async fn build_with_state(
     // A dedicated HTTP client for embedding calls is built once here so its
     // connection pool is reused across all index and query operations.
     let search_http_client = Arc::new(reqwest::Client::new());
-    let search = crate::search::build_backend(&config, &relational, search_http_client)
+    // The default text embedding model of the registry, else the YAML block, read
+    // on every embedding call (SPEC-0102 DEC-007).
+    let targets = Arc::new(crate::settings::RegistryTargets {
+        admin: admin.clone(),
+        fallback: config.search.embedding.clone(),
+    });
+    let search = crate::search::build_backend(&config, &relational, search_http_client, targets)
         .await
         .map_err(|e| anyhow::anyhow!("search backend failed to start: {e}"))?;
     // The write hooks reach the rebuild scheduler through this decorator
@@ -158,6 +184,7 @@ pub(crate) async fn build_with_state(
         .merge(mcp_router)
         .with_state(state.clone())
         .merge(crate::deleted_projects_screen::router(state.clone()))
+        .merge(crate::models_screen::router(state.clone()))
         .merge(crate::trash_screen::router(state.clone()))
         // Outside the api.enabled gate: a link minted over MCP must stay
         // downloadable on an MCP only deployment (SPEC-0012 FR-NEW-009b).

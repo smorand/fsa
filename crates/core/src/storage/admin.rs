@@ -98,8 +98,73 @@ pub fn schema() -> SchemaSet {
                 references_columns: vec!["id"],
                 on_delete_cascade: true,
             }),
+            // SPEC-0102 DEC-002: the providers of the model registry. The primary
+            // key on the caseless name keeps two equal names out on both engines
+            // without a unique index, which the schema layer does not have.
+            Table::new(
+                "provider",
+                vec![
+                    Column::required("name_key", ColumnType::Text),
+                    Column::required("provider_id", ColumnType::Text),
+                    Column::required("name", ColumnType::Text),
+                    Column::required("endpoint", ColumnType::Text),
+                    Column::required("auth_scheme", ColumnType::Text),
+                    Column::new("secret_enc", ColumnType::Blob),
+                    Column::required("created_at", ColumnType::Text),
+                    Column::required("updated_at", ColumnType::Text),
+                ],
+                vec!["name_key"],
+            ),
+            // SPEC-0102 DEC-002: the models of a provider. The primary key on the
+            // provider and the caseless name keeps two equal names of one provider out;
+            // the same name under two providers is allowed.
+            Table::new(
+                "model",
+                vec![
+                    Column::required("provider_id", ColumnType::Text),
+                    Column::required("name_key", ColumnType::Text),
+                    Column::required("model_id", ColumnType::Text),
+                    Column::required("name", ColumnType::Text),
+                    Column::required("kind", ColumnType::Text),
+                    Column::new("dimension", ColumnType::BigInt),
+                    Column::new("max_input_tokens", ColumnType::BigInt),
+                    Column::required("created_at", ColumnType::Text),
+                    Column::required("updated_at", ColumnType::Text),
+                ],
+                vec!["provider_id", "name_key"],
+            ),
+            // SPEC-0102 DEC-002: the server default of a kind; the kind is the key, so
+            // a kind holds one model at most, on both engines.
+            Table::new(
+                "default_model",
+                vec![
+                    Column::required("kind", ColumnType::Text),
+                    Column::required("model_id", ColumnType::Text),
+                    Column::required("set_at", ColumnType::Text),
+                ],
+                vec!["kind"],
+            ),
+            // SPEC-0102 DEC-009: the record of changes, written in the transaction
+            // of the change it describes; `fields` is a JSON list of names.
+            Table::new(
+                "setting_change",
+                vec![
+                    Column::required("change_id", ColumnType::Text),
+                    Column::required("at", ColumnType::Text),
+                    Column::required("person", ColumnType::Text),
+                    Column::required("action", ColumnType::Text),
+                    Column::required("target_kind", ColumnType::Text),
+                    Column::required("target_id", ColumnType::Text),
+                    Column::required("target_name", ColumnType::Text),
+                    Column::required("fields", ColumnType::Text),
+                ],
+                vec!["change_id"],
+            ),
         ],
         vec![
+            Index { name: "idx_provider_id", table: "provider", columns: vec!["provider_id"] },
+            Index { name: "idx_model_id", table: "model", columns: vec!["model_id"] },
+            Index { name: "idx_model_kind", table: "model", columns: vec!["kind"] },
             Index {
                 name: "idx_derived_job_key",
                 table: "derived_job",
@@ -157,13 +222,20 @@ pub struct RelationalAdminStore {
     gone: std::sync::Mutex<Option<crate::storage::traits::ProjectGoneHook>>,
     /// Read on a soft delete only (the chunk sets of the project's files).
     deleted: std::sync::Mutex<Option<crate::storage::traits::ProjectGoneHook>>,
+    /// The master key of the registry secrets, set at boot (SPEC-0102 DEC-003).
+    master_key: std::sync::Mutex<Option<[u8; 32]>>,
 }
 
 impl RelationalAdminStore {
     /// The schema is applied by [`AdminBackend::connect`], which the composition
     /// root calls at startup, so constructing a store performs no IO.
     pub fn new(db: Arc<dyn RelationalDb>) -> Self {
-        Self { db, gone: std::sync::Mutex::new(None), deleted: std::sync::Mutex::new(None) }
+        Self {
+            db,
+            gone: std::sync::Mutex::new(None),
+            deleted: std::sync::Mutex::new(None),
+            master_key: std::sync::Mutex::new(None),
+        }
     }
 
     /// Runs the registered hook, if any, once the project change is committed.
@@ -269,6 +341,15 @@ impl AdminBackend for RelationalAdminStore {
 
     fn derived_jobs(&self) -> Option<crate::search::derived::JobStore> {
         Some(crate::search::derived::JobStore::new(self.db.clone()))
+    }
+
+    fn settings(&self) -> Option<crate::settings::SettingsStore> {
+        let key = *self.master_key.lock().expect("master key mutex");
+        Some(crate::settings::SettingsStore::new(self.db.clone(), key))
+    }
+
+    fn set_master_key(&self, key: Option<[u8; 32]>) {
+        *self.master_key.lock().expect("master key mutex") = key;
     }
 
     fn set_project_gone_hook(&self, hook: crate::storage::traits::ProjectGoneHook) {

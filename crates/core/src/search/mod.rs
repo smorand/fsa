@@ -22,11 +22,9 @@ pub mod derived;
 pub(crate) mod derived_e2e;
 #[cfg(test)]
 pub mod e2e;
-#[cfg(feature = "rag")]
 pub mod embedding;
 pub mod fusion;
 pub mod indexer;
-#[cfg(feature = "rag")]
 pub mod rerank;
 #[cfg(feature = "rag")]
 pub mod vector_pg;
@@ -267,11 +265,14 @@ impl SearchBackend for ScheduledBackend {
 ///
 /// `relational` is the process-wide pool cache. `http_client` is reused across
 /// all embedding calls for the lifetime of the process.
-#[allow(unused_variables)] // relational and http_client are only used under feature flags
+/// `targets` says where the vector engines embed, asked on every call
+/// (SPEC-0102 DEC-007); the YAML dimension still sets the table width.
+#[allow(unused_variables)] // relational, http_client and targets are only used under feature flags
 pub async fn build_backend(
     config: &ServerConfig,
     relational: &crate::storage::RelationalRegistry,
     http_client: Arc<reqwest::Client>,
+    targets: Arc<dyn embedding::EmbedTargets>,
 ) -> Result<Option<Arc<dyn SearchBackend>>> {
     if !config.search.enabled {
         return Ok(None);
@@ -312,7 +313,7 @@ pub async fn build_backend(
                     pool,
                     config.search.embedding.dimensions,
                     http_client,
-                    config.search.embedding.clone(),
+                    targets,
                 )
                 .await?,
             )
@@ -322,7 +323,7 @@ pub async fn build_backend(
             config.search.embedding.dimensions,
             &config.search.tantivy_dir,
             http_client,
-            config.search.embedding.clone(),
+            targets,
         )),
         #[cfg(feature = "rag")]
         ("both", "postgres") => {
@@ -334,7 +335,7 @@ pub async fn build_backend(
                     pool,
                     config.search.embedding.dimensions,
                     http_client,
-                    config.search.embedding.clone(),
+                    targets,
                 )
                 .await?,
             );
@@ -348,7 +349,7 @@ pub async fn build_backend(
                 config.search.embedding.dimensions,
                 &config.search.tantivy_dir,
                 http_client,
-                config.search.embedding.clone(),
+                targets,
             ));
             Arc::new(CombinedBackend { bm25, vector, mode: "both".into() })
         }
@@ -549,8 +550,12 @@ mod guarded_tests {
             };
             let dir = dir.to_str().unwrap();
             let bm25: Arc<dyn SearchBackend> = Arc::new(bm25_sqlite::TantivyBm25Backend::new(dir));
-            let vector: Arc<dyn SearchBackend> =
-                Arc::new(vector_sqlite::SqliteVecBackend::new(4, dir, client, cfg));
+            let vector: Arc<dyn SearchBackend> = Arc::new(vector_sqlite::SqliteVecBackend::new(
+                4,
+                dir,
+                client,
+                Arc::new(embedding::StaticTargets(cfg)),
+            ));
             CombinedBackend { bm25, vector, mode: "both".into() }
         }
 

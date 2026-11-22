@@ -26,6 +26,22 @@ search:
     top_n: 10           # how many chunks to send to the reranker
 ```
 
+## Embedding source (SPEC-0102 US-0286, 2026-11-22)
+
+The vector engines hold an `Arc<dyn search::embedding::EmbedTargets>` and ask it on every
+index or query call (DEC-007, no cache, one admin query): `settings::RegistryTargets` (built in
+`app.rs`) answers the registry's default `text_embedding` model joined with its provider when one
+is set: `url = provider endpoint + "/embeddings"` (trailing slashes of the endpoint trimmed),
+`model = model name`, `Authorization: Bearer <secret>` for scheme `bearer` (none for `none`). A
+secret that cannot be decrypted (no master key, another key) refuses the call with
+`ERR_INTERNAL_ERROR: the secret of provider '<name>' cannot be read`, which a rebuild job keeps
+as its reason. Without a default, `StaticTargets` uses the YAML block exactly as before: `url =
+search.embedding.endpoint`, key from `api_key_env` read at call time. `search.embedding.dimensions`
+still sets the table width, and `rag`/`both` still need the YAML endpoint at start. A server running
+`search.mode: bm25` builds no vector engine, so a default embedding model is never called. Tests:
+`settings/e2e.rs` (`EmbedStub`, `e2e_0102_016`, `037` to `042`, `100`, `101`, `103`, `106`, `113`,
+feature `rag`).
+
 ## Per-project index mode
 
 `search.mode` above is the SERVER mode: which engine is wired. Whether a given
@@ -256,14 +272,21 @@ The merge is deterministic: same inputs always produce the same output.
 
 ## Reranking
 
-When `search.reranking.enabled: true` and `rerank: true` (the default on
-`search.query`), the results are re-scored by the configured endpoint using the
-Cohere/Jina rerank API shape:
+Reranking uses the server default reranker of the registry (SPEC-0102 DEC-007,
+DEC-008), never the `search.reranking` block: that block stays unused, there is
+no fallback. It runs only when the mode is `both`, `rerank` is true (the default
+on `search.query`) and a default reranker exists; otherwise nothing is called.
+The default is read on every query (one admin query, no cache). The documents
+sent are the fused results (up to `top_k`); the call is `POST <provider
+endpoint>/rerank` with the provider's bearer secret when it has one:
 
-- POST `{"model": "...", "query": "...", "documents": ["text1", ...]}`
+- POST `{"model": "<model name>", "query": "...", "documents": ["text1", ...], "top_n": n}`
 - Response `{"results": [{"index": 0, "relevance_score": 0.9}, ...]}`
 
-A reranking failure is non-fatal: the original order is returned with a log warning.
+`n` is `search.reranking.top_n` (default 10); the answer holds at most `n`
+results, ordered by the reranker scores. An HTTP error status keeps the fused
+order (all results, a log warning). Code: `search/rerank.rs` (`RerankTargets`),
+`settings::RegistryTargets`, `tools/search_semantic.rs::rerank_with_default`.
 
 ## Index lifecycle
 
@@ -406,3 +429,6 @@ with mode `none` schedules nothing.
 
 ### Chunk sets and the lifecycle of their file (SPEC-0101, 2026-11-21)
 Sets follow the node rows in the same storage transaction (`storage/meta.rs`): a move carries them, a delete or a move to the trash removes them, a copy copies none. A soft delete of a project removes every set through a second admin hook (`AdminBackend::set_project_deleted_hook`, wired in `app.rs` whatever the index mode); the first hook (`set_project_gone_hook`) belongs to the scheduler jobs. A hard delete clears the volume tables, chunk tables included.
+
+(2026-11-22, SPEC-0102 US-0289) The registry is edited on the `/app/models` screen as well as by the `admin.*` tools and
+the REST routes; every route applies at the next index or query call, as described above.

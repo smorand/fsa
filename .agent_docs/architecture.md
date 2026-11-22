@@ -16,7 +16,7 @@ plane can never disagree.
        |                          |                            |
 +------v---------+     +----------v-----------+     +----------v---------+
 | mcp::server    |     | api::dataplane       |     | git::http          |
-| 94 tools       |     | 38 routes            |     | smart protocol v0  |
+| 139 tools      |     | REST routes          |     | smart protocol v0  |
 +------+---------+     +----------+-----------+     +----------+---------+
        |                          |                            |
        +------------+-------------+                            |
@@ -304,7 +304,7 @@ every `git.*` route (`git.auth*` and `git.pr_*` included) when `git.enabled` is
 false and every `search.*` route when `search.enabled` is false, so `tools/list`
 omits them and `tools/call` answers `-32602` `tool not found` before any handler
 runs. Membership never gated git on its own (CWE-284: any member could clone and
-push with git off). Counts: 62 by default, 116 with git, 120 with git and
+push with git off). Counts: 81 by default, 135 with git, 139 with git and
 search. The static `McpServer::tool_router()` is still the full catalog the
 golden contract and `/api/swagger.json` read; do not filter it. A test that
 calls a git or search tool over MCP must enable the flag in its config.
@@ -486,3 +486,11 @@ ERROR line (`log_tool_failure`), the decoding logs nothing. The Office readers a
 `catch_unwind` for this; the PDF reader's own `catch_unwind` still answers `pdf parser failed on this
 document`. Tests drive the stop with `DecodePlaces::inject_fault(path)` (test only, per server) in
 `tools/offload_e2e.rs` (filter `e2e_0091_`).
+
+## Platform settings and the models screen (SPEC-0102, 2026-11-22)
+
+`settings::{store,registry,secrets,model}` own the registry on the admin store; `tools/models.rs`, `api/admin_settings.rs`
+and `models_screen.rs` are three thin adapters over `settings::Registry` that add the platform admin check and the
+shaping of the answer. The screen shares the token screen's anti forgery items (`pub(crate)`), each router with its own
+`CsrfStore`. Search reads the default embedding model through `RegistryTargets` on every call (no cache). Detail:
+`search.md` "Embedding source", `api.md`, `config.md`.

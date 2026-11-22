@@ -86,6 +86,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod listing;
 #[cfg(test)]
 pub(crate) mod metadata;
+pub(crate) mod models;
 #[cfg(test)]
 mod nesting_e2e;
 #[cfg(test)]

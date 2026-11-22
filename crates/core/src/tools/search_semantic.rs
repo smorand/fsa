@@ -123,6 +123,7 @@ pub(crate) async fn query(
     query: &str,
     mode: Option<String>,
     top_k: usize,
+    rerank: bool,
 ) -> Result<Value> {
     state.authorize(mount, person).await?;
     let mode = mode.unwrap_or_else(|| state.config.search.mode.clone());
@@ -156,6 +157,12 @@ pub(crate) async fn query(
         }
     };
 
+    let results = if mode_used == "both" && rerank {
+        rerank_with_default(state, query, results).await?
+    } else {
+        results
+    };
+
     let warning: Option<&str> = if matches!(mode_used, "bm25" | "both") {
         match backend.stats(mount).await {
             Ok(s) if !s.bm25_warm => {
@@ -173,6 +180,26 @@ pub(crate) async fn query(
         "mode_used": mode_used,
         "warning": warning,
     }))
+}
+
+/// Send the fused results to the default reranker and cut to the configured
+/// `top_n` (SPEC-0102 DEC-008). No default reranker: nothing is called and the
+/// fused results stand. One admin query per call, no cache.
+async fn rerank_with_default(
+    state: &AppState,
+    query: &str,
+    results: Vec<SearchResult>,
+) -> Result<Vec<SearchResult>> {
+    use crate::search::rerank::RerankTargets;
+    let targets = crate::settings::RegistryTargets {
+        admin: state.admin.clone(),
+        fallback: state.config.search.embedding.clone(),
+    };
+    let Some(target) = targets.target().await? else {
+        return Ok(results);
+    };
+    let top_n = state.config.search.reranking.top_n;
+    crate::search::rerank::rerank(&reqwest::Client::new(), &target, query, results, top_n).await
 }
 
 /// The results as `search.query` shows them (DEC-010). An entry of a file
@@ -264,8 +291,8 @@ pub(crate) fn register(reg: &mut ToolRegistry, _config: &SearchConfig) {
             let mount = a.str("mount_id")?;
             let q = a.str("query")?;
             let top_k = a.int_or("top_k", 10) as usize;
-            let _rerank = a.bool_or("rerank", true);
-            query(&ctx.state, &ctx.person, &mount, &q, a.opt_str("mode"), top_k).await
+            let rerank = a.bool_or("rerank", true);
+            query(&ctx.state, &ctx.person, &mount, &q, a.opt_str("mode"), top_k, rerank).await
         }),
     );
 

@@ -391,6 +391,8 @@ pub(crate) fn register_with(reg: &mut ToolRegistry, git: Option<Arc<GitRepoStore
             get_project_folder_usage(&ctx, &project_id, folder.as_deref(), a.opt_num("limit")).await
         }),
     );
+    // SPEC-0102: the registry tools are admin tools, so every admin count sees them.
+    super::models::register(reg);
 }
 
 // ── implementations ─────────────────────────────────────────────────────────
@@ -968,7 +970,7 @@ mod tests {
         r
     }
 
-    const ALL_ADMIN_TOOLS: [&str; 17] = [
+    const ALL_ADMIN_TOOLS: [&str; 29] = [
         "admin.create_project",
         "admin.delete_project",
         "admin.list_projects",
@@ -986,12 +988,24 @@ mod tests {
         "admin.get_project_quota",
         "admin.get_project_disk_usage",
         "admin.get_project_folder_usage",
+        "admin.create_provider",
+        "admin.update_provider",
+        "admin.delete_provider",
+        "admin.list_providers",
+        "admin.create_model",
+        "admin.update_model",
+        "admin.delete_model",
+        "admin.list_models",
+        "admin.set_default_model",
+        "admin.clear_default_model",
+        "admin.get_default_models",
+        "admin.list_setting_changes",
     ];
 
     #[test]
     fn every_admin_tool_is_registered() {
         let r = registry();
-        assert_eq!(r.len(), 17);
+        assert_eq!(r.len(), 29);
         for name in ALL_ADMIN_TOOLS {
             assert!(r.resolve(name).is_some(), "{name} is missing");
         }

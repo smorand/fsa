@@ -2,13 +2,13 @@
 
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
-multi-project filesystem** (123 tools: 52 `fs.*`, 17 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
+multi-project filesystem** (135 tools: 52 `fs.*`, 29 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
 + 4 `search.*` when search enabled),
 a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger UI at
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
 fetch and pull against any declared host (including GitHub Enterprise), a per-host
 token store, a browser token screen at `/app/tokens`, and a browser screen at
-`/app/deleted-projects` listing soft-deleted projects with an undelete action. Git tags are
+`/app/deleted-projects` listing soft-deleted projects with an undelete action. A browser screen at `/app/models` lets platform administrators manage the model registry (SPEC-0102). Git tags are
 supported: create (plain or annotated), delete, publish one tag, receive on fetch, pull and clone,
 each change audited in one line (SPEC-0052); every due tag can be previewed then
 published in one guarded push (`git.remote_push_tags`, SPEC-0054). Ships with `agent`, an
@@ -56,6 +56,13 @@ result whose file changed meanwhile, and records every job in the admin table `d
 `fs.list_derived_jobs` lists the jobs, `fs.recalculate` rebuilds one file now (kind `search_index`) or
 one chunk set (kind `chunks`, optional `set_id`, SPEC-0101); engine
 `tools/derived.rs`, MCP only. Details in `.agent_docs/search.md`, "Rebuild scheduler".
+
+Platform settings live in the admin store (SPEC-0102, `settings/`): model providers and their models (`admin.create_model`, `update_model`, `delete_model`, `list_models`) with write only
+secrets encrypted under `FSA_TOKEN_KEY` (checked at boot: a malformed key stops `serve`), and the record
+of changes (`setting_change`). `settings::Registry` is the one implementation; the `admin.*_provider`, `admin.*_model`
+and `admin.list_setting_changes` tools (`tools/models.rs`) are platform admin only, reading included.
+The same registry is served by the `/api/admin/{providers,models,defaults,setting-changes}` REST routes and by the
+`/app/models` browser screen (`models_screen.rs`, SPEC-0102 US-0289). Tests: `cargo test -p fsa-core --lib -- e2e_0102_`.
 
 ## Key commands
 ```
@@ -110,7 +117,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   wrapping `mcp::server::McpServer`, `LocalSessionManager` + `legacy_session_mode: true` so
   `initialize` is mandatory; see `.agent_docs/architecture.md` for the exact wire shapes), `/health`.
 - `mcp/` : `server.rs` only — `McpServer`, one `#[tool]` method per entry in `TOOL_CONTRACT.txt`
-  (123 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
+  (135 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
   calls, never reimplementing an operation. The hand-rolled JSON-RPC/SSE framing layer this module
   used to own (`ToolRegistry`/`ToolSchema`/`Args`/`ToolHandler`) is gone (SPEC-0013); what remains
   of that machinery lives at `tools::registry_support`, kept only because `Args`/`ToolCtx` are the
@@ -168,7 +175,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   (the real logic, called directly by `mcp::server::McpServer`'s `#[tool]` methods and by the
   REST plane); `register(&mut ToolRegistry)` survives only as `#[cfg(test)]`-gated glue for the
   shared test harness, except the five optional families (`web`/`context7`/`sqlite`/`db`/`doc`,
-  off by default, not part of the 123-tool contract), whose `register()`/`catalog()` are genuine
+  off by default, not part of the 135-tool contract), whose `register()`/`catalog()` are genuine
   production code backing `/api/swagger.json`. `catalog.rs` holds the transport-agnostic
   `ToolCatalogEntry` shape; `all.rs` has the now-test-only `register_all`. `trash.rs` holds
   `fs.trash_list`/`fs.trash_restore` (SPEC-0011): the backfill of untracked trash nodes into
@@ -220,6 +227,10 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
 - `deleted_projects_screen.rs` : the `/app/deleted-projects` browser screen (always mounted),
   the same session-cookie + CSRF convention, delegating to `tools::admin::{list_deleted_projects,
   undelete_project}` — never a second implementation (SPEC-0014 US-0012).
+- `models_screen.rs` : the `/app/models` browser screen (always mounted, platform admin only): providers, models, defaults,
+  latest 20 changes, eight form posts (`provider|model/{create,update,delete}`, `default/{set,clear}`), calling `tools::models`
+  (never a second implementation); reuses `token_screen`'s `CsrfStore` (own instance per router), `resolve_person`,
+  `check_csrf`, `escape_html`; no secret rendered, secret inputs never prefilled (SPEC-0102 DEC-014).
 - `trash_screen.rs` : the `/app/trash` browser screen (always mounted), the same session-cookie +
   CSRF convention, delegating to `tools::trash::{trash_list, trash_restore}` (SPEC-0011).
 - `git/` : `db.rs` (SQLite index, plus the `git_operations` row that persists a paused
@@ -237,7 +248,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   `mcp.rs` (stateless JSON-RPC, fuzzy tool name resolution), `llm.rs` (OpenAI compatible
   streaming with tool calling), `input.rs` (wrap aware line editor), `ui.rs` (markdown to
   ANSI), `spinner.rs`, `session.rs`. Config: `config/agent_test.yaml`.
-- `TOOL_CONTRACT.txt` : the 123 tool schemas and return shapes, human readable. **This is
+- `TOOL_CONTRACT.txt` : the 135 tool schemas and return shapes, human readable. **This is
   the authoritative contract.**
 - `tool-contract-golden.json` : the same contract, machine checked. Three tests compare
   every name, description and `inputSchema` against it, serialized, so a reordered schema
@@ -312,7 +323,7 @@ The backlog is the `backlog/` directory: one `BL-NNNN_slug.md` file per item.
 ## Documentation index
 - `.agent_docs/architecture.md` : storage model, project usage and quota admission, document
   artifact store, request lifecycle, safety, error logging.
-- `.agent_docs/tools.md` : the 123 tool reference (families, parameters, authorization).
+- `.agent_docs/tools.md` : the 135 tool reference (families, parameters, authorization).
 - `.agent_docs/api.md` : the `/api/fs` REST plane and the OpenAPI single source of truth.
 - `.agent_docs/git.md` : git objects in the blob store, HTTP smart protocol, the
   `git.hosts` host map, OAuth/PAT tokens (per person+host), the remote pipeline

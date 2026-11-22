@@ -1,58 +1,71 @@
 //! HTTP rerank call to a Cohere/Jina-compatible rerank endpoint.
 //!
-//! Request: POST `{"model": "...", "query": "...", "documents": ["text1", ...]}`
+//! Request: POST `{"model": "...", "query": "...", "documents": ["text1", ...], "top_n": n}`
 //! Response: `{"results": [{"index": 0, "relevance_score": 0.9}, ...]}`
 //!
-//! The reranked results are returned in relevance-score order. API keys are read
-//! from the environment at call time and never stored or logged.
+//! Where to call is resolved at call time through [`RerankTargets`] (SPEC-0102
+//! DEC-007, DEC-008): the registry's default reranker, with no YAML fallback
+//! because nothing calls a configured reranker. The bearer travels as
+//! [`SecretText`], never in a struct that could be logged.
 
-#![cfg(feature = "rag")]
-
-use crate::config::RerankConfig;
 use crate::errors::{Result, ToolError};
 use crate::search::SearchResult;
+use crate::settings::SecretText;
 use reqwest::Client;
 use serde_json::Value;
 
-/// Rerank `results` by relevance to `query` using the configured HTTP endpoint.
+/// Where one rerank call goes: the full URL, the model name and the bearer
+/// token, if any.
+#[derive(Debug, Clone)]
+pub struct RerankTarget {
+    pub url: String,
+    pub model: String,
+    pub bearer: Option<SecretText>,
+}
+
+/// The source of the rerank target, asked once per query call so a registry
+/// change applies at once (no cache). `None`: no default reranker, no call.
+#[async_trait::async_trait]
+pub trait RerankTargets: Send + Sync {
+    async fn target(&self) -> Result<Option<RerankTarget>>;
+}
+
+/// Rerank `results` by relevance to `query` through `target`.
 ///
-/// Returns the results reordered with freshly assigned rank indices.
-/// If `top_n` is zero the config value is used.
+/// Returns at most `top_n` results in score order with freshly assigned rank
+/// indices; the cut to `top_n` is made here, whatever the endpoint returns.
+/// An HTTP error status keeps the given order (non fatal).
 pub async fn rerank(
     client: &Client,
-    config: &RerankConfig,
+    target: &RerankTarget,
     query: &str,
     results: Vec<SearchResult>,
     top_n: usize,
 ) -> Result<Vec<SearchResult>> {
-    if results.is_empty() || config.endpoint.is_empty() {
+    if results.is_empty() {
         return Ok(results);
     }
 
-    let api_key =
-        if config.api_key_env.is_empty() { None } else { std::env::var(&config.api_key_env).ok() };
-
-    let n = if top_n == 0 { config.top_n } else { top_n };
+    let n = top_n;
     let documents: Vec<&str> = results.iter().map(|r| r.chunk.as_str()).collect();
 
-    let mut req = client.post(&config.endpoint).header("Content-Type", "application/json");
+    let mut req = client.post(&target.url).header("Content-Type", "application/json");
 
-    if let Some(key) = &api_key {
-        req = req.header("Authorization", format!("Bearer {key}"));
+    if let Some(key) = &target.bearer {
+        req = req.header("Authorization", format!("Bearer {}", key.expose()));
     }
 
     let body = serde_json::json!({
-        "model": config.model,
+        "model": target.model,
         "query": query,
         "documents": documents,
         "top_n": n,
     });
 
-    let resp = req
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ToolError::internal(format!("rerank request failed: {e}")))?;
+    let resp =
+        req.json(&body).send().await.map_err(|e| {
+            ToolError::internal(format!("rerank request failed: {}", e.without_url()))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -64,7 +77,7 @@ pub async fn rerank(
     let json: Value = resp
         .json()
         .await
-        .map_err(|e| ToolError::internal(format!("parse rerank response: {e}")))?;
+        .map_err(|e| ToolError::internal(format!("parse rerank response: {}", e.without_url())))?;
 
     let reranked = json
         .get("results")
@@ -84,6 +97,7 @@ pub async fn rerank(
                 chunk_idx: r.chunk_idx,
             })
         })
+        .take(n)
         .collect();
 
     for (i, r) in out.iter_mut().enumerate() {
@@ -91,4 +105,31 @@ pub async fn rerank(
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A token in the query string of an endpoint must not reach the error text.
+    #[tokio::test]
+    async fn a_failed_call_does_not_echo_the_endpoint_query() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let target = RerankTarget {
+            url: format!("http://127.0.0.1:{port}/v1?token=abc123"),
+            model: "m".into(),
+            bearer: None,
+        };
+        let one = SearchResult {
+            path: "/a".into(),
+            score: 0.0,
+            chunk: "x".into(),
+            rank: 1,
+            chunk_idx: 0,
+        };
+        let err = rerank(&Client::new(), &target, "q", vec![one], 1).await.unwrap_err();
+        assert!(!err.to_string().contains("abc123"), "{err}");
+    }
 }

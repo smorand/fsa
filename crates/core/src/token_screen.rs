@@ -68,11 +68,11 @@ struct ScreenState {
 /// an attempt by a different person, or with an unknown value, leaves the map
 /// untouched.
 #[derive(Default)]
-struct CsrfStore(Mutex<HashMap<String, String>>);
+pub(crate) struct CsrfStore(Mutex<HashMap<String, String>>);
 
 impl CsrfStore {
     /// Mint a fresh token bound to `person`.
-    fn issue(&self, person: &str) -> String {
+    pub(crate) fn issue(&self, person: &str) -> String {
         let token = uuid::Uuid::new_v4().to_string();
         self.0
             .lock()
@@ -85,7 +85,7 @@ impl CsrfStore {
     /// Returns whether the match succeeded. A wrong-person or unknown token is
     /// left in the map untouched, so it never burns someone else's chance to
     /// use their own valid token (FR-NEW-048).
-    fn consume(&self, token: &str, person: &str) -> bool {
+    pub(crate) fn consume(&self, token: &str, person: &str) -> bool {
         let mut map = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match map.get(token) {
             Some(p) if p == person => {
@@ -101,7 +101,7 @@ impl CsrfStore {
 /// Only [`IdentitySource::Cookie`] carries an ambient credential a third party
 /// page could trigger, so only it is subject to the `csrf_token` check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IdentitySource {
+pub(crate) enum IdentitySource {
     Header,
     Cookie,
 }
@@ -208,7 +208,7 @@ async fn revoke(
 /// valid, unconsumed `csrf_token` issued to the same person; a
 /// header-authenticated request carries no ambient credential and is exempt.
 /// `Some` is the rejection response to return as-is; `None` means proceed.
-fn check_csrf(
+pub(crate) fn check_csrf(
     store: &CsrfStore,
     source: IdentitySource,
     person: &str,
@@ -224,7 +224,7 @@ fn check_csrf(
 /// The exact `403 application/json {"error":"ERR_FORBIDDEN","detail":"..."}`
 /// body FR-NEW-058 requires for a missing, unknown, already-consumed or
 /// wrong-person `csrf_token`.
-fn forbidden_csrf() -> Response {
+pub(crate) fn forbidden_csrf() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({"error": code::FORBIDDEN, "detail": "missing or invalid csrf_token"})),
@@ -257,7 +257,7 @@ async fn revoke_token(state: &Arc<AppState>, person: String, host: &str) -> Resu
 /// (FR-NEW-048). The cookie's JWT is handed to the exact same
 /// [`IdentityResolver::verify`] a header bearer token goes through: no second
 /// verification path.
-fn resolve_person(
+pub(crate) fn resolve_person(
     identity: &IdentityResolver,
     headers: &HeaderMap,
 ) -> Result<(String, IdentitySource)> {
@@ -341,7 +341,7 @@ fn page_shell(person: &str, rows: &[TokenRow], hosts: &[String], csrf_token: &st
 
 /// Minimal HTML escaping: the identity claim is attacker-controlled by the
 /// person it names, never trusted verbatim in the response body.
-fn escape_html(s: &str) -> String {
+pub(crate) fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 

@@ -1274,6 +1274,84 @@ async fn run_suite(engine: &Engine) -> Result<()> {
     trash_timestamps_round_trip(engine, &tag).await?;
     rename_into_trash_is_atomic(engine, &tag).await?;
     chunk_sets_follow_the_node(engine, &tag).await?;
+    settings_registry_round_trip(engine, &tag).await?;
+    Ok(())
+}
+
+/// SPEC-0102: the registry rows on every engine: a nullable encrypted blob, the
+/// caseless primary key, the change ids read as `MAX` inside the transaction.
+/// The tables are global, so the case isolates itself by name and walks every
+/// page to find its own rows.
+async fn settings_registry_round_trip(engine: &Engine, tag: &str) -> Result<()> {
+    use crate::settings::{ProviderInput, ProviderUpdate, Registry, SecretText, SettingsStore};
+    let who = engine.name();
+    let db = engine.db().await?;
+    RelationalAdminStore::new(db.clone()).connect().await?;
+    let key = [9u8; 32];
+    let reg = Registry::new(SettingsStore::new(db.clone(), Some(key)), 1536);
+    let name = format!("{tag} Cloud");
+    let input = ProviderInput {
+        name: name.clone(),
+        endpoint: "https://api.example.com/v1".into(),
+        auth_scheme: "bearer".into(),
+        secret: SecretText::new("sk-conformance"),
+    };
+    let p = reg.create_provider("Alice@Test.COM", input.clone()).await?;
+    assert!(p.has_secret, "{who}: the secret is stored");
+    let dup = ProviderInput { name: name.to_uppercase(), ..input };
+    assert_eq!(
+        reg.create_provider("alice@test.com", dup).await.unwrap_err().code,
+        crate::errors::code::INVALID_ARGUMENT,
+        "{who}: equal names without regard to case cannot coexist"
+    );
+    let blob = db
+        .query_opt(
+            &crate::storage::rel::Query::new(
+                "SELECT secret_enc FROM provider WHERE provider_id=?1",
+            )
+            .bind(&p.provider_id),
+        )
+        .await?
+        .expect("the row")
+        .blob(0)?;
+    assert_eq!(crate::git::oauth::cipher::decrypt(&key, &blob)?, "sk-conformance");
+
+    let cleared = ProviderUpdate {
+        auth_scheme: Some("none".into()),
+        clear_secret: true,
+        ..ProviderUpdate::default()
+    };
+    let p2 = reg.update_provider("alice@test.com", &p.provider_id, cleared).await?;
+    assert!(!p2.has_secret, "{who}: a cleared secret reads back as NULL");
+
+    let mut mine = Vec::new();
+    let mut marker = String::new();
+    loop {
+        let page = reg.list_changes(&marker).await?;
+        mine.extend(page.items.into_iter().filter(|c| c.target_id == p.provider_id));
+        match page.marker {
+            Some(m) => marker = m,
+            None => break,
+        }
+    }
+    let actions: Vec<&str> = mine.iter().map(|c| c.action.as_str()).collect();
+    assert_eq!(actions, ["update_provider", "create_provider"], "{who}: newest first");
+    assert!(mine[0].change_id > mine[1].change_id, "{who}: ids follow the order of changes");
+    assert_eq!(mine[0].person, "alice@test.com");
+    assert_eq!(mine[0].fields, ["auth_scheme", "secret"]);
+
+    reg.delete_provider("alice@test.com", &p.provider_id).await?;
+    let mut left = Vec::new();
+    let mut marker = String::new();
+    loop {
+        let page = reg.list_providers(&marker).await?;
+        left.extend(page.items.into_iter().filter(|x| x.provider_id == p.provider_id));
+        match page.marker {
+            Some(m) => marker = m,
+            None => break,
+        }
+    }
+    assert!(left.is_empty(), "{who}: the provider is gone");
     Ok(())
 }
 

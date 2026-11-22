@@ -451,7 +451,7 @@ mod tests {
     /// see no difference (BR-005). One deliberate change since: SPEC-0094 added the
     /// nullable `doc_artifact_sets.note` column (table and column migration), which
     /// moved the two `storage::meta` fingerprints only. SPEC-0101 adds `chunk_sets` and `chunks`,
-    /// which moved them again.
+    /// which moved them again. SPEC-0102 adds the registry tables to `storage::admin` (US-0285: `default_model`).
     #[test]
     fn production_ddl_is_unchanged_on_every_engine() {
         let expected = [
@@ -468,12 +468,12 @@ mod tests {
             (
                 "storage::admin",
                 Dialect::Sqlite,
-                "432430c92522fb9ca88e4529b22fc3396797cb142805ceabbdad52259202fbf1",
+                "14926ba71494367db88dcca66cfec15fecaaa289cc2e88cfb5ae70f5f40ac361",
             ),
             (
                 "storage::admin",
                 Dialect::Postgres,
-                "84a829c3372582ec04748d615d1f7746be58f5ff00b8cddfb26a2084a2e5c6ba",
+                "3bff3b4b16bbd5e0f9ee01385688056ac8805d38bbbff33fbb5acb6fe185df2f",
             ),
             (
                 "git::db",

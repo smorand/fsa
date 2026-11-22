@@ -105,6 +105,21 @@ pub const REST_ROUTES: &[(&str, &str)] = &[
     // SPEC-0045 DEC-010: `/api/fs/diff`, outside `{mount_id}`, the same
     // function as `fs.diff_files`.
     ("GET", "diff"),
+    // SPEC-0102 DEC-013: the registry routes of `api/admin_settings.rs`, the same
+    // functions as the `admin.*` registry tools. A route ending in a path
+    // parameter is keyed by that parameter's braces.
+    ("POST", "providers"),
+    ("GET", "providers"),
+    ("PATCH", "{provider_id}"),
+    ("DELETE", "{provider_id}"),
+    ("POST", "models"),
+    ("GET", "models"),
+    ("PATCH", "{model_id}"),
+    ("DELETE", "{model_id}"),
+    ("GET", "defaults"),
+    ("PUT", "{kind}"),
+    ("DELETE", "{kind}"),
+    ("GET", "setting-changes"),
 ];
 
 /// Request body ceiling for the JSON endpoints. Axum defaults to 2 MiB, which is
@@ -204,7 +219,7 @@ impl Req {
 }
 
 /// Bearer verification only, for the one route that is not scoped to a project.
-fn person_of(state: &AppState, headers: &HeaderMap) -> Result<String> {
+pub(super) fn person_of(state: &AppState, headers: &HeaderMap) -> Result<String> {
     state
         .identity
         .resolve(|name| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string))
@@ -250,13 +265,13 @@ where
 
 /// The C# 401 body. `detail` carries the full `CODE: message` rendering, verified
 /// against the reference server: `{"error":"ERR_X","detail":"ERR_X: message"}`.
-fn unauthorized(err: &ToolError) -> Response {
+pub(super) fn unauthorized(err: &ToolError) -> Response {
     (StatusCode::UNAUTHORIZED, Json(json!({"error": err.code, "detail": err.to_string()})))
         .into_response()
 }
 
 /// Map a tool error to its HTTP status, keeping the stable `ERR_*` code in the body.
-fn error_response(err: &ToolError) -> Response {
+pub(super) fn error_response(err: &ToolError) -> Response {
     let status =
         StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     // The one place a REST refusal is logged: INFO for a 4xx, ERROR for a 5xx. The line
@@ -277,7 +292,7 @@ fn not_found_detail(detail: String) -> Response {
 /// Query string accessors with the HTTP semantics the C# model binder has: a
 /// missing required value or an unparsable one is `ERR_INVALID_ARGUMENT` (400),
 /// never a silent default.
-struct Q(Vec<(String, String)>);
+pub(super) struct Q(pub(super) Vec<(String, String)>);
 
 impl Q {
     fn opt(&self, key: &str) -> Option<&str> {
@@ -295,7 +310,7 @@ impl Q {
         })
     }
 
-    fn str_or(&self, key: &str, default: &'static str) -> &str {
+    pub(super) fn str_or(&self, key: &str, default: &'static str) -> &str {
         self.opt(key).unwrap_or(default)
     }
 
@@ -339,7 +354,7 @@ impl Q {
 
 /// Parse a JSON request body into the same tolerant accessors the tools use, so
 /// a REST body and a `tools/call` argument object behave identically.
-fn body_args(body: &Bytes) -> Result<Args> {
+pub(super) fn body_args(body: &Bytes) -> Result<Args> {
     if body.is_empty() {
         return Ok(Args::new(Value::Null));
     }
@@ -2773,7 +2788,7 @@ mod tests {
         // added images and image, 45 since US-0008 added document-view, 46 since
         // SPEC-0020 US-0015 added the admin quota read, 47 since SPEC-0045
         // US-0059 added diff, 48 since SPEC-0047 added disk-usage, 49 since SPEC-0049 added folder-usage.
-        assert_eq!(REST_ROUTES.len(), 49);
+        assert_eq!(REST_ROUTES.len(), 61);
         assert!(REST_ROUTES.contains(&("GET", "folder-usage")));
         assert!(REST_ROUTES.contains(&("GET", "disk-usage")));
         assert!(REST_ROUTES.contains(&("GET", "diff")));

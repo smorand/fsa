@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS "project_purge_config" ("project_id" TEXT NOT NULL, "
 
 CREATE TABLE IF NOT EXISTS "derived_job" ("job_id" TEXT NOT NULL, "project_id" TEXT NOT NULL, "path" TEXT NOT NULL, "kind" TEXT NOT NULL, "state" TEXT NOT NULL, "cause" TEXT NOT NULL, "hidden" INTEGER NOT NULL DEFAULT 0, "created_at" TEXT NOT NULL, "ended_at" TEXT, "reason" TEXT, "set_id" TEXT, PRIMARY KEY ("job_id"), FOREIGN KEY ("project_id") REFERENCES "project" ("id") ON DELETE CASCADE)
 
+CREATE TABLE IF NOT EXISTS "provider" ("name_key" TEXT NOT NULL, "provider_id" TEXT NOT NULL, "name" TEXT NOT NULL, "endpoint" TEXT NOT NULL, "auth_scheme" TEXT NOT NULL, "secret_enc" BLOB, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, PRIMARY KEY ("name_key"))
+
+CREATE TABLE IF NOT EXISTS "model" ("provider_id" TEXT NOT NULL, "name_key" TEXT NOT NULL, "model_id" TEXT NOT NULL, "name" TEXT NOT NULL, "kind" TEXT NOT NULL, "dimension" INTEGER, "max_input_tokens" INTEGER, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, PRIMARY KEY ("provider_id", "name_key"))
+
+CREATE TABLE IF NOT EXISTS "default_model" ("kind" TEXT NOT NULL, "model_id" TEXT NOT NULL, "set_at" TEXT NOT NULL, PRIMARY KEY ("kind"))
+
+CREATE TABLE IF NOT EXISTS "setting_change" ("change_id" TEXT NOT NULL, "at" TEXT NOT NULL, "person" TEXT NOT NULL, "action" TEXT NOT NULL, "target_kind" TEXT NOT NULL, "target_id" TEXT NOT NULL, "target_name" TEXT NOT NULL, "fields" TEXT NOT NULL, PRIMARY KEY ("change_id"))
+
+CREATE INDEX IF NOT EXISTS "idx_provider_id" ON "provider" ("provider_id")
+
+CREATE INDEX IF NOT EXISTS "idx_model_id" ON "model" ("model_id")
+
+CREATE INDEX IF NOT EXISTS "idx_model_kind" ON "model" ("kind")
+
 CREATE INDEX IF NOT EXISTS "idx_derived_job_key" ON "derived_job" ("project_id", "path", "kind")
 
 CREATE INDEX IF NOT EXISTS "idx_derived_job_page" ON "derived_job" ("project_id", "state", "ended_at")

@@ -15,6 +15,7 @@ Implementation: `api/dataplane.rs` (routes), `api/openapi.rs` (spec plus UI).
 | `/api/fs/roots` | required | none (the answer *is* the ACL for the caller) |
 | `/api/fs/{mount_id}/**` | required | `require_member(mount_id, person)` |
 | `/api/admin/projects/{project_id}/quota` | required | none: the tool's own gate (admin, or owner; a non admin gets 403 even for a missing project) |
+| `/api/admin/{providers,models,defaults,setting-changes}/**` | required | none: platform admin only, reading included (the tool's own gate, `ERR_FORBIDDEN: '<person>' is not a platform admin`) |
 | `/api/swagger.json`, `/api/docs`, `/api/docs/*` | none | none |
 
 The bearer comes from the configured header (`auth.jwt.header`, default
@@ -39,6 +40,24 @@ token as the password. A 401 body is `{"error": "ERR_UNAUTHENTICATED", "detail":
 | GET | `/api/admin/projects/{project_id}/quota` | none | `{project_id, max_mb, used_bytes}`, the body of `admin.get_project_quota` byte for byte, same function (SPEC-0020 DEC-006) |
 | GET | `/api/admin/projects/{project_id}/disk-usage` | query `limit` (1 to 500, default 100) | `{project_id, max_mb, used_bytes, file_count, truncated, entries}`, the body of `admin.get_project_disk_usage` byte for byte, same function (SPEC-0047 DEC-009); a non numeric `limit` gets the cap refusal |
 | GET | `/api/admin/projects/{project_id}/folder-usage` | query `folder` (default `/`; `folder=` empty is refused), `limit` (1 to 500, default 100) | `{project_id, max_mb, used_bytes, folder, item_count, truncated, items}`, the body of `admin.get_project_folder_usage` byte for byte, same function (SPEC-0049 DEC-009) |
+
+### Registry routes (SPEC-0102 US-0288, `api/admin_settings.rs`)
+
+Twelve routes, platform admin only, each calling the `tools::models` function of the matching `admin.*`
+tool (the handlers add only `person_of`, input shaping and `error_response`). JSON bodies equal the tool
+inputs, answers and `{error, detail}` refusals equal the tools'. Mounted by `api::router` with the data
+plane, so they vanish with `api.enabled: false`; documented in `/api/swagger.json` (12 `Op` rows, 5 body
+schemas). `REST_ROUTES` keys a route ending in a path parameter by its braces (`{provider_id}`).
+
+| Method | Path | Input | Tool |
+|---|---|---|---|
+| POST, GET | `/api/admin/providers` | body (`name`, `endpoint`, `auth_scheme`, `secret`); query `marker` | `admin.create_provider`, `admin.list_providers` |
+| PATCH, DELETE | `/api/admin/providers/{provider_id}` | body (`name`, `endpoint`, `auth_scheme`, `secret`, `clear_secret`) | `admin.update_provider`, `admin.delete_provider` |
+| POST, GET | `/api/admin/models` | body (`provider_id`, `name`, `kind`, `dimension`, `max_input_tokens`); query `provider_id`, `kind`, `marker` | `admin.create_model`, `admin.list_models` |
+| PATCH, DELETE | `/api/admin/models/{model_id}` | body (`name`, `dimension`, `max_input_tokens`) | `admin.update_model`, `admin.delete_model` |
+| GET | `/api/admin/defaults` | none | `admin.get_default_models` |
+| PUT, DELETE | `/api/admin/defaults/{kind}` | PUT body `{model_id}` | `admin.set_default_model`, `admin.clear_default_model` |
+| GET | `/api/admin/setting-changes` | query `marker` | `admin.list_setting_changes` |
 
 `trigger_documentation_service` on the upload applies to **every** file of the
 form, and only `"true"` or `"1"` turn it on, because a form field is free text and
@@ -138,7 +157,7 @@ no `fs_ops::apply_patch`, so it dispatches to the registered `fs.apply_patch`
 tool (a documented TODO at the call site) and answers `ERR_NOT_SUPPORTED` if that
 tool is not registered. No logic is duplicated either way.
 
-The `admin.*` and `git.*` tools have no REST counterpart.
+Apart from the three project usage reads and the registry routes above, the `admin.*` and `git.*` tools have no REST counterpart.
 
 ### Search indexing
 
@@ -208,3 +227,16 @@ three git HTTP paths appear only when `git.enabled`, mirroring the router. The
 route and body shapes themselves live in the `OPERATIONS` and `SCHEMAS` tables,
 because the REST surface is not the tool surface (`mkdir` takes only `path` while
 `fs.mkdir` also takes `parents` and `exist_ok`).
+
+## The models screen (SPEC-0102 US-0289, 2026-11-22)
+
+`GET /app/models` and eight form posts `POST /app/models/{provider/create, provider/update, provider/delete,
+model/create, model/update, model/delete, default/set, default/clear}` (`models_screen.rs`), always mounted
+outside `api.enabled`. Form fields are named like the tool inputs plus `csrf_token`. Identity is the token
+screen's `resolve_person` (header, bearer, `mcpfs_token` cookie). The single use token (one `CsrfStore` per
+router, bound to the person, a page load issues a new one) is required only for a cookie identity; a missing,
+used or foreign token answers 403 `{"error":"ERR_FORBIDDEN","detail":"missing or invalid csrf_token"}`.
+A success answers 303 to `/app/models`; a refused action renders the page again with the refusal text
+(`ERR_<CODE>: <text>`) and the status of the error; an ordinary member gets 403 with
+`ERR_FORBIDDEN: '<person>' is not a platform admin` and no page. Empty optional fields are fields not given;
+an empty secret on `provider/update` keeps the stored secret, `clear_secret=true` removes it.

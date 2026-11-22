@@ -282,3 +282,10 @@
 | US-0280 | SPEC-0101 | the rebuild builds the chunk sets before the search entries | US-0274, US-0279 | 1 | landed |  |  |
 | US-0281 | SPEC-0101 | chunk sets follow moves, copies and deletions | US-0280 | 2 | landed |  |  |
 | US-0282 | SPEC-0101 | recalculate chunks by hand, docs and contract | US-0280, US-0281 | 2 | landed |  |  |
+| US-0283 | SPEC-0102 | providers, secrets, the master key and the record of changes | main | 1 | landed |  |  |
+| US-0284 | SPEC-0102 | models and their tools | US-0283 | 2 | landed |  |  |
+| US-0285 | SPEC-0102 | server defaults for text embedding and reranker | US-0284 | 2 | landed |  |  |
+| US-0286 | SPEC-0102 | search embeds with the default text embedding model | US-0285 | 1 | landed |  |  |
+| US-0287 | SPEC-0102 | search reranks with the default reranker | US-0286 | 2 | landed |  |  |
+| US-0288 | SPEC-0102 | the REST interface of the registry | US-0287 | 2 | landed |  |  |
+| US-0289 | SPEC-0102 | the models screen, docs and contract | US-0288 | 1 | landed |  |  |

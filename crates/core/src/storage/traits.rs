@@ -318,6 +318,14 @@ pub trait AdminBackend: Send + Sync {
     fn derived_jobs(&self) -> Option<crate::search::derived::JobStore> {
         None
     }
+    /// The platform settings rows (SPEC-0102 DEC-015), carrying the master key
+    /// given to [`AdminBackend::set_master_key`]. `None` for a store without
+    /// them, whose registry tools then answer `ERR_NOT_SUPPORTED`.
+    fn settings(&self) -> Option<crate::settings::SettingsStore> {
+        None
+    }
+    /// Hands the master key checked at boot to the store (SPEC-0102 DEC-003).
+    fn set_master_key(&self, _key: Option<[u8; 32]>) {}
     /// Registers what runs after a project is soft deleted, restored or removed,
     /// so the rebuild scheduler forgets its jobs (SPEC-0100 DEC-016) whichever
     /// caller did it: tool, purge sweep or CLI. A later call replaces the hook.

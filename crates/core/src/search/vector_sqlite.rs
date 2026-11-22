@@ -11,7 +11,6 @@
 
 #![cfg(feature = "rag")]
 
-use crate::config::EmbeddingConfig;
 use crate::errors::{Result, ToolError};
 use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult, embedding};
 use async_trait::async_trait;
@@ -31,8 +30,8 @@ pub struct SqliteVecBackend {
     tantivy_dir: PathBuf,
     /// Shared HTTP client for embedding calls.
     client: Arc<reqwest::Client>,
-    /// Embedding model config (endpoint, model name, API key env).
-    embedding_config: EmbeddingConfig,
+    /// Where to embed, asked on every call (SPEC-0102 DEC-007).
+    targets: Arc<dyn embedding::EmbedTargets>,
     /// Per-volume in-memory SQLite connections for the vector index.
     volumes: Arc<Mutex<HashMap<String, Arc<Mutex<VolumeConn>>>>>,
 }
@@ -42,13 +41,13 @@ impl SqliteVecBackend {
         dimensions: u32,
         tantivy_dir: &str,
         client: Arc<reqwest::Client>,
-        embedding_config: EmbeddingConfig,
+        targets: Arc<dyn embedding::EmbedTargets>,
     ) -> Self {
         Self {
             dimensions,
             tantivy_dir: PathBuf::from(tantivy_dir),
             client,
-            embedding_config,
+            targets,
             volumes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -108,8 +107,9 @@ impl SearchBackend for SqliteVecBackend {
         // Compute embeddings before entering the blocking closure: embedding
         // calls are async and must not be made from within spawn_blocking.
         let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
+        let target = self.targets.target().await?;
         for chunk in &chunks {
-            let emb = embedding::embed(&self.client, &self.embedding_config, &chunk.text).await?;
+            let emb = embedding::embed(&self.client, &target, &chunk.text).await?;
             embeddings.push(emb);
         }
 
@@ -268,7 +268,8 @@ impl SearchBackend for SqliteVecBackend {
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         // Embed the query text before entering the blocking section.
-        let embedding = embedding::embed(&self.client, &self.embedding_config, query).await?;
+        let target = self.targets.target().await?;
+        let embedding = embedding::embed(&self.client, &target, query).await?;
 
         let vc = self.get_or_open(volume_id)?;
         let vol = volume_id.to_string();
@@ -413,7 +414,12 @@ mod tests {
             api_key_env: String::new(),
             dimensions: dims,
         };
-        let b = SqliteVecBackend::new(dims, dir.path().to_str().unwrap(), client, cfg);
+        let b = SqliteVecBackend::new(
+            dims,
+            dir.path().to_str().unwrap(),
+            client,
+            Arc::new(crate::search::embedding::StaticTargets(cfg)),
+        );
         (b, dir)
     }
 

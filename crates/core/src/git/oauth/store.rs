@@ -29,7 +29,7 @@ pub const TOKEN_KEY_ENV: &str = "FSA_TOKEN_KEY";
 const LEGACY_TOKEN_KEY_ENV: &str = "MCPFS_TOKEN_KEY";
 
 /// The token key from the environment: the new name, else the old one with its warning.
-fn token_key_with(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+pub(crate) fn token_key_with(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     crate::env_compat::read_with(TOKEN_KEY_ENV, LEGACY_TOKEN_KEY_ENV, env)
 }
 

@@ -404,6 +404,13 @@ families on; while off, the tools are not offered and no remote request is made.
   `purge` refuses a bad entry like `serve` before opening any store; a purge with valid lists runs
   as before. `migrate` checks the source first, then the destination.
 
+## `search.embedding` and the registry default (SPEC-0102)
+
+`search.embedding` is the fallback: while the platform settings hold a default `text_embedding`
+model, indexing and queries call its provider (`endpoint + "/embeddings"`, its secret as bearer)
+instead, from the next call on, no restart. Clearing the default returns to this block.
+`dimensions` always sets the vector table width. Details in `search.md`, "Embedding source".
+
 ## `search.settle_delay_seconds` (SPEC-0100)
 
 Whole seconds, 0 or more, that a file must stay unchanged before its derived data is
@@ -477,9 +484,18 @@ composition root by name.
 |---|---|
 | `FSA_MINIO_SECRET_KEY` | `infra.blob.secret_key` in `config/minio.yaml.template` |
 | `FSA_GITHUB_CLIENT_SECRET` | the `git.auth` GitHub device flow (name configurable) |
-| `FSA_TOKEN_KEY` | when set, OAuth tokens are persisted encrypted (AES-256-GCM, 32 byte base64 key); unset means memory only |
+| `FSA_TOKEN_KEY` | the master key: when set, OAuth tokens are persisted encrypted (AES-256-GCM, 32 byte base64 key), and model provider secrets can be stored (SPEC-0102); unset means memory only tokens and providers without secrets |
 | any name you choose | `doc_service.api.auth_token`, for example `${FSA_DOC_SERVICE_TOKEN}` |
 | any name you choose | the `dsn` of a relational store, for example `${FSA_META_DSN}` |
+
+The master key (2026-11-22, SPEC-0102 US-0283). `FSA_TOKEN_KEY` (legacy `MCPFS_TOKEN_KEY`) is read once at
+boot, after the admin store connects, by `app::boot_master_key`: unset or blank means no key (providers
+without a secret are accepted, a secret is refused with `ERR_NOT_SUPPORTED: no master key is configured;
+set FSA_TOKEN_KEY`); a value that is not base64 of 32 bytes stops `serve` with `error: FSA_TOKEN_KEY must be
+valid base64.` or `error: FSA_TOKEN_KEY must decode to 32 bytes ...` and exit status 1, whether or not git
+is enabled. The valid key goes to the admin store through `AdminBackend::set_master_key`. Generate one
+with `openssl rand -base64 32`. The key is never stored; provider secrets are kept as `secret_enc` (nonce,
+tag, ciphertext) and travel in memory as `settings::SecretText`, whose `Debug` prints `Secret(set)`.
 
 A **dsn is a secret**, because it usually carries a password. `dsn` is typed as `Dsn`,
 not `String`, and that type redacts itself in both `Debug` and `Display`, printing
@@ -560,3 +576,6 @@ DDRIFT-002).
 A missing or unreadable file is `ERR_INVALID_ARGUMENT`; a YAML error reports the parse
 failure. The keypair is unrelated to this resolution: `fsa keys --dir .keys` writes
 `jwt.key` and `jwt.pub`, and `auth.jwt.public_key_path` must point at the `.pub` file.
+
+(2026-11-22, SPEC-0102 US-0289) No new key. The registry is edited through the `admin.*` tools, `/api/admin/*` and the
+`/app/models` screen; the master key `FSA_TOKEN_KEY` is needed to store a provider secret from any of them.

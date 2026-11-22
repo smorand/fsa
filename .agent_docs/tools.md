@@ -1,4 +1,4 @@
-# Tool reference (123 tools)
+# Tool reference (135 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -615,6 +615,18 @@ BL-0153 (no total across cross reference streams).
 | `admin.set_project_quota` | set or clear a project's maximum storage size (SPEC-0010) | `project_id`, `max_mb`? | `project_id`, `max_mb` | !D,!RO,I,!OW | admin |
 | `admin.get_project_disk_usage` | list a project's files from the largest to the smallest, trashed files included (SPEC-0047); also `GET /api/admin/projects/{project_id}/disk-usage?limit=` | `project_id`, `limit`? (whole number 1 to 500, default 100) | `project_id`, `max_mb` (null when unlimited), `used_bytes`, `file_count`, `truncated`, `entries[]` of `path`, `size`, `state` (`Active` or `In trash`), `original_path` (null when active) | RO,I,!OW | admin or owner, same refusals as `admin.get_project_quota`; cap refusal `limit must be between 1 and 500`; ties ordered by path in code point order |
 | `admin.get_project_folder_usage` | read one folder of a project: its size and file count and its direct folders and files, largest first, a folder counting everything below it (SPEC-0049); also `GET /api/admin/projects/{project_id}/folder-usage?folder=&limit=` | `project_id`, `folder`? (absolute path, default `/`), `limit`? (whole number 1 to 500, default 100) | `project_id`, `max_mb` (null when unlimited), `used_bytes`, `folder{path,size,file_count}`, `item_count`, `truncated`, `items[]` of `path`, `kind` (`Folder` or `File`), `size`, `file_count` (folders only) | RO,I,!OW | admin or owner, same refusals as `admin.get_project_quota`; cap refusal `limit must be between 1 and 500`; folder refusals `folder '<path>' not found` (`ERR_NOT_FOUND`), `'<path>' is not a folder`, `path must start with /` (`ERR_INVALID_ARGUMENT`) |
+| `admin.create_provider` | register a model provider (SPEC-0102); name trimmed, 1 to 64 characters, unique without regard to case; endpoint http or https with a host, no credentials, at most 2048 characters | `name`, `endpoint`, `auth_scheme="none"` (`none` or `bearer`), `secret=""` (required for `bearer`, refused for `none`, at most 4096 characters, stored AES 256 GCM under `FSA_TOKEN_KEY`) | `provider_id` (`prov-` plus 12 hex), `name`, `endpoint`, `auth_scheme`, `has_secret`, `created_at`, `updated_at` (UTC, seconds) | !D,!RO,!I,!OW | admin; refusals in order `name must be 1 to 64 characters`, `a provider named '<name>' already exists`, `endpoint must be an http or https URL`, `auth_scheme must be 'none' or 'bearer'`, `auth_scheme 'none' takes no secret`, `auth_scheme 'bearer' needs a secret`, `secret must be at most 4096 characters`, then `ERR_NOT_SUPPORTED: no master key is configured; set FSA_TOKEN_KEY` |
+| `admin.update_provider` | change the fields given; the checks apply to the provider after the update; a no op answers it unchanged and is not recorded | `provider_id`, `name`?, `endpoint`?, `auth_scheme`?, `secret`? (empty keeps), `clear_secret=false` | the provider | !D,!RO,I,!OW | admin; first `provider not found: <id>` (`ERR_NOT_FOUND`), then `secret and clear_secret cannot be given together`, then the create order |
+| `admin.delete_provider` | delete a provider and its secret; a provider that still has models is refused | `provider_id` | `deleted: true` | D,!RO,!I,!OW | admin; `provider not found: <id>`, `provider '<name>' still has <n> model(s)` (`ERR_INVALID_ARGUMENT`) |
+| `admin.list_providers` | providers by name without regard to case, 100 per answer | `marker=""` | `providers[]`, `marker` (absent when none remain) | RO,I,!OW | admin; `marker is not valid` |
+| `admin.create_model` | register a model of a provider (SPEC-0102); name trimmed, 1 to 128 characters, unique within its provider without regard to case | `provider_id`, `name`, `kind` (`text_embedding`, `image_embedding`, `reranker`, `ocr`, `chat`), `dimension`? (1 to 8192, required for the two embedding kinds, refused for the others), `max_input_tokens`? (1 to 1000000) | `model_id` (`mdl-` plus 12 hex), `provider_id`, `name`, `kind`, `dimension`, `max_input_tokens` (null when absent), `is_default` (false until US-0285), `created_at`, `updated_at` | !D,!RO,!I,!OW | admin; refusals in order `provider not found: <id>` (`ERR_NOT_FOUND`), `name must be 1 to 128 characters`, `kind must be one of text_embedding, image_embedding, reranker, ocr, chat`, `dimension is required for kind '<kind>'`, `dimension applies to embedding kinds only`, `dimension must be between 1 and 8192`, `max_input_tokens must be between 1 and 1000000`, `a model named '<name>' already exists for provider '<provider>'` |
+| `admin.update_model` | change `name`, `dimension` or `max_input_tokens`, the others keep their value; the checks apply to the model after the update; a no op answers it unchanged and is not recorded; provider and kind never change | `model_id`, `name`?, `dimension`?, `max_input_tokens`? (0 removes the limit) | the model | !D,!RO,I,!OW | admin; `model not found: <id>` (`ERR_NOT_FOUND`), `the dimension of a server default model cannot change` (`ERR_INVALID_ARGUMENT`, a different value only), then the create order |
+| `admin.delete_model` | delete a model; a server default is refused (`model '<name>' is a server default; clear the default first`, `ERR_INVALID_ARGUMENT`) | `model_id` | `deleted: true` | D,!RO,!I,!OW | admin; `model not found: <id>` |
+| `admin.list_models` | models by provider name then model name without regard to case, 100 per answer | `provider_id=""`, `kind=""`, `marker=""` | `models[]`, `marker` (absent when none remain) | RO,I,!OW | admin; `provider not found: <id>` (`ERR_NOT_FOUND`), the kind text, `marker is not valid` |
+| `admin.set_default_model` | make a model the server default of its kind, replacing the previous one (SPEC-0102, US-0285); a text embedding model must have dimension `search.embedding.dimensions` (1536 unless configured); the model already default is returned and writes no record; search does not read it yet | `kind` (`text_embedding` or `reranker`), `model_id` | the model with `is_default: true` | !D,!RO,I,!OW | admin; `kind must be 'text_embedding' or 'reranker'`, `model '<name>' is of kind '<k>', not '<kind>'`, `the default text embedding model must have dimension <n>` (`ERR_INVALID_ARGUMENT`), `model not found: <id>` (`ERR_NOT_FOUND`) |
+| `admin.clear_default_model` | remove the server default of a kind; a kind with none answers the same and writes no record | `kind` | `cleared: true` | !D,!RO,I,!OW | admin; the kind text |
+| `admin.get_default_models` | the server default of each kind | (none) | `text_embedding` and `reranker`, each a model or null | RO,I,!OW | admin |
+| `admin.list_setting_changes` | the record of changes, newest first (`change_id` descending), 100 per answer; a refused or no op change writes nothing; a secret appears as the field name `secret` only | `marker=""` | `changes[{change_id (chg- plus 12 digits), at, person (lower case), action, target_kind, target_id, target_name, fields[]}]`, `marker` | RO,I,!OW | admin; `marker is not valid` |
 | `admin.get_project_quota` | read a project's limit and current usage, trashed files included (SPEC-0020); also `GET /api/admin/projects/{project_id}/quota` | `project_id` | `project_id`, `max_mb` (null when unlimited), `used_bytes` | RO,I,!OW | admin or owner; a non admin gets the owner refusal even for a missing project |
 
 2026-10-12 (SPEC-0020): the limit refuses every growing `fs.*`/`git.*` operation on its net change with `ERR_PROJECT_QUOTA_EXCEEDED` (`project storage quota of <N> MB exceeded: <U> bytes used, <W> bytes requested`, HTTP 507), before the session quota. Moves, trash, restore, aborts and pushes are never checked; a limit below usage removes nothing.
@@ -764,11 +776,11 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 69 (52 `fs.*`, 17 `admin.*`) |
-| git flag on | 123 |
-| git and search flags on | 127 |
-| every flag, pandoc on `PATH` | 149 (147 without pandoc: `doc.*` registers nothing) |
-| one optional family alone | 69 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
+| default | 81 (52 `fs.*`, 29 `admin.*`) |
+| git flag on | 135 |
+| git and search flags on | 139 |
+| every flag, pandoc on `PATH` | 161 (159 without pandoc: `doc.*` registers nothing) |
+| one optional family alone | 81 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
 `#[tool]` methods: `add_optional_families` in `mcp/server.rs` runs each enabled
@@ -777,7 +789,7 @@ family's production `register()` into one shared `ToolRegistry`, and adds one
 family's own `ToolSchema::to_list_entry()`, so the served schema equals
 `catalog()` (what `/api/swagger.json` reads); the call goes through
 `ToolRegistry::call` then `to_call_result`. The family handlers authorize
-`mount_id` themselves, unchanged. They are outside the 123 tool golden
+`mount_id` themselves, unchanged. They are outside the 139 tool golden
 contract. Tests: `tools/tool_surface_e2e.rs`.
 
 (2026-11-12, SPEC-0093) Remote answers of `web.*` and `context7.*` are read by `tools::web::read_answer`
@@ -830,3 +842,9 @@ Observed while hardening the extraction paths; none is a reported defect, all ar
 * A damaged Office part reads as absent ("main part is missing", a sheet or slide silently left out) instead of being reported as damaged.
 * Other tools and REST routes clamp a path climbing above the project root to the root (SPEC-0018); only `extract_archive` refuses it (SPEC-0086).
 * The debug test profile does not optimize the RAR crypto crates, so SPEC-0087 E2E-034 runs a reduced set of right-password lengths (`[profile.dev]` in `Cargo.toml` helps).
+
+## Registry tools and the models screen (SPEC-0102, 2026-11-22)
+
+The 12 registry tools (`admin.create_provider` to `admin.list_setting_changes`) are platform admin only, reading
+included, and count in the 29 `admin.*` tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
+screen `/app/models` calls the same functions of `tools/models.rs`. No tool logs an argument; a secret is a `SecretText`.

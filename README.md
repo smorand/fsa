@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-123 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+135 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -507,6 +507,26 @@ when search is on and the project indexes). A text file is cut from its bytes, a
 document from its document view. Run the acceptance tests with
 `cargo test -p fsa-core --lib -- e2e_0101_`. Details: `.agent_docs/search.md`.
 
+## Model registry and platform settings
+
+Platform administrators keep the model providers and their models in the admin database (SPEC-0102):
+a provider has a name, an endpoint, an authentication scheme (`none` or `bearer`) and, for `bearer`, a
+secret stored encrypted under `FSA_TOKEN_KEY` and never returned (answers carry `has_secret` only). A model
+has a provider, a kind (`text_embedding`, `image_embedding`, `reranker`, `ocr`, `chat`), a dimension for
+the embedding kinds and an optional input token limit. The server defaults, one text embedding model and
+one reranker, replace the `search.embedding` and `search.reranking` YAML blocks while set (clearing a
+default returns to the YAML); a text embedding default must have the dimension of the vector store.
+Every change is recorded (who, what, when, which fields, never a value).
+
+Three doors, one implementation (`settings::Registry`), all platform admin only, reading included:
+the 12 `admin.*` tools (`admin.create_provider` to `admin.list_setting_changes`), the REST routes under
+`/api/admin/{providers,models,defaults,setting-changes}`, and the browser screen `/app/models` (always
+mounted, same identity sources and one time form token as `/app/tokens`: the token is required only
+when the `mcpfs_token` cookie authenticated the request). The screen shows providers (`Secret stored` or
+`No secret`), the models under them, the defaults and the latest 20 changes, with a form for every
+operation; secret inputs are password fields, never prefilled, and an empty secret on an edit keeps the
+stored one. Tests: `cargo test -p fsa-core --lib -- e2e_0102_`.
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or
@@ -608,7 +628,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 123 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 135 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash
@@ -644,7 +664,7 @@ cargo build -p agent -p fsa && python3 scripts/pty_check.py
 
 ## The tool contract is frozen
 
-The 94 tool names, descriptions and `inputSchema` values are a client and an LLM facing
+The 139 tool names, descriptions and `inputSchema` values are a client and an LLM facing
 contract, so they are snapshotted in `tool-contract-golden.json` and compared on every test
 run, serialized form included, which means even a reordered schema key fails the build.
 `TOOL_CONTRACT.txt` is the human readable companion.

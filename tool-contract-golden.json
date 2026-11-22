@@ -30,6 +30,70 @@
       }
     },
     {
+      "name": "admin.clear_default_model",
+      "description": "Remove the server default of a kind, text_embedding or reranker; a kind with no default is not an error (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "Kind whose default is removed: text_embedding or reranker.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.create_model",
+      "description": "Register a model of a provider: a name, a kind (text_embedding, image_embedding, reranker, ocr or chat), for the embedding kinds a dimension, and optionally a limit of input tokens (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "description": "Id of the provider of the model.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Name of the model, 1 to 128 characters, unique within its provider without regard to case.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Kind: text_embedding, image_embedding, reranker, ocr or chat.",
+            "type": "string"
+          },
+          "dimension": {
+            "description": "Size of the vectors, 1 to 8192; required for the two embedding kinds, refused for the others.",
+            "type": "integer",
+            "default": null
+          },
+          "max_input_tokens": {
+            "description": "Largest input in tokens, 1 to 1000000; absent means no limit.",
+            "type": "integer",
+            "default": null
+          }
+        },
+        "required": [
+          "provider_id",
+          "name",
+          "kind"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.create_project",
       "description": "Create a project for a designated owner and provision its volume (platform admin only).",
       "inputSchema": {
@@ -77,6 +141,65 @@
       }
     },
     {
+      "name": "admin.create_provider",
+      "description": "Register a model provider: a name, the base address of its service, an authentication scheme ('none' or 'bearer') and, for 'bearer', a secret that is stored encrypted and never returned (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Name of the provider, 1 to 64 characters, unique without regard to case.",
+            "type": "string"
+          },
+          "endpoint": {
+            "description": "Base address of the service, http or https, for example http://localhost:9010/v1.",
+            "type": "string"
+          },
+          "auth_scheme": {
+            "description": "Authentication scheme: 'none' or 'bearer'.",
+            "type": "string",
+            "default": "none"
+          },
+          "secret": {
+            "description": "Secret sent as a bearer token; required for 'bearer', refused for 'none'. Never returned.",
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "name",
+          "endpoint"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.delete_model",
+      "description": "Delete a model that is not a server default (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model_id": {
+            "description": "Id of the model to delete.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.delete_project",
       "description": "Delete a project and recursively tear down its volume (owner or platform admin).",
       "inputSchema": {
@@ -94,6 +217,41 @@
       "annotations": {
         "destructiveHint": true,
         "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.delete_provider",
+      "description": "Delete a model provider that has no model, with its secret (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "description": "Id of the provider to delete.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.get_default_models",
+      "description": "Read the server default text embedding model and the server default reranker, null for a kind with none (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
         "idempotentHint": true,
         "openWorldHint": false
       }
@@ -251,11 +409,78 @@
       }
     },
     {
+      "name": "admin.list_models",
+      "description": "List the models ordered by provider name then model name without regard to case, 100 per answer, optionally of one provider or one kind (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "description": "Only the models of this provider.",
+            "type": "string",
+            "default": ""
+          },
+          "kind": {
+            "description": "Only the models of this kind.",
+            "type": "string",
+            "default": ""
+          },
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "type": "string",
+            "default": ""
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.list_projects",
       "description": "List projects the caller can access.",
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.list_providers",
+      "description": "List the model providers ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "type": "string",
+            "default": ""
+          }
+        }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.list_setting_changes",
+      "description": "List the record of changes of the platform settings, newest first, 100 per answer: who changed what, when, and which fields (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "type": "string",
+            "default": ""
+          }
+        }
       },
       "annotations": {
         "readOnlyHint": true,
@@ -298,6 +523,33 @@
       },
       "annotations": {
         "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.set_default_model",
+      "description": "Make a model the server default of its kind, text_embedding or reranker, replacing the previous default; a text embedding model must have the dimension of the vector store (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "Kind of the default: text_embedding or reranker.",
+            "type": "string"
+          },
+          "model_id": {
+            "description": "Id of the model, which must be of that kind.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "model_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": true,
         "openWorldHint": false
@@ -421,6 +673,90 @@
         "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.update_model",
+      "description": "Change the name, the dimension or the input token limit of a model; a field not given keeps its value; max_input_tokens 0 removes the limit (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model_id": {
+            "description": "Id of the model to change.",
+            "type": "string"
+          },
+          "name": {
+            "description": "New name, 1 to 128 characters.",
+            "type": "string",
+            "default": null
+          },
+          "dimension": {
+            "description": "New size of the vectors, 1 to 8192; embedding kinds only.",
+            "type": "integer",
+            "default": null
+          },
+          "max_input_tokens": {
+            "description": "New largest input in tokens, 1 to 1000000; 0 removes the limit.",
+            "type": "integer",
+            "default": null
+          }
+        },
+        "required": [
+          "model_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.update_provider",
+      "description": "Change the fields given of a model provider; a field not given keeps its value; clear_secret removes the secret (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider_id": {
+            "description": "Id of the provider to change.",
+            "type": "string"
+          },
+          "name": {
+            "description": "New name, 1 to 64 characters.",
+            "type": "string",
+            "default": null
+          },
+          "endpoint": {
+            "description": "New base address of the service.",
+            "type": "string",
+            "default": null
+          },
+          "auth_scheme": {
+            "description": "New authentication scheme: 'none' or 'bearer'.",
+            "type": "string",
+            "default": null
+          },
+          "secret": {
+            "description": "New secret; empty keeps the stored one. Never returned.",
+            "type": "string",
+            "default": null
+          },
+          "clear_secret": {
+            "description": "True removes the stored secret.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "provider_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },

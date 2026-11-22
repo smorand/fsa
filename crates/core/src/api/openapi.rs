@@ -72,7 +72,9 @@ pub fn document(state: &AppState) -> Value {
     // The health probe is part of the surface and documented, without a tool.
     paths.insert("/health".into(), json!({"get": bare_operation(&[])}));
     for op in OPERATIONS {
-        paths.insert(op.path.into(), json!({op.method.to_lowercase(): operation(op, &catalog)}));
+        // One path may carry several methods (the registry collections).
+        let item = paths.entry(op.path).or_insert_with(|| json!({}));
+        item[op.method.to_lowercase()] = operation(op, &catalog);
     }
     if state.config.git.enabled {
         for (path, item) in git_paths() {
@@ -243,27 +245,9 @@ fn operation(op: &Op, catalog: &HashMap<String, ToolDoc>) -> Value {
     };
 
     let mut parameters: Vec<Value> = Vec::new();
-    if op.path.contains("{mount_id}") {
-        parameters.push(parameter(
-            "mount_id",
-            "path",
-            true,
-            "string",
-            "",
-            Def::Absent,
-            describe("mount_id"),
-        ));
-    }
-    if op.path.contains("{project_id}") {
-        parameters.push(parameter(
-            "project_id",
-            "path",
-            true,
-            "string",
-            "",
-            Def::Absent,
-            describe("project_id"),
-        ));
+    // Every `{name}` of the path, in order, is a required string path parameter.
+    for name in op.path.split('/').filter_map(|seg| seg.strip_prefix('{')?.strip_suffix('}')) {
+        parameters.push(parameter(name, "path", true, "string", "", Def::Absent, describe(name)));
     }
     for p in op.params {
         parameters.push(parameter(
@@ -525,12 +509,129 @@ const REST_ONLY_PARAMS: &[(&str, &str, &str)] = &[
 
 const NO_PARAMS: &[Param] = &[];
 
+/// The `marker` of a paged listing, the one query parameter of the registry lists.
+const MARKER: &[Param] =
+    &[Param { name: "marker", required: false, ty: "string", format: "", default: Def::Absent }];
+
 /// `path` as a required query parameter, the shape most read routes use.
 const PATH_REQ: &[Param] =
     &[Param { name: "path", required: true, ty: "string", format: "", default: Def::Absent }];
 
 /// Every documented operation, in the C# registration order.
 const OPERATIONS: &[Op] = &[
+    // SPEC-0102 DEC-013: the registry routes, on the same functions as the tools.
+    Op {
+        method: "POST",
+        sub: "providers",
+        path: "/api/admin/providers",
+        tool: "admin.create_provider",
+        params: NO_PARAMS,
+        body: "CreateProviderBody",
+    },
+    Op {
+        method: "GET",
+        sub: "providers",
+        path: "/api/admin/providers",
+        tool: "admin.list_providers",
+        params: MARKER,
+        body: "",
+    },
+    Op {
+        method: "PATCH",
+        sub: "{provider_id}",
+        path: "/api/admin/providers/{provider_id}",
+        tool: "admin.update_provider",
+        params: NO_PARAMS,
+        body: "UpdateProviderBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "{provider_id}",
+        path: "/api/admin/providers/{provider_id}",
+        tool: "admin.delete_provider",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "POST",
+        sub: "models",
+        path: "/api/admin/models",
+        tool: "admin.create_model",
+        params: NO_PARAMS,
+        body: "CreateModelBody",
+    },
+    Op {
+        method: "GET",
+        sub: "models",
+        path: "/api/admin/models",
+        tool: "admin.list_models",
+        params: &[
+            Param {
+                name: "provider_id",
+                required: false,
+                ty: "string",
+                format: "",
+                default: Def::Absent,
+            },
+            Param { name: "kind", required: false, ty: "string", format: "", default: Def::Absent },
+            Param {
+                name: "marker",
+                required: false,
+                ty: "string",
+                format: "",
+                default: Def::Absent,
+            },
+        ],
+        body: "",
+    },
+    Op {
+        method: "PATCH",
+        sub: "{model_id}",
+        path: "/api/admin/models/{model_id}",
+        tool: "admin.update_model",
+        params: NO_PARAMS,
+        body: "UpdateModelBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "{model_id}",
+        path: "/api/admin/models/{model_id}",
+        tool: "admin.delete_model",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "GET",
+        sub: "defaults",
+        path: "/api/admin/defaults",
+        tool: "admin.get_default_models",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "PUT",
+        sub: "{kind}",
+        path: "/api/admin/defaults/{kind}",
+        tool: "admin.set_default_model",
+        params: NO_PARAMS,
+        body: "SetDefaultModelBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "{kind}",
+        path: "/api/admin/defaults/{kind}",
+        tool: "admin.clear_default_model",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "GET",
+        sub: "setting-changes",
+        path: "/api/admin/setting-changes",
+        tool: "admin.list_setting_changes",
+        params: MARKER,
+        body: "",
+    },
     Op {
         method: "GET",
         sub: "roots",
@@ -1308,6 +1409,11 @@ const fn plain(name: &'static str, ty: &'static str) -> Prop {
     Prop { name, ty, format: "", default: Def::Absent, items: "", nullable: false }
 }
 
+/// A field the caller may leave out or send as `null`.
+const fn nullable(name: &'static str, ty: &'static str) -> Prop {
+    Prop { name, ty, format: "", default: Def::Absent, items: "", nullable: true }
+}
+
 const fn flag(name: &'static str, default: bool) -> Prop {
     Prop {
         name,
@@ -1331,6 +1437,64 @@ const fn counter(name: &'static str, default: i64) -> Prop {
 }
 
 const SCHEMAS: &[Schema] = &[
+    Schema {
+        name: "CreateProviderBody",
+        tool: "admin.create_provider",
+        required: &["name", "endpoint"],
+        props: &[
+            plain("name", "string"),
+            plain("endpoint", "string"),
+            Prop {
+                name: "auth_scheme",
+                ty: "string",
+                format: "",
+                default: Def::Str("none"),
+                items: "",
+                nullable: false,
+            },
+            plain("secret", "string"),
+        ],
+    },
+    Schema {
+        name: "UpdateProviderBody",
+        tool: "admin.update_provider",
+        required: &[],
+        props: &[
+            nullable("name", "string"),
+            nullable("endpoint", "string"),
+            nullable("auth_scheme", "string"),
+            nullable("secret", "string"),
+            flag("clear_secret", false),
+        ],
+    },
+    Schema {
+        name: "CreateModelBody",
+        tool: "admin.create_model",
+        required: &["provider_id", "name", "kind"],
+        props: &[
+            plain("provider_id", "string"),
+            plain("name", "string"),
+            plain("kind", "string"),
+            nullable("dimension", "integer"),
+            nullable("max_input_tokens", "integer"),
+        ],
+    },
+    Schema {
+        name: "UpdateModelBody",
+        tool: "admin.update_model",
+        required: &[],
+        props: &[
+            nullable("name", "string"),
+            nullable("dimension", "integer"),
+            nullable("max_input_tokens", "integer"),
+        ],
+    },
+    Schema {
+        name: "SetDefaultModelBody",
+        tool: "admin.set_default_model",
+        required: &["model_id"],
+        props: &[plain("model_id", "string")],
+    },
     Schema {
         name: "MkdirBody",
         tool: "fs.mkdir",

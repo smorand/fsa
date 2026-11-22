@@ -3,16 +3,46 @@ admin.add_member
   params: project_id:string, person:string
   required: ['project_id', 'person']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.clear_default_model
+  desc: Remove the server default of a kind, text_embedding or reranker; a kind with no default is not an error (platform admin only).
+  params: kind:string
+  required: ['kind']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.create_model
+  desc: Register a model of a provider: a name, a kind (text_embedding, image_embedding, reranker, ocr or chat), for the embedding kinds a dimension, and optionally a limit of input tokens (platform admin only).
+  params: provider_id:string, name:string, kind:string, dimension:integer=null, max_input_tokens:integer=null
+  required: ['provider_id', 'name', 'kind']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 admin.create_project
   desc: Create a project for a designated owner and provision its volume (platform admin only).
   params: project_id:string, owner:string, autopurge_enabled:boolean=false, use_internal_purge:boolean=false, file_retention_days:integer=null, project_retention_days:integer=null
   required: ['project_id', 'owner']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.create_provider
+  desc: Register a model provider: a name, the base address of its service, an authentication scheme ('none' or 'bearer') and, for 'bearer', a secret that is stored encrypted and never returned (platform admin only).
+  params: name:string, endpoint:string, auth_scheme:string="none", secret:string=""
+  required: ['name', 'endpoint']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.delete_model
+  desc: Delete a model that is not a server default (platform admin only).
+  params: model_id:string
+  required: ['model_id']
+  annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 admin.delete_project
   desc: Delete a project and recursively tear down its volume (owner or platform admin).
   params: project_id:string
   required: ['project_id']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.delete_provider
+  desc: Delete a model provider that has no model, with its secret (platform admin only).
+  params: provider_id:string
+  required: ['provider_id']
+  annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.get_default_models
+  desc: Read the server default text embedding model and the server default reranker, null for a kind with none (platform admin only).
+  params: (none)
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.get_index_mode
   desc: Get the current search index mode for a project (member or platform admin).
   params: project_id:string
@@ -48,9 +78,24 @@ admin.list_members
   params: project_id:string
   required: ['project_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.list_models
+  desc: List the models ordered by provider name then model name without regard to case, 100 per answer, optionally of one provider or one kind (platform admin only).
+  params: provider_id:string="", kind:string="", marker:string=""
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.list_projects
   desc: List projects the caller can access.
   params: (none)
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.list_providers
+  desc: List the model providers ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only).
+  params: marker:string=""
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.list_setting_changes
+  desc: List the record of changes of the platform settings, newest first, 100 per answer: who changed what, when, and which fields (platform admin only).
+  params: marker:string=""
   required: []
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.list_users
@@ -63,6 +108,11 @@ admin.remove_member
   params: project_id:string, person:string
   required: ['project_id', 'person']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.set_default_model
+  desc: Make a model the server default of its kind, text_embedding or reranker, replacing the previous default; a text embedding model must have the dimension of the vector store (platform admin only).
+  params: kind:string, model_id:string
+  required: ['kind', 'model_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.set_index_mode
   desc: Set the search index mode for a project (owner or platform admin). none=no index, bm25=full-text only, rag=vector only, both=full-text and vector. Switching to an active mode triggers an initial full index of existing files in the background. Switching to none wipes the index immediately.
   params: project_id:string, mode:string
@@ -83,6 +133,16 @@ admin.undelete_project
   params: project_id:string
   required: ['project_id']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.update_model
+  desc: Change the name, the dimension or the input token limit of a model; a field not given keeps its value; max_input_tokens 0 removes the limit (platform admin only).
+  params: model_id:string, name:string=null, dimension:integer=null, max_input_tokens:integer=null
+  required: ['model_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.update_provider
+  desc: Change the fields given of a model provider; a field not given keeps its value; clear_secret removes the secret (platform admin only).
+  params: provider_id:string, name:string=null, endpoint:string=null, auth_scheme:string=null, secret:string=null, clear_secret:boolean=false
+  required: ['provider_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 fs.append
   desc: Append content to a file (optionally create it).
   params: mount_id:string, path:string, content:string, create:boolean=false
@@ -775,3 +835,15 @@ admin.get_index_mode: {"project_id": "parity-probe", "index_mode": "bm25"}
 admin.get_project_quota: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234}
 admin.get_project_disk_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "file_count": 1, "truncated": false, "entries": [{"path": "/a.txt", "size": 1234, "state": "Active", "original_path": null}]}
 admin.get_project_folder_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "folder": {"path": "/", "size": 1234, "file_count": 1}, "item_count": 1, "truncated": false, "items": [{"path": "/a.txt", "kind": "File", "size": 1234}]}
+admin.create_provider: {"provider_id": "prov-0123456789ab", "name": "Cloud Embeddings", "endpoint": "https://api.example.com/v1", "auth_scheme": "bearer", "has_secret": true, "created_at": "2026-11-21T10:00:00Z", "updated_at": "2026-11-21T10:00:00Z"} (the secret is never returned)
+admin.update_provider: the provider, as admin.create_provider (an update that changes nothing returns it unchanged, updated_at included)
+admin.delete_provider: {"deleted": true}
+admin.create_model: {"model_id": "mdl-0123456789ab", "provider_id": "prov-0123456789ab", "name": "qwen3-embedding-0.6b", "kind": "text_embedding", "dimension": 1024, "max_input_tokens": 8192, "is_default": false, "created_at": "2026-11-21T10:00:00Z", "updated_at": "2026-11-21T10:00:00Z"} (dimension and max_input_tokens are null when absent)
+admin.update_model: the model, as admin.create_model (an update that changes nothing returns it unchanged, updated_at included)
+admin.delete_model: {"deleted": true}
+admin.set_default_model: the model, as admin.create_model, with "is_default": true (the model already default is returned unchanged)
+admin.clear_default_model: {"cleared": true} (also when the kind had no default)
+admin.get_default_models: {"text_embedding": <model>|null, "reranker": <model>|null}
+admin.list_models: {"models": [<model>, ...], "marker": "<opaque, absent when none remain>"}
+admin.list_providers: {"providers": [<provider>, ...], "marker": "<opaque, absent when none remain>"}
+admin.list_setting_changes: {"changes": [{"change_id": "chg-000000000002", "at": "2026-11-21T10:05:00Z", "person": "admin@example.com", "action": "update_provider", "target_kind": "provider", "target_id": "prov-0123456789ab", "target_name": "Cloud Embeddings", "fields": ["secret"]}], "marker": "<opaque, absent when none remain>"}
