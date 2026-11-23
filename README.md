@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-135 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+136 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -263,16 +263,18 @@ The doc service surfaces, two tools and two routes:
 | `POST /api/fs/{mount_id}/documentize` | the JSON mirror of `fs.documentize` |
 
 **Document artifacts.** Each conversion keeps the document's images and tables beside its
-Markdown sibling, readable by five read only tools and their REST twins, one implementation,
+Markdown sibling, readable by six read only tools and their REST twins, one implementation,
 byte identical payloads:
 
 | Tool | Route | Returns |
 |---|---|---|
-| `fs.list_images` | `GET /api/fs/{mount_id}/images?path=&marker=` | `images[{id,caption,page}]`, `marker` |
-| `fs.get_image` | `GET .../image?path=&id=` | `id`, `format`, `caption`, `page`, `base64` |
+| `fs.list_images` | `GET /api/fs/{mount_id}/images?path=&marker=` | `images[{id,caption,page,ocr_text}]`, `marker` (`ocr_text` null when the converter gave none) |
+| `fs.get_image` | `GET .../image?path=&id=` | `id`, `format`, `caption`, `page`, `ocr_text`, `base64` |
+| (REST only) | `GET .../image-file?path=&id=` | the picture file as a download |
+| `fs.get_document_structure` | `GET .../structure?path=&marker=` | `headings[{level,title,page}]`, `marker` (empty list for a document converted before or by the built in reading) |
 | `fs.list_tables` | `GET .../tables?path=&marker=` | `tables[{id,caption,rows,columns,csv_quality}]`, `marker` |
 | `fs.get_table` | `GET .../table?path=&id=&format=` | `id`, `format` (`markdown` or `csv`), `content` |
-| `fs.get_document_view` | `GET .../document-view?path=&captions=&table_mode=` | `path`, `text` with image lines and tables (`markdown`, `csv-reference`, `both`) |
+| `fs.get_document_view` | `GET .../document-view?path=&captions=&table_mode=&view=` | `path`, `text` with image lines and tables (`markdown`, `csv-reference`, `both`); `view` is `standard` (default), `text` (converter text as is) or `full` (adds `[OCR image-n: text]` lines and `structure`) |
 
 Lists page by 100; the continuation marker is valid for its project, list and document,
 for any member. A document changed since its conversion has no artifacts until it is
@@ -650,7 +652,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 135 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 136 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash
@@ -686,7 +688,7 @@ cargo build -p agent -p fsa && python3 scripts/pty_check.py
 
 ## The tool contract is frozen
 
-The 139 tool names, descriptions and `inputSchema` values are a client and an LLM facing
+The 140 tool names, descriptions and `inputSchema` values are a client and an LLM facing
 contract, so they are snapshotted in `tool-contract-golden.json` and compared on every test
 run, serialized form included, which means even a reordered schema key fails the build.
 `TOOL_CONTRACT.txt` is the human readable companion.

@@ -13,7 +13,7 @@ use base64::Engine as _;
 use serde_json::{Value, json};
 use std::path::Path;
 
-const DOC: &str = "/report.pdf";
+pub(crate) const DOC: &str = "/report.pdf";
 
 /// Room for the 5 000 000 character CSV cases (SPEC-0103 FR-NEW-009).
 const CAP: u64 = 16 * 1_048_576;
@@ -60,10 +60,10 @@ struct Seen {
 }
 
 /// A converter answer: the Markdown, its files and the manifest as text.
-struct Answer {
-    markdown: &'static str,
-    files: Vec<(&'static str, &'static str)>,
-    manifest: Option<&'static str>,
+pub(crate) struct Answer {
+    pub(crate) markdown: &'static str,
+    pub(crate) files: Vec<(&'static str, &'static str)>,
+    pub(crate) manifest: Option<&'static str>,
 }
 
 const PIC: &str = "![](a.png)\n";
@@ -73,7 +73,7 @@ fn answer(manifest: &'static str) -> Answer {
 }
 
 /// A script writing `answer` into `{outdir}` ($1), manifest text verbatim.
-fn program(home: &Path, a: &Answer) -> CliDocService {
+pub(crate) fn program(home: &Path, a: &Answer) -> CliDocService {
     program_cap(home, a, CAP)
 }
 
@@ -113,7 +113,7 @@ fn program_cap(home: &Path, a: &Answer, cap: u64) -> CliDocService {
 
 /// An HTTP stub answering `answer` as a JSON bundle; `None` when its manifest
 /// text is not JSON, which a JSON bundle cannot carry.
-async fn http(a: &Answer) -> Option<ApiDocService> {
+pub(crate) async fn http(a: &Answer) -> Option<ApiDocService> {
     http_cap(a, CAP).await
 }
 
@@ -160,7 +160,7 @@ async fn serve(body: String, cap: u64) -> ApiDocService {
     ApiDocService::new(&cfg, extensions(), cap).unwrap()
 }
 
-async fn fixture() -> Fixture {
+pub(crate) async fn fixture() -> Fixture {
     let f = office_fixture_allowance(1_000_000_000).await;
     seed(&f, DOC, b"%PDF-1.4").await;
     f
@@ -433,31 +433,31 @@ async fn e2e_0103_023_wrong_typed_picture_fields_are_dropped_with_a_line() {
 
 // SPEC-0103 US-0291: the structure and the metadata line.
 
-fn leak(s: String) -> &'static str {
+pub(crate) fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
 /// A bundle with no picture file.
-fn doc(markdown: &'static str, manifest: Option<&'static str>) -> Answer {
+pub(crate) fn doc(markdown: &'static str, manifest: Option<&'static str>) -> Answer {
     Answer { markdown, files: vec![], manifest }
 }
 
-fn entry(level: impl std::fmt::Display, title: &str) -> String {
+pub(crate) fn entry(level: impl std::fmt::Display, title: &str) -> String {
     format!(r#"{{"level":{level},"title":"{title}"}}"#)
 }
 
 /// A manifest of `version` listing `entries` (raw JSON texts) as headings.
-fn listing(version: u32, entries: &[String]) -> &'static str {
+pub(crate) fn listing(version: u32, entries: &[String]) -> &'static str {
     leak(format!(r#"{{"version":{version},"headings":[{}]}}"#, entries.join(",")))
 }
 
-fn numbered(n: usize) -> Vec<String> {
+pub(crate) fn numbered(n: usize) -> Vec<String> {
     (1..=n).map(|i| entry(1, &format!("H{i}"))).collect()
 }
 
 const NONE: &str = "0 images, 0 tables";
 /// Text with no heading, since a converter answer with no text is refused.
-const BODY: &str = "Body\n";
+pub(crate) const BODY: &str = "Body\n";
 
 fn titles(s: &Seen) -> Vec<&str> {
     s.headings.iter().map(|h| h.1.as_str()).collect()
@@ -715,14 +715,14 @@ async fn e2e_0103_mod001_converting_with_a_manifest() {
 
 /// `n` pictures `p1.png` to `pn.png` under a version 2 manifest whose
 /// `pictures` object holds `entries` (a raw JSON object body).
-fn pics(n: usize, entries: &str) -> Answer {
+pub(crate) fn pics(n: usize, entries: &str) -> Answer {
     let markdown = leak((1..=n).map(|i| format!("![](p{i}.png)\n")).collect());
     let files = (1..=n).map(|i| (leak(format!("p{i}.png")), "PNG")).collect();
     let manifest = leak(format!(r#"{{"version":2,"pictures":{{{entries}}}}}"#));
     Answer { markdown, files, manifest: Some(manifest) }
 }
 
-fn ocr_of(n: usize, text: &str) -> String {
+pub(crate) fn ocr_of(n: usize, text: &str) -> String {
     format!(r#""p{n}.png":{{"ocr_text":"{text}"}}"#)
 }
 
@@ -873,7 +873,7 @@ async fn e2e_0103_087_ocr_text_is_not_searched_or_chunked_as_a_document_line() {
     let home = tempfile::tempdir().unwrap();
     let s = convert(&f, &program(home.path(), &a)).await;
     assert_eq!(s.ocr, vec![some("UniqueOcrWord")]);
-    let view = crate::tools::artifacts::document_view(&f.state, MOUNT, DOC, true, None)
+    let view = crate::tools::artifacts::document_view(&f.state, MOUNT, DOC, true, None, None)
         .await
         .unwrap()
         .to_string();
@@ -1720,7 +1720,7 @@ fn no_artifacts(r: crate::errors::Result<Value>) {
 }
 
 /// `/notes.docx` with one 2x2 table, a real package for the built in reader.
-fn docx_bytes() -> Vec<u8> {
+pub(crate) fn docx_bytes() -> Vec<u8> {
     let cell = |t: &str| format!("<w:tc><w:p><w:r><w:t>{t}</w:t></w:r></w:p></w:tc>");
     let doc = format!(
         "<w:document xmlns:w=\"x\"><w:body><w:tbl><w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl></w:body></w:document>",
@@ -1785,7 +1785,7 @@ async fn e2e_0103_068_an_extraction_option_does_not_change_a_converted_document(
 }
 
 /// A set the previous version wrote: null OCR, CSV and page, no structure.
-async fn old_set(f: &Fixture, doc: &str, caption: &str) {
+pub(crate) async fn old_set(f: &Fixture, doc: &str, caption: &str) {
     use crate::storage::meta::{NewArtifactSet, NewDocImage, NewDocTable};
     let c = f.state.stores.client(MOUNT).await.unwrap();
     let store = c.trash.as_deref().unwrap();

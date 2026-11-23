@@ -1359,6 +1359,17 @@ pub struct ListImagesArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetDocumentStructureArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the source document.
+    pub path: String,
+    /// Continuation marker returned by the previous page; omit for the first page.
+    #[serde(default)]
+    pub marker: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetTableArgs {
     /// Project/volume id the operation targets.
     pub mount_id: String,
@@ -1394,6 +1405,9 @@ pub struct DocumentViewArgs {
     /// markdown (default), csv-reference or both.
     #[serde(default)]
     pub table_mode: Option<String>,
+    /// standard (default), text (the converter text as is) or full (adds the OCR text lines and the structure).
+    #[serde(default)]
+    pub view: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2792,6 +2806,30 @@ impl McpServer {
     }
 
     #[tool(
+        name = "fs.get_document_structure",
+        description = "Read the headings of a document's last conversion, in document order, 100 per page."
+    )]
+    #[tracing::instrument(skip(self, a), fields(mcp.tool = "fs.get_document_structure"))]
+    pub(crate) async fn fs_get_document_structure(
+        &self,
+        Parameters(a): Parameters<GetDocumentStructureArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = async {
+            self.authorize_only(&a.mount_id).await?;
+            let path = self.norm(&a.path)?;
+            crate::tools::artifacts::document_structure(
+                &self.state,
+                &a.mount_id,
+                &path,
+                a.marker.as_deref(),
+            )
+            .await
+        }
+        .await;
+        to_call_result("fs.get_document_structure", out)
+    }
+
+    #[tool(
         name = "fs.get_image",
         description = "Get one image kept from a document's last conversion: its picture as base64, its format and its caption."
     )]
@@ -2876,6 +2914,7 @@ impl McpServer {
                 &path,
                 a.captions,
                 a.table_mode.as_deref(),
+                a.view.as_deref(),
             )
             .await
         }
@@ -4515,8 +4554,8 @@ mod tests {
         // then fs.list_images and fs.get_image, 43, then fs.get_document_view, 44;
         // SPEC-0045 adds fs.diff_files, 45; SPEC-0100 adds fs.list_derived_jobs, 46,
         // and fs.recalculate, 47; SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and
-        // fs.get_chunk, 50; fs.create_chunk_set and fs.delete_chunk_set, 52.
-        assert_eq!(names.len(), 52, "got: {names:?}");
+        // fs.get_chunk, 50; fs.create_chunk_set and fs.delete_chunk_set, 52; SPEC-0104 adds fs.get_document_structure, 53.
+        assert_eq!(names.len(), 53, "got: {names:?}");
     }
 
     #[test]
@@ -4544,12 +4583,12 @@ mod tests {
         // total 122. SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and fs.get_chunk:
         // fs 50, total 125; fs.create_chunk_set and fs.delete_chunk_set: fs 52, total 127.
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
-        // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139.
-        assert_eq!(fs_count, 52, "got: {names:?}");
+        // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
+        assert_eq!(fs_count, 53, "got: {names:?}");
         assert_eq!(admin_count, 29, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 139, "got: {names:?}");
+        assert_eq!(names.len(), 140, "got: {names:?}");
     }
 
     #[test]
@@ -4886,7 +4925,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 135, "the frozen contract covers 135 non-search tools");
+        assert_eq!(checked, 136, "the frozen contract covers 136 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -4907,8 +4946,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 135, "got: {names:?}");
-        assert_eq!(expected.len(), 135, "the golden contract itself must hold 135 names");
+        assert_eq!(names.len(), 136, "got: {names:?}");
+        assert_eq!(expected.len(), 136, "the golden contract itself must hold 136 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

@@ -109,6 +109,8 @@ mod project_removal_e2e;
 mod quota_e2e;
 #[cfg(test)]
 pub(crate) mod read;
+#[cfg(test)]
+mod read_metadata_e2e;
 pub mod registry_support;
 #[cfg(test)]
 pub(crate) mod search;
@@ -473,6 +475,7 @@ mod tests {
         "fs.export_zip",
         "fs.extract_archive",
         "fs.list_images",
+        "fs.get_document_structure",
         "fs.get_image",
         "fs.list_tables",
         "fs.get_table",
@@ -494,8 +497,8 @@ mod tests {
         // SPEC-0045 fs.diff_files, 46 with SPEC-0100 fs.list_derived_jobs, 47 with
         // SPEC-0100 fs.recalculate, 50 with SPEC-0101 fs.list_chunk_sets,
         // fs.list_chunks and fs.get_chunk, 52 with fs.create_chunk_set and
-        // fs.delete_chunk_set.
-        assert_eq!(reg.len(), 52);
+        // fs.delete_chunk_set, 53 with SPEC-0104 fs.get_document_structure.
+        assert_eq!(reg.len(), 53);
         assert_eq!(reg.names(), FS_TOOLS);
     }
 
@@ -574,8 +577,8 @@ mod tests {
             // fs.get_image and fs.get_document_view; 45 with SPEC-0045 fs.diff_files;
             // 46 with SPEC-0100 fs.list_derived_jobs; 47 with fs.recalculate;
             // 50 with SPEC-0101 fs.list_chunk_sets, fs.list_chunks, fs.get_chunk;
-            // 52 with fs.create_chunk_set and fs.delete_chunk_set.
-            52,
+            // 52 with fs.create_chunk_set and fs.delete_chunk_set; 53 with SPEC-0104 fs.get_document_structure.
+            53,
             "fs.* tools",
         );
     }

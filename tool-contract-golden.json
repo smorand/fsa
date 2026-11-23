@@ -1442,6 +1442,37 @@
       }
     },
     {
+      "name": "fs.get_document_structure",
+      "description": "Read the headings of a document's last conversion, in document order, 100 per page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the source document.",
+            "type": "string"
+          },
+          "marker": {
+            "description": "Continuation marker returned by the previous page; omit for the first page.",
+            "type": "string",
+            "default": null
+          }
+        },
+        "required": [
+          "mount_id",
+          "path"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "fs.get_document_view",
       "description": "Get a converted document's whole text with an image line at each image and each table in the chosen table mode.",
       "inputSchema": {
@@ -1462,6 +1493,11 @@
           },
           "table_mode": {
             "description": "markdown (default), csv-reference or both.",
+            "type": "string",
+            "default": null
+          },
+          "view": {
+            "description": "standard (default), text (the converter text as is) or full (adds the OCR text lines and the structure).",
             "type": "string",
             "default": null
           }

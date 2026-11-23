@@ -353,7 +353,7 @@ What replaced it, and why nothing was lost that mattered:
 
 | Was covered by the harness | Now covered by |
 |---|---|
-| the 139 tool schemas and descriptions | `tool-contract-golden.json` plus the three contract tests |
+| the 140 tool schemas and descriptions | `tool-contract-golden.json` plus the three contract tests |
 | the MCP wire framing and JSON-RPC behaviour | `app.rs` router tests driven with `oneshot` |
 | the REST plane, every route | `api/dataplane.rs` and `api/openapi.rs` tests |
 | every error path and `ERR_*` code | per module tests next to each error |
@@ -455,3 +455,4 @@ refuses it anyway. `test_remote::Remote::start(repo_dir, Behavior)` serves a bar
   (so its form tokens persist across calls), `Via::Cookie` needs a token read from the page (`Fx::open`, `Fx::submit`),
   `Via::Header` needs none; every page is kept for the secret search `assert_nowhere`. Guard: `cargo test -p fsa --all-features --test old_name_gone`.
 - (2026-11-24, SPEC-0103) `cargo test -p fsa-core --lib -- e2e_0103_` runs the converter manifest tests of `docs/manifest_e2e.rs`: program form (shell script writing a bundle into `{outdir}`) and HTTP form (axum stub), through `core::fs_ops::documentize`. US-0295 adds the lifecycle ones: `old_set` writes a set the way the previous version did (null OCR, CSV, page, no headings), `Counting` wraps a converter to count its calls (E2E-083), `Failing` and a one second CLI timeout prove a failed conversion keeps the set. The restart is modelled by reading again through a fresh store client (the fixture admin store is in memory).
+- (2026-11-25, SPEC-0104) `cargo test -p fsa-core --lib -- e2e_0104_` runs `tools/read_metadata_e2e.rs`: 51 tests on the real `McpServer` methods and the real data plane router, over SPEC-0103 stand in converters (`docs::manifest_e2e`, its `old_set` and `docx_bytes` are `pub(crate)`). US-0301 adds the access ones: a non member and an unknown project refused on every read, an older set and a built in docx read without error or new conversion, a reconversion replacing what is read, and a footprint check (file list, atime, used storage, stored conversion) around reads.

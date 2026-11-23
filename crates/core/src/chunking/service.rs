@@ -188,7 +188,7 @@ pub async fn source_text(
         return Err(ToolError::not_supported(format!("no text to cut for {path}")));
     }
     let view =
-        crate::tools::artifacts::document_view(state, mount_id, path, true, Some("markdown"))
+        crate::tools::artifacts::document_view(state, mount_id, path, true, Some("markdown"), None)
             .await?;
     Ok(view["text"].as_str().unwrap_or_default().to_string())
 }

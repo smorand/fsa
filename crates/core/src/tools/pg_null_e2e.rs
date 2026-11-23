@@ -234,7 +234,7 @@ async fn spec_0022_bt_012_a_conversion_keeps_its_artifacts() {
     convert(&server, "/memo.docx").await;
     assert_eq!(
         images(&server, "/memo.docx").await,
-        json!({"images": [{"id": "image-1", "caption": "Org chart", "page": null}], "marker": null})
+        json!({"images": [{"id": "image-1", "caption": "Org chart", "page": null, "ocr_text": null}], "marker": null})
     );
     f.cleanup().await;
 }
@@ -270,7 +270,7 @@ async fn spec_0022_bt_013_reconverting_supersedes_the_previous_set() {
     convert(&server, "/memo.docx").await;
     assert_eq!(
         images(&server, "/memo.docx").await,
-        json!({"images": [{"id": "image-1", "caption": "Team photo", "page": null}], "marker": null})
+        json!({"images": [{"id": "image-1", "caption": "Team photo", "page": null, "ocr_text": null}], "marker": null})
     );
     f.cleanup().await;
 }

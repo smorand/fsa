@@ -72,9 +72,11 @@ pub const REST_ROUTES: &[(&str, &str)] = &[
     // SPEC-0019 DEC-001: document artifacts, the same functions as the tools.
     ("GET", "images"),
     ("GET", "image"),
+    ("GET", "image-file"),
     ("GET", "tables"),
     ("GET", "table"),
     ("GET", "document-view"),
+    ("GET", "structure"),
     // tool parity, write and compute side
     ("POST", "read-many"),
     ("POST", "write"),
@@ -169,9 +171,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/fs/{mount_id}/audit-log", get(audit_log))
         .route("/api/fs/{mount_id}/images", get(list_images))
         .route("/api/fs/{mount_id}/image", get(get_image))
+        .route("/api/fs/{mount_id}/image-file", get(get_image_file))
         .route("/api/fs/{mount_id}/tables", get(list_tables))
         .route("/api/fs/{mount_id}/table", get(get_table))
         .route("/api/fs/{mount_id}/document-view", get(document_view))
+        .route("/api/fs/{mount_id}/structure", get(document_structure))
         // tool parity, write and compute side
         .route("/api/fs/{mount_id}/read-many", post(read_many))
         .route("/api/fs/{mount_id}/write", post(write))
@@ -836,6 +840,38 @@ async fn get_image(
     .await
 }
 
+/// The picture file of one kept image, as an attachment (FR-NEW-001). Same
+/// function as the other image reads for the refusals, so a refusal is the
+/// JSON error and never a picture. `nosniff` stops a browser from guessing a
+/// type other than the one declared for converter supplied bytes.
+async fn get_image_file(
+    State(state): State<Arc<AppState>>,
+    Path(mount): Path<String>,
+    headers: HeaderMap,
+    Query(q): Query<Vec<(String, String)>>,
+) -> Response {
+    let q = Q(q);
+    guarded(state, headers, mount, |r| async move {
+        let norm = r.norm(q.req_str("path")?)?;
+        let id = q.req_str("id")?;
+        let (format, bytes) =
+            crate::tools::artifacts::image_file(&r.state, &r.mount, &norm, id).await?;
+        let ext = if format == "jpeg" { "jpg" } else { format.as_str() };
+        Ok((
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, format!("image/{format}")),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{id}.{ext}\"")),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                (header::CONTENT_LENGTH, bytes.len().to_string()),
+            ],
+            bytes,
+        )
+            .into_response())
+    })
+    .await
+}
+
 /// The tables kept from a document's last conversion. Same function as
 /// `fs.list_tables`, so the refusal order and categories cannot drift apart.
 async fn list_tables(
@@ -886,8 +922,26 @@ async fn document_view(
             &norm,
             captions,
             q.opt("table_mode"),
+            q.opt("view"),
         )
         .await
+    })
+    .await
+}
+
+/// A converted document's headings in reading order, one page at a time.
+/// Same function as `fs.get_document_structure`.
+async fn document_structure(
+    State(state): State<Arc<AppState>>,
+    Path(mount): Path<String>,
+    headers: HeaderMap,
+    Query(q): Query<Vec<(String, String)>>,
+) -> Response {
+    let q = Q(q);
+    guarded_json(state, headers, mount, |r| async move {
+        let norm = r.norm(q.req_str("path")?)?;
+        crate::tools::artifacts::document_structure(&r.state, &r.mount, &norm, q.opt("marker"))
+            .await
     })
     .await
 }
@@ -2788,14 +2842,16 @@ mod tests {
         // added images and image, 45 since US-0008 added document-view, 46 since
         // SPEC-0020 US-0015 added the admin quota read, 47 since SPEC-0045
         // US-0059 added diff, 48 since SPEC-0047 added disk-usage, 49 since SPEC-0049 added folder-usage.
-        assert_eq!(REST_ROUTES.len(), 61);
+        assert_eq!(REST_ROUTES.len(), 63);
         assert!(REST_ROUTES.contains(&("GET", "folder-usage")));
         assert!(REST_ROUTES.contains(&("GET", "disk-usage")));
         assert!(REST_ROUTES.contains(&("GET", "diff")));
         assert!(REST_ROUTES.contains(&("GET", "quota")));
         assert!(REST_ROUTES.contains(&("GET", "document-view")));
+        assert!(REST_ROUTES.contains(&("GET", "structure")));
         assert!(REST_ROUTES.contains(&("GET", "images")));
         assert!(REST_ROUTES.contains(&("GET", "image")));
+        assert!(REST_ROUTES.contains(&("GET", "image-file")));
         assert!(REST_ROUTES.contains(&("GET", "tables")));
         assert!(REST_ROUTES.contains(&("GET", "table")));
         assert!(REST_ROUTES.contains(&("POST", "export-zip")));
@@ -3370,7 +3426,7 @@ mod tests {
         assert_eq!(s, StatusCode::OK, "{v}");
         assert_eq!(
             v,
-            json!({"images": [{"id": "image-1", "caption": "Logo", "page": 2}], "marker": null})
+            json!({"images": [{"id": "image-1", "caption": "Logo", "page": 2, "ocr_text": null}], "marker": null})
         );
     }
 

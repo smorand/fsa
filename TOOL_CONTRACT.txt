@@ -235,7 +235,7 @@ fs.get_chunk
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.get_document_view
   desc: Get a converted document's whole text with an image line at each image and each table in the chosen table mode.
-  params: mount_id:string, path:string, captions:boolean=true, table_mode:string=null
+  params: mount_id:string, path:string, captions:boolean=true, table_mode:string=null, view:string=null
   required: ['mount_id', 'path']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.get_image
@@ -305,6 +305,11 @@ fs.list_dir
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.list_images
   desc: List the images kept from a document's last conversion, in reading order, 100 per page.
+  params: mount_id:string, path:string, marker:string=null
+  required: ['mount_id', 'path']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.get_document_structure
+  desc: Read the headings of a document's last conversion, in document order, 100 per page.
   params: mount_id:string, path:string, marker:string=null
   required: ['mount_id', 'path']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
@@ -791,8 +796,9 @@ fs.diff_files: {"identical": false, "diff": "--- alpha:/a.txt\n+++ alpha:/b.txt\
 fs.exists: {"exists": true, "kind": "file"}
 fs.export_zip: {"url": "/exports/0b7e2f4c-1a3d-4e5f-8a9b-0c1d2e3f4a5b"}
 fs.extract_archive: {"destination": "/uploads/report", "files_written": 2, "dirs_created": 1, "bytes_written": 10}
-fs.list_images: {"images": [{"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1}, {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3}], "marker": null}
-fs.get_image: {"id": "image-2", "format": "png", "caption": "Schéma réseau 🌐", "page": 3, "base64": "iVBORw0KGgo..."}
+fs.list_images: {"images": [{"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1, "ocr_text": "Revenue 2024: 4.2 M EUR"}, {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3, "ocr_text": null}], "marker": null}
+fs.get_document_structure: {"headings": [{"level": 1, "title": "Report", "page": 1}, {"level": 2, "title": "Costs", "page": 2}], "marker": null}
+fs.get_image: {"id": "image-2", "format": "png", "caption": "Schéma réseau 🌐", "page": 3, "ocr_text": null, "base64": "iVBORw0KGgo..."}
 fs.list_tables: {"tables": [{"id": "table-1", "caption": "Q1", "rows": 2, "columns": 2, "csv_quality": "CSV quality: exact"}], "marker": null}
 fs.get_table: {"id": "table-2", "format": "csv", "content": "Item,EUR\nRent,900\nPower,120"}
 fs.get_document_view: {"path": "/report.pdf", "text": "# Report\n\nTable 2: Costs\n\n[Table table-2: Costs (CSV)]\n"}

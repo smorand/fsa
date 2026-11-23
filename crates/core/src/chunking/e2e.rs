@@ -940,10 +940,16 @@ async fn e2e_0101_us0276_a_converted_document_is_cut_from_its_view() {
     let server = crate::mcp::server::McpServer::new(std::sync::Arc::new(converting), ALICE.into());
     let a = args(json!({"mount_id": PROJ, "path": "/report.pdf", "overwrite": false}));
     tool_json(server.fs_documentize(a).await).unwrap();
-    let view =
-        crate::tools::artifacts::document_view(s, PROJ, "/report.pdf", true, Some("markdown"))
-            .await
-            .unwrap();
+    let view = crate::tools::artifacts::document_view(
+        s,
+        PROJ,
+        "/report.pdf",
+        true,
+        Some("markdown"),
+        None,
+    )
+    .await
+    .unwrap();
     let want = view["text"].as_str().unwrap().to_string();
     assert!(want.contains("yearly figures"), "{want}");
 
@@ -1099,10 +1105,16 @@ async fn e2e_0101_050_a_converted_document_is_chunked_from_its_metadata_text() {
     let server = crate::mcp::server::McpServer::new(std::sync::Arc::new(converting), ALICE.into());
     let a = args(json!({"mount_id": PROJ, "path": "/report.pdf", "overwrite": false}));
     tool_json(server.fs_documentize(a).await).unwrap();
-    let view =
-        crate::tools::artifacts::document_view(s, PROJ, "/report.pdf", true, Some("markdown"))
-            .await
-            .unwrap();
+    let view = crate::tools::artifacts::document_view(
+        s,
+        PROJ,
+        "/report.pdf",
+        true,
+        Some("markdown"),
+        None,
+    )
+    .await
+    .unwrap();
     let view = tokens::clean(view["text"].as_str().unwrap());
 
     let set = create(&env, ALICE, "/report.pdf", "structural", json!({})).await.unwrap();

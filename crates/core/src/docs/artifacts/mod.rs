@@ -52,6 +52,7 @@ impl CsvQuality {
 pub(crate) enum ListKind {
     Images,
     Tables,
+    Structure,
 }
 
 impl ListKind {
@@ -59,6 +60,7 @@ impl ListKind {
         match self {
             Self::Images => "images",
             Self::Tables => "tables",
+            Self::Structure => "structure",
         }
     }
 }

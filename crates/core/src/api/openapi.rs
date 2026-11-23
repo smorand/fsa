@@ -1209,6 +1209,17 @@ const OPERATIONS: &[Op] = &[
     },
     Op {
         method: "GET",
+        sub: "image-file",
+        path: "/api/fs/{mount_id}/image-file",
+        tool: "",
+        params: &[
+            Param { name: "path", required: true, ty: "string", format: "", default: Def::Absent },
+            Param { name: "id", required: true, ty: "string", format: "", default: Def::Absent },
+        ],
+        body: "",
+    },
+    Op {
+        method: "GET",
         sub: "tables",
         path: "/api/fs/{mount_id}/tables",
         tool: "fs.list_tables",
@@ -1262,6 +1273,31 @@ const OPERATIONS: &[Op] = &[
                 ty: "string",
                 format: "",
                 default: Def::Str("markdown"),
+            },
+            Param {
+                name: "view",
+                required: false,
+                ty: "string",
+                format: "",
+                default: Def::Str("standard"),
+            },
+        ],
+        body: "",
+    },
+    // SPEC-0104 DEC-008: the structure route, on the same function as the tool.
+    Op {
+        method: "GET",
+        sub: "structure",
+        path: "/api/fs/{mount_id}/structure",
+        tool: "fs.get_document_structure",
+        params: &[
+            Param { name: "path", required: true, ty: "string", format: "", default: Def::Absent },
+            Param {
+                name: "marker",
+                required: false,
+                ty: "string",
+                format: "",
+                default: Def::Absent,
             },
         ],
         body: "",

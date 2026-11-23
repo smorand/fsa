@@ -295,3 +295,9 @@
 | US-0293 | SPEC-0103 | tables with an exact CSV, a caption and a page | US-0291, US-0292 | 1 | landed | | |
 | US-0294 | SPEC-0103 | the converter output limit, the quota and the two forms | US-0293 | 2 | landed | | |
 | US-0295 | SPEC-0103 | replacing, upgrading, other paths and the docs | US-0294 | 2 | landed | | |
+| US-0296 | SPEC-0104 | OCR text in the image list and the image | main | 2 | landed | | |
+| US-0297 | SPEC-0104 | download a picture file | US-0296 | 2 | landed | | |
+| US-0298 | SPEC-0104 | read the structure of a document | US-0296 | 1 | landed | | |
+| US-0299 | SPEC-0104 | the text only view and the full view | US-0298 | 1 | landed | | |
+| US-0300 | SPEC-0104 | the structure and the view through the web interface | US-0299, US-0297 | 2 | landed | | |
+| US-0301 | SPEC-0104 | access, older documents, re-conversion and the docs | US-0300 | 2 | landed | | |

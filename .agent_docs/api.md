@@ -104,9 +104,11 @@ segment; `path` is required unless stated.
 | `audit-log` | `since` (number), `limit=20` | `fs.audit_log` |
 | `images` | `path`, `marker` | `fs.list_images` |
 | `image` | `path`, `id` (required) | `fs.get_image` |
+| `image-file` | `path`, `id` (required); the picture bytes as a download, media type from its format, `attachment; filename="<id>.<ext>"`, REST only (SPEC-0104) | none |
 | `tables` | `path`, `marker` | `fs.list_tables` |
 | `table` | `path`, `id` (required), `format=markdown` | `fs.get_table` |
-| `document-view` | `path`, `captions=true`, `table_mode=markdown` | `fs.get_document_view` |
+| `document-view` | `path`, `captions=true`, `table_mode=markdown`, `view=standard` (`text`, `full`) | `fs.get_document_view` |
+| `structure` | `path`, `marker` (`headings[{level,title,page}]`, empty for an older or built in conversion) | `fs.get_document_structure` |
 
 `GET /api/fs/diff` (2026-10-20, SPEC-0045) spans two projects, so it sits outside
 `/api/fs/{mount_id}/**`: Bearer only, and `fs.diff_files` authorizes each side. The
@@ -118,7 +120,7 @@ missing one in the order `mount_id_a`, `path_a`, `mount_id_b`, `path_b`.
 400 `ERR_INVALID_ARGUMENT: 'context_lines' must be a whole number from 0 to 10000000`, checked after the
 missing value check and before anything else.
 
-The five artifact routes (2026-10-10, SPEC-0019 DEC-001) call `tools::artifacts`, the
+The artifact routes, five from SPEC-0019 and `structure` and `image-file` from SPEC-0104 (2026-10-10, SPEC-0019 DEC-001) call `tools::artifacts`, the
 functions the tools call, so the body is byte for byte the tool's text (pinned by
 E2E-033/049/067 in `tools/artifacts.rs`). A refusal maps through the usual table:
 `ERR_NOT_FOUND` 404, `ERR_INVALID_ARGUMENT` 400, a non member 403.

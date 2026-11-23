@@ -13,7 +13,7 @@ use crate::docs::artifacts::{
 use crate::errors::{Result, ToolError};
 use crate::state::AppState;
 use crate::storage::VolumeClient;
-use crate::storage::meta::RelationalMetaStore;
+use crate::storage::meta::{DocImage, RelationalMetaStore};
 #[cfg(test)]
 use crate::tools::authorize_only;
 #[cfg(test)]
@@ -45,6 +45,26 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
             let mount = authorize_only(&ctx, &a).await?;
             let path = crate::tools::norm(&ctx, &a, "path")?;
             list_images(&ctx.state, &mount, &path, a.opt_str("marker").as_deref()).await
+        }),
+    );
+    reg.add(
+        ToolSchema::new(
+            "fs.get_document_structure",
+            "Read the headings of a document's last conversion, in document order, 100 per page.",
+        )
+        .req_str("mount_id", "Project/volume id the operation targets.")
+        .req_str("path", "Absolute POSIX path of the source document.")
+        .opt_str_null(
+            "marker",
+            "Continuation marker returned by the previous page; omit for the first page.",
+        )
+        .read_only(true)
+        .idempotent(true)
+        .open_world(false),
+        handler(|ctx, a| async move {
+            let mount = authorize_only(&ctx, &a).await?;
+            let path = crate::tools::norm(&ctx, &a, "path")?;
+            document_structure(&ctx.state, &mount, &path, a.opt_str("marker").as_deref()).await
         }),
     );
     reg.add(
@@ -113,6 +133,7 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
         .req_str("path", "Absolute POSIX path of the source document.")
         .opt_bool("captions", true, "Show each image's caption in its image line.")
         .opt_str_null("table_mode", "markdown (default), csv-reference or both.")
+        .opt_str_null("view", "standard (default), text (the converter text as is) or full (adds the OCR text lines and the structure).")
         .read_only(true)
         .idempotent(true)
         .open_world(false),
@@ -121,7 +142,9 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
             let path = crate::tools::norm(&ctx, &a, "path")?;
             let captions = a.bool_or("captions", true);
             let mode = a.opt_str("table_mode");
-            document_view(&ctx.state, &mount, &path, captions, mode.as_deref()).await
+            let view = a.opt_str("view");
+            document_view(&ctx.state, &mount, &path, captions, mode.as_deref(), view.as_deref())
+                .await
         }),
     );
 }
@@ -150,11 +173,45 @@ pub(crate) async fn list_images(
     rows.truncate(ARTIFACT_PAGE_SIZE);
     let images: Vec<Value> = rows
         .into_iter()
-        .map(|i| json!({"id": format!("image-{}", i.seq), "caption": i.caption, "page": i.page}))
+        .map(|i| {
+            json!({"id": format!("image-{}", i.seq), "caption": i.caption, "page": i.page,
+                   "ocr_text": i.ocr_text})
+        })
         .collect();
     let next =
         more.then(|| encode_marker(mount_id, ListKind::Images, path, offset + ARTIFACT_PAGE_SIZE));
     Ok(json!({"images": images, "marker": next}))
+}
+
+/// `fs.get_document_structure(mount_id, path, marker)` (SPEC-0104 FR-NEW-002,
+/// 003): the headings of the last conversion in document order, 100 per
+/// answer. A document converted with no structure answers an empty list.
+/// Refusals in the FR-NEW-031 order: not a file, invalid marker, no artifacts.
+///
+/// Time: O(1) queries, one page of at most `ARTIFACT_PAGE_SIZE + 1` rows
+/// read by the `(volume_id, set_id, seq)` key. Space: O(page).
+pub(crate) async fn document_structure(
+    state: &AppState,
+    mount_id: &str,
+    path: &str,
+    marker: Option<&str>,
+) -> Result<Value> {
+    let (store, set_id, offset) =
+        current_page(state, mount_id, path, marker, ListKind::Structure).await?;
+    let Ok(sql_offset) = i64::try_from(offset) else {
+        return Ok(json!({"headings": [], "marker": null}));
+    };
+    let mut rows =
+        store.artifact_headings(&set_id, ARTIFACT_PAGE_SIZE as i64 + 1, sql_offset).await?;
+    let more = rows.len() > ARTIFACT_PAGE_SIZE;
+    rows.truncate(ARTIFACT_PAGE_SIZE);
+    let headings: Vec<Value> = rows
+        .into_iter()
+        .map(|h| json!({"level": h.level, "title": h.title, "page": h.page}))
+        .collect();
+    let next = more
+        .then(|| encode_marker(mount_id, ListKind::Structure, path, offset + ARTIFACT_PAGE_SIZE));
+    Ok(json!({"headings": headings, "marker": next}))
 }
 
 /// `fs.get_image(mount_id, path, id)` (FR-NEW-004): the picture byte for byte
@@ -168,6 +225,25 @@ pub(crate) async fn get_image(
     path: &str,
     id: &str,
 ) -> Result<Value> {
+    let (image, bytes) = load_image(state, mount_id, path, id).await?;
+    Ok(json!({
+        "id": id,
+        "format": image.format,
+        "caption": image.caption,
+        "page": image.page,
+        "ocr_text": image.ocr_text,
+        "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+    }))
+}
+
+/// The image row and picture bytes behind `get_image` and `image_file`, refused
+/// in the FR-NEW-031 order: not a file, no artifacts, unknown id.
+async fn load_image(
+    state: &AppState,
+    mount_id: &str,
+    path: &str,
+    id: &str,
+) -> Result<(DocImage, Vec<u8>)> {
     let client = state.stores.client(mount_id).await?;
     ensure_file(&client, path).await?;
     let (store, set_id) = current_set(&client, path).await?;
@@ -175,13 +251,22 @@ pub(crate) async fn get_image(
     let seq = artifact_seq("image-", id).ok_or_else(not_found)?;
     let image = store.artifact_image(&set_id, seq).await?.ok_or_else(not_found)?;
     let bytes = client.blob.get(&image.sha256, 0, None).await?;
-    Ok(json!({
-        "id": id,
-        "format": image.format,
-        "caption": image.caption,
-        "page": image.page,
-        "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
-    }))
+    Ok((image, bytes))
+}
+
+/// The picture file of an image, for the web download (FR-NEW-001): its
+/// format and the bytes exactly as the converter supplied them. Same refusal
+/// order as `get_image`. Writes nothing and touches no access time.
+///
+/// Time: O(1) queries plus one blob read. Space: O(picture).
+pub(crate) async fn image_file(
+    state: &AppState,
+    mount_id: &str,
+    path: &str,
+    id: &str,
+) -> Result<(String, Vec<u8>)> {
+    let (image, bytes) = load_image(state, mount_id, path, id).await?;
+    Ok((image.format, bytes))
 }
 
 /// The meta store, current set and page offset of a list request, refused in
@@ -305,10 +390,11 @@ pub(crate) async fn get_table(
 /// FR-NEW-008): the conversion text of the current set with its image lines
 /// and its tables in `table_mode`. Built from the stored conversion text only,
 /// so the Markdown sibling is never read nor written (FR-NEW-009, FR-NEW-022).
-/// Refusals in the FR-NEW-031 order: not a file, unsupported mode, no
-/// artifacts.
+/// Refusals in the FR-NEW-031 order: not a file, unsupported view, unsupported
+/// table mode, no artifacts. `view`: `standard` (default), `text` (the stored
+/// conversion text as is) or `full` (OCR lines and the structure, SPEC-0104).
 ///
-/// Time: O(1) queries, one blob read, then O(text + cells) to assemble.
+/// Time: O(1) queries, one blob read, then O(text + cells + headings) to assemble.
 /// Space: O(text + cells).
 pub(crate) async fn document_view(
     state: &AppState,
@@ -316,9 +402,13 @@ pub(crate) async fn document_view(
     path: &str,
     captions: bool,
     table_mode: Option<&str>,
+    view: Option<&str>,
 ) -> Result<Value> {
     let client = state.stores.client(mount_id).await?;
     ensure_file(&client, path).await?;
+    // Parsed once here, before the table mode, so the refusal order is the
+    // stated one (DEC-005); the table mode is checked whatever the view.
+    let view = View::parse(view)?;
     let mode = TableMode::parse(table_mode)?;
     let (store, set_id) = current_set(&client, path).await?;
     let text = match store.artifact_text_sha(&set_id).await? {
@@ -326,11 +416,20 @@ pub(crate) async fn document_view(
             .map_err(|e| ToolError::internal(format!("stored conversion text: {e}")))?,
         None => String::new(),
     };
+    if view == View::Text {
+        return Ok(json!({"path": path, "text": text}));
+    }
+    let full = view == View::Full;
     let images: Vec<ViewImage> = store
         .artifact_view_images(&set_id)
         .await?
         .into_iter()
-        .map(|i| ViewImage { seq: i.seq, caption: i.caption, line: position(i.line) })
+        .map(|i| ViewImage {
+            seq: i.seq,
+            caption: i.caption,
+            line: position(i.line),
+            ocr: if full { i.ocr } else { None },
+        })
         .collect();
     let tables = store
         .artifact_view_tables(&set_id)
@@ -349,7 +448,41 @@ pub(crate) async fn document_view(
         })
         .collect::<Result<Vec<_>>>()?;
     let text = render::document_view(&text, &images, &tables, captions, mode);
-    Ok(json!({"path": path, "text": text}))
+    if !full {
+        return Ok(json!({"path": path, "text": text}));
+    }
+    // Every heading in one read: the structure is bounded by the 10 000 the
+    // conversion keeps, so no marker is needed here.
+    let structure: Vec<Value> = store
+        .artifact_headings(&set_id, i64::MAX, 0)
+        .await?
+        .into_iter()
+        .map(|h| json!({"level": h.level, "title": h.title, "page": h.page}))
+        .collect();
+    Ok(json!({"path": path, "text": text, "structure": structure}))
+}
+
+/// Which text `fs.get_document_view` answers (FR-NEW-004).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum View {
+    Standard,
+    Text,
+    Full,
+}
+
+impl View {
+    /// The view a caller asked for, `standard` when none; matched case
+    /// sensitively.
+    fn parse(raw: Option<&str>) -> Result<Self> {
+        match raw {
+            None | Some("standard") => Ok(Self::Standard),
+            Some("text") => Ok(Self::Text),
+            Some("full") => Ok(Self::Full),
+            Some(other) => Err(ToolError::invalid_argument(format!(
+                "Unsupported view: {other} (use standard, text or full)"
+            ))),
+        }
+    }
 }
 
 /// A stored line position; a negative one (never written) lands past any
@@ -1581,11 +1714,11 @@ mod e2e {
         let list = images(&server, "/report.pdf", None).await;
         assert_eq!(
             list["images"][0],
-            json!({"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1})
+            json!({"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1, "ocr_text": null})
         );
         assert_eq!(
             list["images"][1],
-            json!({"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3})
+            json!({"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3, "ocr_text": null})
         );
     }
 
@@ -1597,8 +1730,8 @@ mod e2e {
             images(&server, "/report.pdf", None).await,
             json!({
                 "images": [
-                    {"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1},
-                    {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3},
+                    {"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1, "ocr_text": null},
+                    {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3, "ocr_text": null},
                 ],
                 "marker": null,
             })
@@ -1617,7 +1750,7 @@ mod e2e {
         assert_eq!(got["page"], 3);
         assert_eq!(picture(&got), FIG_2);
         let keys: Vec<&String> = got.as_object().unwrap().keys().collect();
-        assert_eq!(keys.len(), 5, "id, format, caption, page, base64: {got}");
+        assert_eq!(keys.len(), 6, "id, format, caption, page, ocr_text, base64: {got}");
     }
 
     /// SPEC-0019/E2E-026: an id the set does not hold is not found.
@@ -1689,7 +1822,7 @@ mod e2e {
         let second = images(&server, "/atlas2.pdf", Some(&marker)).await;
         assert_eq!(
             second,
-            json!({"images": [{"id": "image-101", "caption": "", "page": 101}], "marker": null})
+            json!({"images": [{"id": "image-101", "caption": "", "page": 101, "ocr_text": null}], "marker": null})
         );
     }
 
@@ -1704,7 +1837,7 @@ mod e2e {
         convert(&server, "/one.pdf").await;
         assert_eq!(
             images(&server, "/one.pdf", None).await,
-            json!({"images": [{"id": "image-1", "caption": "", "page": 2}], "marker": null})
+            json!({"images": [{"id": "image-1", "caption": "", "page": 2, "ocr_text": null}], "marker": null})
         );
         let got = image(&server, "/one.pdf", "image-1").await;
         assert_eq!(got["caption"], "");
@@ -1744,8 +1877,8 @@ mod e2e {
         assert_eq!(
             images(&server, "/logo.pdf", None).await["images"],
             json!([
-                {"id": "image-1", "caption": "", "page": 1},
-                {"id": "image-2", "caption": "", "page": 2},
+                {"id": "image-1", "caption": "", "page": 1, "ocr_text": null},
+                {"id": "image-2", "caption": "", "page": 2, "ocr_text": null},
             ])
         );
         let one = picture(&image(&server, "/logo.pdf", "image-1").await);
@@ -1789,7 +1922,7 @@ mod e2e {
         convert(&server, "/memo.docx").await;
         assert_eq!(
             images(&server, "/memo.docx", None).await,
-            json!({"images": [{"id": "image-1", "caption": "Org chart", "page": null}], "marker": null})
+            json!({"images": [{"id": "image-1", "caption": "Org chart", "page": null, "ocr_text": null}], "marker": null})
         );
         assert_eq!(image(&server, "/memo.docx", "image-1").await["page"], Value::Null);
     }
@@ -2464,6 +2597,7 @@ mod e2e {
             path: path.into(),
             captions,
             table_mode: mode.map(str::to_string),
+            view: None,
         }
     }
 
@@ -3131,8 +3265,8 @@ mod e2e {
             images(server, "/report.pdf", None).await,
             json!({
                 "images": [
-                    {"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1},
-                    {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3},
+                    {"id": "image-1", "caption": "Figure 1: Revenue 2024", "page": 1, "ocr_text": null},
+                    {"id": "image-2", "caption": "Schéma réseau 🌐", "page": 3, "ocr_text": null},
                 ],
                 "marker": null,
             })
@@ -4351,6 +4485,7 @@ mod e2e {
             path: "/report.pdf".into(),
             captions: true,
             table_mode: Some("both".into()),
+            view: None,
         };
         let mcp = mcp_body(server.fs_get_document_view(Parameters(args)).await);
         assert_eq!(mcp, rest.body("document-view?path=/report.pdf&table_mode=both").await);
@@ -4393,7 +4528,7 @@ mod e2e {
     }
 
     fn page_two() -> Value {
-        json!({"images": [{"id": "image-101", "caption": "", "page": 101}], "marker": null})
+        json!({"images": [{"id": "image-101", "caption": "", "page": 101, "ocr_text": null}], "marker": null})
     }
 
     /// SPEC-0019/E2E-155: a marker is not bound to the person; Bob, a member

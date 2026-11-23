@@ -71,6 +71,9 @@ pub(crate) struct ViewImage {
     pub caption: String,
     /// 0 based line of its picture reference in the conversion text.
     pub line: usize,
+    /// The text read inside the picture, written as an `[OCR image-<n>: ...]`
+    /// line right after the image line when the caller passes it (the full view).
+    pub ocr: Option<String>,
 }
 
 /// A kept table as the view renders it.
@@ -159,7 +162,14 @@ pub(crate) fn document_view(
         for a in &mut actions[start..=end] {
             *a = LineAction::Drop;
         }
-        actions[i.line] = LineAction::Image(image_line(i, captions), image_terminator);
+        let mut line = image_line(i, captions);
+        if let Some(ocr) = &i.ocr {
+            // An image line that ends the text has no terminator: one line
+            // break is added so the OCR line starts on its own line.
+            line.push_str(if image_terminator.is_empty() { line_sep } else { image_terminator });
+            line.push_str(&format!("[OCR image-{}: {ocr}]", i.seq));
+        }
+        actions[i.line] = LineAction::Image(line, image_terminator);
     }
     // Written in order, skipping drops; an empty line is owed before an
     // image unless it is the very first thing written, and one after unless
@@ -423,7 +433,7 @@ mod tests {
         // the ref and the removed caption no longer survives alongside the
         // synthetic one, so exactly one empty line stands on each side.
         let text = "a\n![](p.png)\n\nCap\nCap\n";
-        let img = |caption: &str| ViewImage { seq: 3, caption: caption.into(), line: 1 };
+        let img = |caption: &str| ViewImage { seq: 3, caption: caption.into(), line: 1, ocr: None };
         assert_eq!(
             document_view(text, &[img("Cap")], &[], true, TableMode::Markdown),
             "a\n\n[Image image-3: Cap]\n\nCap\n"
@@ -433,7 +443,7 @@ mod tests {
             "a\n\n[Image image-3]\n\nCap\n"
         );
         // An empty caption matches no line, not even an empty one.
-        let first = ViewImage { seq: 1, caption: String::new(), line: 0 };
+        let first = ViewImage { seq: 1, caption: String::new(), line: 0, ocr: None };
         assert_eq!(
             document_view("![](p.png)\n\nx\n", &[first], &[], true, TableMode::Markdown),
             "[Image image-1]\n\nx\n"
@@ -443,7 +453,8 @@ mod tests {
     #[test]
     fn an_image_collapses_surrounding_empty_lines_to_one_each_side() {
         let text = "Intro\n\n![](p.png)\n\nFigure 1: Revenue 2024\n\nBody text";
-        let img = ViewImage { seq: 1, caption: "Figure 1: Revenue 2024".into(), line: 2 };
+        let img =
+            ViewImage { seq: 1, caption: "Figure 1: Revenue 2024".into(), line: 2, ocr: None };
         assert_eq!(
             document_view(text, &[img], &[], true, TableMode::Markdown),
             "Intro\n\n[Image image-1: Figure 1: Revenue 2024]\n\nBody text"
@@ -453,7 +464,7 @@ mod tests {
     #[test]
     fn an_image_as_the_first_line_has_no_leading_empty_line() {
         let text = "![](p.png)\n\nBody text";
-        let img = ViewImage { seq: 1, caption: String::new(), line: 0 };
+        let img = ViewImage { seq: 1, caption: String::new(), line: 0, ocr: None };
         assert_eq!(
             document_view(text, &[img], &[], true, TableMode::Markdown),
             "[Image image-1]\n\nBody text"
@@ -463,7 +474,7 @@ mod tests {
     #[test]
     fn an_image_as_the_last_line_has_no_trailing_empty_line() {
         let text = "Intro\n\n\n![](p.png)";
-        let img = ViewImage { seq: 1, caption: String::new(), line: 3 };
+        let img = ViewImage { seq: 1, caption: String::new(), line: 3, ocr: None };
         assert_eq!(
             document_view(text, &[img], &[], true, TableMode::Markdown),
             "Intro\n\n[Image image-1]"
@@ -473,7 +484,7 @@ mod tests {
     #[test]
     fn positions_outside_the_text_are_ignored() {
         let text = "a\nb\n";
-        let images = [ViewImage { seq: 1, caption: String::new(), line: usize::MAX }];
+        let images = [ViewImage { seq: 1, caption: String::new(), line: usize::MAX, ocr: None }];
         let tables = [table(1, "", 1, 5), table(2, "", usize::MAX, 2), table(3, "", 0, 0)];
         assert_eq!(document_view(text, &images, &tables, true, TableMode::Both), text);
     }
@@ -482,8 +493,8 @@ mod tests {
     fn adjacent_images_have_exactly_one_blank_line_between() {
         let text = "x\n![](a)\n![](b)\ny\n";
         let imgs = [
-            ViewImage { seq: 1, caption: String::new(), line: 1 },
-            ViewImage { seq: 2, caption: String::new(), line: 2 },
+            ViewImage { seq: 1, caption: String::new(), line: 1, ocr: None },
+            ViewImage { seq: 2, caption: String::new(), line: 2, ocr: None },
         ];
         assert_eq!(
             document_view(text, &imgs, &[], true, TableMode::Markdown),
@@ -495,8 +506,8 @@ mod tests {
     fn adjacent_images_with_a_blank_line_between_still_get_exactly_one() {
         let text = "x\n![](a)\n\n![](b)\ny\n";
         let imgs = [
-            ViewImage { seq: 1, caption: String::new(), line: 1 },
-            ViewImage { seq: 2, caption: String::new(), line: 3 },
+            ViewImage { seq: 1, caption: String::new(), line: 1, ocr: None },
+            ViewImage { seq: 2, caption: String::new(), line: 3, ocr: None },
         ];
         assert_eq!(
             document_view(text, &imgs, &[], true, TableMode::Markdown),
@@ -507,7 +518,7 @@ mod tests {
     #[test]
     fn an_image_directly_before_a_table_gets_its_blank_lines() {
         let text = "x\n![](a)\n| h |\n| --- |\n| 1 |\ny\n";
-        let img = ViewImage { seq: 1, caption: String::new(), line: 1 };
+        let img = ViewImage { seq: 1, caption: String::new(), line: 1, ocr: None };
         let t = table(1, "", 2, 3);
         assert_eq!(
             document_view(text, &[img], &[t], true, TableMode::Markdown),
@@ -518,7 +529,7 @@ mod tests {
     #[test]
     fn a_tab_only_line_next_to_an_image_is_not_treated_as_empty() {
         let text = "a\n![](p.png)\n\t\nb\n";
-        let img = ViewImage { seq: 1, caption: String::new(), line: 1 };
+        let img = ViewImage { seq: 1, caption: String::new(), line: 1, ocr: None };
         assert_eq!(
             document_view(text, &[img], &[], true, TableMode::Markdown),
             "a\n\n[Image image-1]\n\n\t\nb\n"
@@ -528,10 +539,35 @@ mod tests {
     #[test]
     fn crlf_text_gets_crlf_blank_lines_around_an_image() {
         let text = "Intro\r\n![](p.png)\r\nBody\r\n";
-        let img = ViewImage { seq: 1, caption: String::new(), line: 1 };
+        let img = ViewImage { seq: 1, caption: String::new(), line: 1, ocr: None };
         assert_eq!(
             document_view(text, &[img], &[], true, TableMode::Markdown),
             "Intro\r\n\r\n[Image image-1]\r\n\r\nBody\r\n"
+        );
+    }
+
+    #[test]
+    fn an_ocr_line_follows_its_image_line_with_the_text_own_terminator() {
+        let img = |n, ocr: &str, line| ViewImage {
+            seq: n,
+            caption: String::new(),
+            line,
+            ocr: Some(ocr.into()),
+        };
+        assert_eq!(
+            document_view(
+                "a\r\n![](p.png)\r\nb\r\n",
+                &[img(1, "x", 1)],
+                &[],
+                true,
+                TableMode::Markdown
+            ),
+            "a\r\n\r\n[Image image-1]\r\n[OCR image-1: x]\r\n\r\nb\r\n"
+        );
+        // An image line ending the text gets one line break before its OCR line.
+        assert_eq!(
+            document_view("![](p.png)", &[img(1, "fin", 0)], &[], true, TableMode::Markdown),
+            "[Image image-1]\n[OCR image-1: fin]"
         );
     }
 }

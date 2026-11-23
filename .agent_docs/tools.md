@@ -1,4 +1,4 @@
-# Tool reference (135 tools)
+# Tool reference (136 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -455,11 +455,12 @@ wrong password on a malformed archive gets the header refusal. Streamed zips
 
 | Tool | Purpose | Params | Returns | Annotations | Who |
 |---|---|---|---|---|---|
-| `fs.list_images` | images kept by a document's last conversion, `page` null outside PDF/PowerPoint | `path`, `marker?` | `images[{id,caption,page}],marker` | RO,I,!OW | member |
-| `fs.get_image` | one kept image, picture byte identical as base64, format `png`/`jpeg`/`gif`/`webp`/`tiff`/`bmp` | `path`, `id` | `id,format,caption,page,base64` | RO,I,!OW | member |
+| `fs.get_document_structure` | headings of a document's last conversion, in document order, 100 per page, `page` null when unknown | `path`, `marker?` | `headings[{level,title,page}],marker` | RO,I,!OW | member |
+| `fs.list_images` | images kept by a document's last conversion, `page` null outside PDF/PowerPoint | `path`, `marker?` | `images[{id,caption,page,ocr_text}],marker` (`ocr_text` null when none, SPEC-0104) | RO,I,!OW | member |
+| `fs.get_image` | one kept image, picture byte identical as base64, format `png`/`jpeg`/`gif`/`webp`/`tiff`/`bmp` | `path`, `id` | `id,format,caption,page,ocr_text,base64`; the picture file alone is `GET /api/fs/{mount_id}/image-file?path=&id=` (REST only, no tool, SPEC-0104) | RO,I,!OW | member |
 | `fs.list_tables` | tables kept by a document's last conversion | `path`, `marker?` | `tables[{id,caption,rows,columns,csv_quality}],marker` | RO,I,!OW | member |
 | `fs.get_table` | one kept table, `markdown` (default) or `csv`, FR-NEW-002 bytes; `csv` answers the converter's exact file verbatim when the manifest gave one (`CSV quality: exact`, SPEC-0103) | `path`, `id`, `format?` | `id,format,content` | RO,I,!OW | member |
-| `fs.get_document_view` | the stored conversion text with `[Image image-n: caption]` lines and tables as `markdown` (default), `csv-reference` or `both`; never reads the sibling | `path`, `captions?`=true, `table_mode?` | `path,text` | RO,I,!OW | member |
+| `fs.get_document_view` | the stored conversion text with `[Image image-n: caption]` lines and tables as `markdown` (default), `csv-reference` or `both`; `view` (SPEC-0104): `standard` (default), `text` (the converter text as is) or `full` (adds `[OCR image-n: text]` after each image line and `structure`); never reads the sibling | `path`, `captions?`=true, `table_mode?`, `view?` | `path,text` (`full` adds `structure`) | RO,I,!OW | member |
 
 Rules (2026-10-10, SPEC-0019):
 
@@ -776,11 +777,11 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 81 (52 `fs.*`, 29 `admin.*`) |
-| git flag on | 135 |
-| git and search flags on | 139 |
-| every flag, pandoc on `PATH` | 161 (159 without pandoc: `doc.*` registers nothing) |
-| one optional family alone | 81 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
+| default | 82 (53 `fs.*`, 29 `admin.*`) |
+| git flag on | 136 |
+| git and search flags on | 140 |
+| every flag, pandoc on `PATH` | 162 (160 without pandoc: `doc.*` registers nothing) |
+| one optional family alone | 82 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
 `#[tool]` methods: `add_optional_families` in `mcp/server.rs` runs each enabled
@@ -789,7 +790,7 @@ family's production `register()` into one shared `ToolRegistry`, and adds one
 family's own `ToolSchema::to_list_entry()`, so the served schema equals
 `catalog()` (what `/api/swagger.json` reads); the call goes through
 `ToolRegistry::call` then `to_call_result`. The family handlers authorize
-`mount_id` themselves, unchanged. They are outside the 139 tool golden
+`mount_id` themselves, unchanged. They are outside the 140 tool golden
 contract. Tests: `tools/tool_surface_e2e.rs`.
 
 (2026-11-12, SPEC-0093) Remote answers of `web.*` and `context7.*` are read by `tools::web::read_answer`

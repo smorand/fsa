@@ -466,6 +466,14 @@ pub(crate) struct DocImageRow {
     pub seq: i64,
     pub caption: String,
     pub page: Option<i64>,
+    pub ocr_text: Option<String>,
+}
+
+/// A stored heading: what `fs.get_document_structure` reports.
+pub(crate) struct DocHeadingRow {
+    pub level: i64,
+    pub title: String,
+    pub page: Option<i64>,
 }
 
 /// A stored image: its listed fields plus where its picture lives.
@@ -474,6 +482,7 @@ pub(crate) struct DocImage {
     pub page: Option<i64>,
     pub format: String,
     pub sha256: String,
+    pub ocr_text: Option<String>,
 }
 
 /// An image as a full document view places it.
@@ -482,6 +491,7 @@ pub(crate) struct ViewImageRow {
     pub caption: String,
     /// 0 based line of the picture reference in the conversion text.
     pub line: i64,
+    pub ocr: Option<String>,
 }
 
 /// A table as a full document view renders it.
@@ -1312,6 +1322,30 @@ impl RelationalMetaStore {
             .collect()
     }
 
+    /// One page of a set's headings, in document order.
+    pub(crate) async fn artifact_headings(
+        &self,
+        set_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<DocHeadingRow>> {
+        let page = self.db.dialect().render_limit_offset(limit, offset);
+        let rows = self
+            .db
+            .query(
+                &Query::new(format!(
+                    "SELECT level, title, page FROM doc_headings \
+                     WHERE volume_id=?1 AND set_id=?2 ORDER BY seq {page}"
+                ))
+                .bind(&self.volume_id)
+                .bind(set_id),
+            )
+            .await?;
+        rows.iter()
+            .map(|r| Ok(DocHeadingRow { level: r.i64(0)?, title: r.text(1)?, page: r.opt_i64(2)? }))
+            .collect()
+    }
+
     /// One page of a set's images, in reading order.
     pub(crate) async fn list_artifact_images(
         &self,
@@ -1324,7 +1358,7 @@ impl RelationalMetaStore {
             .db
             .query(
                 &Query::new(format!(
-                    "SELECT seq, caption, page FROM doc_images \
+                    "SELECT seq, caption, page, ocr_text FROM doc_images \
                      WHERE volume_id=?1 AND set_id=?2 ORDER BY seq {page}"
                 ))
                 .bind(&self.volume_id)
@@ -1332,7 +1366,14 @@ impl RelationalMetaStore {
             )
             .await?;
         rows.iter()
-            .map(|r| Ok(DocImageRow { seq: r.i64(0)?, caption: r.text(1)?, page: r.opt_i64(2)? }))
+            .map(|r| {
+                Ok(DocImageRow {
+                    seq: r.i64(0)?,
+                    caption: r.text(1)?,
+                    page: r.opt_i64(2)?,
+                    ocr_text: r.opt_text(3)?,
+                })
+            })
             .collect()
     }
 
@@ -1343,7 +1384,7 @@ impl RelationalMetaStore {
             .db
             .query_opt(
                 &Query::new(
-                    "SELECT caption, page, format, sha256 FROM doc_images \
+                    "SELECT caption, page, format, sha256, ocr_text FROM doc_images \
                      WHERE volume_id=?1 AND set_id=?2 AND seq=?3",
                 )
                 .bind(&self.volume_id)
@@ -1357,6 +1398,7 @@ impl RelationalMetaStore {
                 page: r.opt_i64(1)?,
                 format: r.text(2)?,
                 sha256: r.text(3)?,
+                ocr_text: r.opt_text(4)?,
             })
         })
         .transpose()
@@ -1452,7 +1494,7 @@ impl RelationalMetaStore {
             .db
             .query(
                 &Query::new(
-                    "SELECT seq, caption, line_start FROM doc_images \
+                    "SELECT seq, caption, line_start, ocr_text FROM doc_images \
                      WHERE volume_id=?1 AND set_id=?2 ORDER BY seq",
                 )
                 .bind(&self.volume_id)
@@ -1460,7 +1502,14 @@ impl RelationalMetaStore {
             )
             .await?;
         rows.iter()
-            .map(|r| Ok(ViewImageRow { seq: r.i64(0)?, caption: r.text(1)?, line: r.i64(2)? }))
+            .map(|r| {
+                Ok(ViewImageRow {
+                    seq: r.i64(0)?,
+                    caption: r.text(1)?,
+                    line: r.i64(2)?,
+                    ocr: r.opt_text(3)?,
+                })
+            })
             .collect()
     }
 
