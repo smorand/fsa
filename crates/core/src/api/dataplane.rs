@@ -3349,7 +3349,9 @@ mod tests {
         let conversion = Conversion {
             markdown: "# R\n\n![l](fig/logo.png)\n".into(),
             files: [("fig/logo.png".to_string(), LOGO.to_vec())].into(),
-            manifest: Some(Manifest { pictures: [("fig/logo.png".to_string(), meta)].into() }),
+            manifest: Some(
+                Manifest { pictures: [("fig/logo.png".to_string(), meta)].into() }.into(),
+            ),
         };
         let h = Harness::with_doc_service(Some(Arc::new(StubDocService::bundle(conversion)))).await;
         h.seed("/report.pdf", "%PDF-1.4 source").await;

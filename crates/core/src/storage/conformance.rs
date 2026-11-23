@@ -858,6 +858,8 @@ fn doc_table(seq: i64, caption: &str) -> NewDocTable {
         cells: r#"[["h1","h2"],["a","b"]]"#.to_string(),
         line_start: seq * 10,
         line_count: 3,
+        csv_text: None,
+        page: None,
     }
 }
 
@@ -875,6 +877,7 @@ fn doc_image_with_sha(seq: i64, page: Option<i64>, sha256: &str) -> NewDocImage 
         size: 7,
         line_start: seq,
         line_count: 1,
+        ocr_text: None,
     }
 }
 
@@ -903,6 +906,7 @@ async fn doc_artifacts_round_trip(engine: &Engine, tag: &str) -> Result<()> {
         note: Some("n1".into()),
         images: vec![doc_image(3, Some(1)), doc_image(1, None)],
         tables: vec![doc_table(2, "Q2"), doc_table(1, "Q1 é | \"x\"")],
+        headings: Vec::new(),
     };
     m.commit_artifact_set(&set).await?;
     let current = m.current_artifact_set("/b.xlsx").await?;
@@ -951,6 +955,7 @@ async fn doc_artifacts_round_trip(engine: &Engine, tag: &str) -> Result<()> {
         set_id: format!("{tag}-set2"),
         images: Vec::new(),
         tables: Vec::new(),
+        headings: Vec::new(),
         ..set
     };
     let err = m.commit_artifact_set(&stale).await.expect_err("stale rev must be refused");
@@ -986,6 +991,7 @@ async fn doc_artifacts_round_trip(engine: &Engine, tag: &str) -> Result<()> {
         note: Some("n-d1".into()),
         images: vec![doc_image_with_sha(1, None, "sha-img-d1")],
         tables: Vec::new(),
+        headings: Vec::new(),
     };
     m.put_file("/d.xlsx", Some("sha-d"), 3, MODE_FILE).await?;
     let d_rev1 = m.ensure_node_rev("/d.xlsx").await?.expect("rev");
@@ -1006,6 +1012,7 @@ async fn doc_artifacts_round_trip(engine: &Engine, tag: &str) -> Result<()> {
         note: None,
         images: vec![doc_image_with_sha(1, None, "sha-img-d2")],
         tables: Vec::new(),
+        headings: Vec::new(),
     };
     m.commit_artifact_set(&current_set).await?;
     let d1 = m.current_set_note("/d.xlsx", "sha-text-d1").await?;

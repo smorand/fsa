@@ -68,12 +68,13 @@ pub const OUTDIR_MARKDOWN: &str = "document.md";
 
 /// What one conversion returns (SPEC-0019 DEC-006): the conversion text, every
 /// file the converter wrote beside it keyed by its relative `/` separated path,
-/// and the optional manifest describing its pictures.
+/// and the optional manifest exactly as the converter gave it, read later by
+/// `docs::manifest::parse` (SPEC-0103 DEC-003).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Conversion {
     pub markdown: String,
     pub files: BTreeMap<String, Vec<u8>>,
-    pub manifest: Option<Manifest>,
+    pub manifest: Option<serde_json::Value>,
 }
 
 impl Conversion {
@@ -83,22 +84,28 @@ impl Conversion {
     }
 }
 
-/// The optional `artifacts.json` of a bundle. Absent fields mean an empty
-/// caption, no failure marker and an empty page.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(default)]
+/// Test builders of a version 1 manifest, serialized into the raw
+/// `Conversion.manifest` the reader of `docs::manifest` parses.
+#[cfg(test)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Manifest {
-    /// Keyed by the picture reference's target, as written in the text.
     pub pictures: BTreeMap<String, PictureMeta>,
 }
 
-/// What the converter says about one picture.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(default)]
+/// What a test converter says about one picture.
+#[cfg(test)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PictureMeta {
     pub caption: String,
     pub caption_failed: bool,
     pub page: Option<i64>,
+}
+
+#[cfg(test)]
+impl From<Manifest> for serde_json::Value {
+    fn from(m: Manifest) -> Self {
+        serde_json::to_value(m).expect("a manifest serializes")
+    }
 }
 
 /// A stateless document to Markdown converter.
@@ -580,7 +587,15 @@ impl DocService for ApiDocService {
             .is_some_and(|v| v.trim_start().starts_with("application/json"));
         let mut response = response;
         let mut peak = 0u64;
-        let (raw, over) = read_body_capped(&mut response, self.max_input_bytes, &mut peak).await;
+        // A JSON bundle carries its limit's worth of content plus its own framing
+        // (keys, quotes), so the wire read gets that slack; the content total is
+        // then checked exactly in `parse_api_bundle` (SPEC-0103 DEC-009).
+        let wire_cap = if is_json && self.config.response_field.trim().is_empty() {
+            self.max_input_bytes.saturating_add(JSON_FRAMING)
+        } else {
+            self.max_input_bytes
+        };
+        let (raw, over) = read_body_capped(&mut response, wire_cap, &mut peak).await;
         // Dropping the response closes the connection, so a server still sending
         // is cut off instead of being waited for (SPEC-0089 DEC-016).
         drop(response);
@@ -737,19 +752,27 @@ fn read_bundle_blocking(out: &std::path::Path, cap: u64) -> Result<Conversion> {
         ToolError::internal(format!("document service wrote no {OUTDIR_MARKDOWN} in its output"))
     })?;
     let markdown = String::from_utf8_lossy(markdown).into_owned();
-    let manifest = files.get(MANIFEST_FILE).and_then(|raw| manifest_from(raw));
+    // Kept raw: a text that is not JSON becomes a marker, so both forms share
+    // the one reader and its report lines (SPEC-0103 DEC-003).
+    let manifest = files.get(MANIFEST_FILE).map(|raw| {
+        serde_json::from_slice(raw).unwrap_or_else(|_| crate::docs::manifest::not_json())
+    });
     Ok(Conversion { markdown, files, manifest })
 }
 
-/// A manifest that does not parse is ignored, as if absent: captions and pages
-/// are lost, the conversion is not.
-fn manifest_from(raw: &[u8]) -> Option<Manifest> {
-    match serde_json::from_slice(raw) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            tracing::warn!(error = %e, "document service manifest ignored");
-            None
-        }
+/// Slack on the wire read of a JSON bundle, for its keys and quotes.
+const JSON_FRAMING: u64 = 4096;
+
+/// A writer that only counts, to measure the compact text of a value.
+struct ByteCount(u64);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -769,7 +792,19 @@ fn parse_api_bundle(body: &str, cap: u64) -> Result<Conversion> {
         ToolError::internal(format!("document service returned a malformed bundle: {e}"))
     })?;
     let mut files = BTreeMap::new();
-    let mut total: u64 = 0;
+    // The same total as the folder form: every file, the Markdown and the
+    // manifest text (SPEC-0103 DEC-009). O(answer): one pass, no copy.
+    let mut total = bundle.markdown.len() as u64;
+    if let Some(m) = &bundle.manifest {
+        let mut counted = ByteCount(0);
+        serde_json::to_writer(&mut counted, m).map_err(|e| {
+            ToolError::internal(format!("document service returned a malformed bundle: {e}"))
+        })?;
+        total += counted.0;
+    }
+    if total > cap {
+        return Err(over_cap(cap));
+    }
     for (key, encoded) in bundle.files {
         let bytes =
             base64::engine::general_purpose::STANDARD.decode(encoded.trim()).map_err(|e| {
@@ -783,11 +818,7 @@ fn parse_api_bundle(body: &str, cap: u64) -> Result<Conversion> {
         }
         files.insert(key, bytes);
     }
-    let manifest = bundle.manifest.and_then(|v| {
-        serde_json::from_value(v)
-            .map_err(|e| tracing::warn!(error = %e, "document service manifest ignored"))
-            .ok()
-    });
+    let manifest = bundle.manifest;
     Ok(Conversion { markdown: bundle.markdown, files, manifest })
 }
 
@@ -1157,13 +1188,37 @@ mod tests {
         assert_eq!(c.markdown, "# doc\n![c](figures/f1.png)\n");
         assert_eq!(c.files.get("figures/f1.png").map(Vec::as_slice), Some(&b"PNG"[..]));
         assert!(!c.files.contains_key("escape.txt"), "a symlink is never followed");
-        let meta = &c.manifest.expect("the manifest").pictures["figures/f1.png"];
         assert_eq!(
-            meta,
-            &PictureMeta { caption: "Chart".into(), caption_failed: false, page: Some(3) }
+            c.manifest,
+            Some(
+                serde_json::json!({"pictures": {"figures/f1.png": {"caption": "Chart", "page": 3}}})
+            )
         );
         // `to_markdown` stays the bundle's Markdown.
         assert_eq!(svc.to_markdown(b"body", "deck.pdf").await.unwrap(), c.markdown);
+    }
+
+    /// SPEC-0103 DEC-003: an `artifacts.json` that is not JSON is kept as the
+    /// marker the reader words as `not valid JSON`, the conversion still works.
+    #[tokio::test]
+    async fn cli_outdir_mode_keeps_a_manifest_that_is_not_json_as_a_marker() {
+        let home = tempfile::tempdir().unwrap();
+        let sh = script(
+            home.path(),
+            "badjson.sh",
+            "out=\"$1\"\nprintf '# doc' > \"$out/document.md\"\nprintf '{not json' > \"$out/artifacts.json\"\n",
+        );
+        let svc = cli_service(
+            vec![
+                sh.display().to_string(),
+                crate::config::OUTDIR_PLACEHOLDER.into(),
+                crate::config::DOC_PLACEHOLDER.into(),
+            ],
+            30,
+        );
+        let c = svc.convert(b"body", "deck.pdf").await.unwrap();
+        assert_eq!(c.markdown, "# doc");
+        assert_eq!(c.manifest, Some(crate::docs::manifest::not_json()));
     }
 
     #[tokio::test]
@@ -1390,10 +1445,10 @@ mod tests {
         let c = svc.convert(b"x", "a.pdf").await.unwrap();
         assert_eq!(c.markdown, "# b\n![x](f/a.png)\n");
         assert_eq!(c.files.get("f/a.png").map(Vec::as_slice), Some(&b"PNG"[..]));
-        let meta = &c.manifest.unwrap().pictures["f/a.png"];
-        assert!(meta.caption_failed);
-        assert_eq!(meta.caption, "");
-        assert_eq!(meta.page, None);
+        assert_eq!(
+            c.manifest,
+            Some(serde_json::json!({"pictures": {"f/a.png": {"caption_failed": true}}}))
+        );
     }
 
     #[tokio::test]

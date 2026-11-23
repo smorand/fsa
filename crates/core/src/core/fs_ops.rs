@@ -3973,8 +3973,15 @@ mod tests {
         assert_eq!(f.v.read_text("/deck.md").await.unwrap(), MD);
 
         // SPEC-0019 FR-NEW-013: the conversion text is charged beside the
-        // companion; `MD` holds no table, so the set adds nothing else.
-        assert_eq!(f.s.bytes_written(P, M), 64 + 2 * MD.len() as i64, "both writes charged");
+        // companion; `MD` holds no table, so the set adds only the title of its
+        // one derived heading, charged like a supplied one (SPEC-0103
+        // FR-NEW-022, DEC-010).
+        let title = "converted by the stub".len() as i64;
+        assert_eq!(
+            f.s.bytes_written(P, M),
+            64 + 2 * MD.len() as i64 + title,
+            "both writes charged"
+        );
         let log = f.s.audit(P, M);
         assert_eq!(log.len(), 2, "one entry per write: {log:?}");
         assert_eq!(log[0].op, "write");

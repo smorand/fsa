@@ -289,6 +289,13 @@ pub(crate) async fn get_table(
     let not_found = || ToolError::not_found(format!("Not found: {id}"));
     let seq = artifact_seq("table-", id).ok_or_else(not_found)?;
     let raw = store.artifact_table_cells(&set_id, seq).await?.ok_or_else(not_found)?;
+    // The converter's exact CSV is the CSV answer when the table has one
+    // (SPEC-0103 DEC-011); the markdown always renders from the cells.
+    if format == TableFormat::Csv
+        && let Some(csv) = store.artifact_table_csv(&set_id, seq).await?
+    {
+        return Ok(json!({"id": id, "format": format.as_str(), "content": csv}));
+    }
     let cells: Vec<Vec<String>> = serde_json::from_str(&raw)
         .map_err(|e| ToolError::internal(format!("stored table cells: {e}")))?;
     Ok(json!({"id": id, "format": format.as_str(), "content": format.render(&cells)}))
@@ -1458,7 +1465,11 @@ mod e2e {
                 (p.target.to_string(), meta)
             })
             .collect();
-        Conversion { markdown: markdown.to_string(), files, manifest: Some(Manifest { pictures }) }
+        Conversion {
+            markdown: markdown.to_string(),
+            files,
+            manifest: Some(Manifest { pictures }.into()),
+        }
     }
 
     /// A server whose fake converter answers `conversion`, over `f`'s stores.
@@ -1928,8 +1939,8 @@ mod e2e {
 
     /// `conversion`, its manifest entry for `target` marked caption failed.
     fn with_caption_failed(mut conversion: Conversion, target: &str) -> Conversion {
-        if let Some(meta) = conversion.manifest.as_mut().and_then(|m| m.pictures.get_mut(target)) {
-            meta.caption_failed = true;
+        if let Some(m) = conversion.manifest.as_mut() {
+            m["pictures"][target]["caption_failed"] = serde_json::json!(true);
         }
         conversion
     }
@@ -1955,7 +1966,7 @@ mod e2e {
                 },
             );
         }
-        Conversion { markdown: md, files, manifest: Some(Manifest { pictures }) }
+        Conversion { markdown: md, files, manifest: Some(Manifest { pictures }.into()) }
     }
 
     /// SPEC-0019/E2E-005: a failed caption is reported and the image is kept
@@ -2040,8 +2051,11 @@ mod e2e {
                 PictureMeta { caption: String::new(), caption_failed: false, page: Some(i) },
             );
         }
-        let conversion =
-            Conversion { markdown: md.to_string(), files, manifest: Some(Manifest { pictures }) };
+        let conversion = Conversion {
+            markdown: md.to_string(),
+            files,
+            manifest: Some(Manifest { pictures }.into()),
+        };
         let (_f, server) = converting_bundle("/mix2.pdf", conversion).await;
         let out = convert(&server, "/mix2.pdf").await;
         assert_eq!(

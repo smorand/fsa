@@ -13,9 +13,11 @@ CREATE TABLE IF NOT EXISTS "doc_artifact_current" ("volume_id" TEXT NOT NULL, "p
 
 CREATE TABLE IF NOT EXISTS "doc_artifact_sets" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "path" TEXT NOT NULL, "node_rev" TEXT NOT NULL, "text_sha" TEXT, "text_len" BIGINT NOT NULL DEFAULT 0, "report" TEXT NOT NULL, "superseded_at" BIGINT, "created_at" BIGINT NOT NULL, "note" TEXT, PRIMARY KEY ("volume_id", "set_id"))
 
-CREATE TABLE IF NOT EXISTS "doc_images" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "caption" TEXT NOT NULL, "page" BIGINT, "format" TEXT NOT NULL, "sha256" TEXT NOT NULL, "size" BIGINT NOT NULL, "line_start" BIGINT NOT NULL, "line_count" BIGINT NOT NULL, "caption_line" BIGINT, PRIMARY KEY ("volume_id", "set_id", "seq"))
+CREATE TABLE IF NOT EXISTS "doc_images" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "caption" TEXT NOT NULL, "page" BIGINT, "format" TEXT NOT NULL, "sha256" TEXT NOT NULL, "size" BIGINT NOT NULL, "line_start" BIGINT NOT NULL, "line_count" BIGINT NOT NULL, "caption_line" BIGINT, "ocr_text" TEXT, PRIMARY KEY ("volume_id", "set_id", "seq"))
 
-CREATE TABLE IF NOT EXISTS "doc_tables" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "caption" TEXT NOT NULL, "row_count" BIGINT NOT NULL, "col_count" BIGINT NOT NULL, "quality" TEXT NOT NULL, "cells" TEXT NOT NULL, "line_start" BIGINT NOT NULL, "line_count" BIGINT NOT NULL, PRIMARY KEY ("volume_id", "set_id", "seq"))
+CREATE TABLE IF NOT EXISTS "doc_tables" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "caption" TEXT NOT NULL, "row_count" BIGINT NOT NULL, "col_count" BIGINT NOT NULL, "quality" TEXT NOT NULL, "cells" TEXT NOT NULL, "line_start" BIGINT NOT NULL, "line_count" BIGINT NOT NULL, "csv_text" TEXT, "page" BIGINT, PRIMARY KEY ("volume_id", "set_id", "seq"))
+
+CREATE TABLE IF NOT EXISTS "doc_headings" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "level" BIGINT NOT NULL, "title" TEXT NOT NULL, "page" BIGINT, PRIMARY KEY ("volume_id", "set_id", "seq"))
 
 CREATE TABLE IF NOT EXISTS "chunk_sets" ("volume_id" TEXT NOT NULL, "path" TEXT NOT NULL, "request_key" TEXT NOT NULL, "set_id" TEXT NOT NULL, "strategy" TEXT NOT NULL, "settings" TEXT NOT NULL, "requested_strategy" TEXT NOT NULL, "requested_settings" TEXT NOT NULL, "is_default" BIGINT NOT NULL DEFAULT 0, "fallback_from" TEXT, "chunk_count" BIGINT NOT NULL, "token_count" BIGINT NOT NULL, "source_sha" TEXT NOT NULL, "built_at" TEXT NOT NULL, PRIMARY KEY ("volume_id", "path", "request_key"))
 

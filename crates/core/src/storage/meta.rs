@@ -112,7 +112,7 @@ const NODE_COLS: [&str; 12] = [
 ];
 
 /// Every column of `doc_tables`, in the order the insert binds them.
-const DOC_TABLE_COLS: [&str; 10] = [
+const DOC_TABLE_COLS: [&str; 12] = [
     "volume_id",
     "set_id",
     "seq",
@@ -123,10 +123,12 @@ const DOC_TABLE_COLS: [&str; 10] = [
     "cells",
     "line_start",
     "line_count",
+    "csv_text",
+    "page",
 ];
 
 /// Every column of `doc_images`, in the order the insert binds them.
-const DOC_IMAGE_COLS: [&str; 11] = [
+const DOC_IMAGE_COLS: [&str; 12] = [
     "volume_id",
     "set_id",
     "seq",
@@ -138,6 +140,7 @@ const DOC_IMAGE_COLS: [&str; 11] = [
     "line_start",
     "line_count",
     "caption_line",
+    "ocr_text",
 ];
 
 /// A fresh node revision: a node insert, path change or byte write calls this.
@@ -268,6 +271,7 @@ pub fn schema() -> SchemaSet {
                     Column::required("line_start", ColumnType::BigInt),
                     Column::required("line_count", ColumnType::BigInt),
                     Column::new("caption_line", ColumnType::BigInt),
+                    Column::new("ocr_text", ColumnType::Text),
                 ],
                 vec!["volume_id", "set_id", "seq"],
             ),
@@ -286,6 +290,22 @@ pub fn schema() -> SchemaSet {
                     Column::required("cells", ColumnType::Text),
                     Column::required("line_start", ColumnType::BigInt),
                     Column::required("line_count", ColumnType::BigInt),
+                    Column::new("csv_text", ColumnType::Text),
+                    Column::new("page", ColumnType::BigInt),
+                ],
+                vec!["volume_id", "set_id", "seq"],
+            ),
+            // SPEC-0103 DEC-006: the structure of a conversion, one row per
+            // heading, replaced with its set.
+            Table::new(
+                "doc_headings",
+                vec![
+                    Column::required("volume_id", ColumnType::Text),
+                    Column::required("set_id", ColumnType::Text),
+                    Column::required("seq", ColumnType::BigInt),
+                    Column::required("level", ColumnType::BigInt),
+                    Column::required("title", ColumnType::Text),
+                    Column::new("page", ColumnType::BigInt),
                 ],
                 vec!["volume_id", "set_id", "seq"],
             ),
@@ -376,6 +396,31 @@ pub fn schema() -> SchemaSet {
         not_null: false,
         default: "NULL",
     })
+    // SPEC-0103 DEC-006: the text read inside a picture. Images stored before
+    // the column existed keep NULL, read back as no OCR text.
+    .column_migration(ColumnMigration {
+        table: "doc_images",
+        column: "ocr_text",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    // SPEC-0103 DEC-006: the converter's exact CSV text and the page of a
+    // table. Tables stored before the columns existed keep NULL.
+    .column_migration(ColumnMigration {
+        table: "doc_tables",
+        column: "csv_text",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "doc_tables",
+        column: "page",
+        ty: ColumnType::BigInt,
+        not_null: false,
+        default: "NULL",
+    })
 }
 
 /// One table of an artifact set about to be committed (SPEC-0019 data model).
@@ -391,6 +436,11 @@ pub(crate) struct NewDocTable {
     /// 0 based first line of the table in the conversion text.
     pub line_start: i64,
     pub line_count: i64,
+    /// The converter's exact CSV text (SPEC-0103 FR-NEW-008); `None` derives
+    /// the CSV from `cells`.
+    pub csv_text: Option<String>,
+    /// The page the converter gave the table, metadata only (FR-NEW-011).
+    pub page: Option<i64>,
 }
 
 /// One image of an artifact set about to be committed; its picture blob is
@@ -407,6 +457,8 @@ pub(crate) struct NewDocImage {
     /// 0 based line of the picture reference in the conversion text.
     pub line_start: i64,
     pub line_count: i64,
+    /// The text read inside the picture, never empty (SPEC-0103 FR-NEW-004).
+    pub ocr_text: Option<String>,
 }
 
 /// A listed image: what `fs.list_images` reports.
@@ -442,6 +494,15 @@ pub(crate) struct ViewTableRow {
     pub line_count: i64,
 }
 
+/// One heading of an artifact set about to be committed (SPEC-0103 DEC-006).
+pub(crate) struct NewDocHeading {
+    /// 1 based position in reading order.
+    pub seq: i64,
+    pub level: i64,
+    pub title: String,
+    pub page: Option<i64>,
+}
+
 /// A conversion's whole artifact set, committed at once.
 pub(crate) struct NewArtifactSet {
     pub set_id: String,
@@ -454,6 +515,7 @@ pub(crate) struct NewArtifactSet {
     pub note: Option<String>,
     pub images: Vec<NewDocImage>,
     pub tables: Vec<NewDocTable>,
+    pub headings: Vec<NewDocHeading>,
 }
 
 /// A listed table: what `fs.list_tables` reports.
@@ -967,7 +1029,7 @@ impl RelationalMetaStore {
         )
         .await?;
         let insert_table = format!(
-            "INSERT INTO doc_tables ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO doc_tables ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             DOC_TABLE_COLS.join(", ")
         );
         for t in &set.tables {
@@ -982,12 +1044,14 @@ impl RelationalMetaStore {
                     .bind(&t.quality)
                     .bind(&t.cells)
                     .bind(t.line_start)
-                    .bind(t.line_count),
+                    .bind(t.line_count)
+                    .bind(t.csv_text.as_deref())
+                    .bind(t.page),
             )
             .await?;
         }
         let insert_image = format!(
-            "INSERT INTO doc_images ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO doc_images ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             DOC_IMAGE_COLS.join(", ")
         );
         for i in &set.images {
@@ -1003,10 +1067,43 @@ impl RelationalMetaStore {
                     .bind(i.size)
                     .bind(i.line_start)
                     .bind(i.line_count)
-                    .bind(None::<i64>),
+                    .bind(None::<i64>)
+                    .bind(i.ocr_text.as_deref()),
             )
             .await?;
             tx_incref(&mut *tx, dialect, volume, Some(&i.sha256), i.size).await?;
+        }
+        // Multi row inserts: 10 000 headings cost 20 statements, not 10 000
+        // round trips. 500 rows keep the bound parameters at 3 000.
+        for chunk in set.headings.chunks(500) {
+            let rows = (0..chunk.len())
+                .map(|r| {
+                    let n = r * 6;
+                    format!(
+                        "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                        n + 1,
+                        n + 2,
+                        n + 3,
+                        n + 4,
+                        n + 5,
+                        n + 6
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut q = Query::new(format!(
+                "INSERT INTO doc_headings (volume_id, set_id, seq, level, title, page) VALUES {rows}"
+            ));
+            for h in chunk {
+                q = q
+                    .bind(volume)
+                    .bind(&set.set_id)
+                    .bind(h.seq)
+                    .bind(h.level)
+                    .bind(&h.title)
+                    .bind(h.page);
+            }
+            tx.execute(&q).await?;
         }
         tx_incref(&mut *tx, dialect, volume, set.text_sha.as_deref(), set.text_len).await?;
         let pointer = dialect.render_upsert(&Upsert::replace(
@@ -1116,6 +1213,12 @@ impl RelationalMetaStore {
                     .await?;
                     tx.execute(
                         &Query::new("DELETE FROM doc_tables WHERE volume_id=?1 AND set_id=?2")
+                            .bind(&volume)
+                            .bind(&set_id),
+                    )
+                    .await?;
+                    tx.execute(
+                        &Query::new("DELETE FROM doc_headings WHERE volume_id=?1 AND set_id=?2")
                             .bind(&volume)
                             .bind(&set_id),
                     )
@@ -1278,6 +1381,27 @@ impl RelationalMetaStore {
             )
             .await?;
         row.map(|r| r.text(0)).transpose()
+    }
+
+    /// The converter's exact CSV text of table `seq`, `None` when the table
+    /// has none (its CSV is derived from the cells) or does not exist.
+    pub(crate) async fn artifact_table_csv(
+        &self,
+        set_id: &str,
+        seq: i64,
+    ) -> Result<Option<String>> {
+        let row = self
+            .db
+            .query_opt(
+                &Query::new(
+                    "SELECT csv_text FROM doc_tables WHERE volume_id=?1 AND set_id=?2 AND seq=?3",
+                )
+                .bind(&self.volume_id)
+                .bind(set_id)
+                .bind(seq),
+            )
+            .await?;
+        row.map_or(Ok(None), |r| r.opt_text(0))
     }
 
     /// The sha256 of a set's conversion text blob, `None` when the text was
@@ -2484,6 +2608,29 @@ impl RelationalMetaStore {
         row.map_or(Ok(0), |r| r.i64(0))
     }
 
+    /// The stored structure of the current set of `path`, as
+    /// `(level, title, page)` in reading order, for the SPEC-0103 tests.
+    #[cfg(test)]
+    pub(crate) async fn current_headings_for_test(
+        &self,
+        path: &str,
+    ) -> Result<Vec<(i64, String, Option<i64>)>> {
+        let rows = self
+            .db
+            .query(
+                &Query::new(
+                    "SELECT h.level, h.title, h.page FROM doc_headings h \
+                     JOIN doc_artifact_current c ON c.volume_id = h.volume_id \
+                     AND c.set_id = h.set_id WHERE c.volume_id=?1 AND c.path=?2 \
+                     ORDER BY h.seq",
+                )
+                .bind(&self.volume_id)
+                .bind(path),
+            )
+            .await?;
+        rows.iter().map(|r| Ok((r.i64(0)?, r.text(1)?, r.opt_i64(2)?))).collect()
+    }
+
     /// Count of `doc_images` rows for `set_id` in this volume, for the same
     /// US-0013 test.
     pub(crate) async fn count_doc_image_rows_for_test(&self, set_id: &str) -> Result<i64> {
@@ -2491,6 +2638,62 @@ impl RelationalMetaStore {
             .db
             .query_opt(
                 &Query::new("SELECT COUNT(*) FROM doc_images WHERE volume_id=?1 AND set_id=?2")
+                    .bind(&self.volume_id)
+                    .bind(set_id),
+            )
+            .await?;
+        row.map_or(Ok(0), |r| r.i64(0))
+    }
+
+    /// The OCR text stored with each image of the current set of `path`, by
+    /// image number, for the SPEC-0103 tests.
+    #[cfg(test)]
+    pub(crate) async fn current_ocr_for_test(&self, path: &str) -> Result<Vec<Option<String>>> {
+        let rows = self
+            .db
+            .query(
+                &Query::new(
+                    "SELECT i.ocr_text FROM doc_images i \
+                     JOIN doc_artifact_current c ON c.volume_id = i.volume_id \
+                     AND c.set_id = i.set_id WHERE c.volume_id=?1 AND c.path=?2 \
+                     ORDER BY i.seq",
+                )
+                .bind(&self.volume_id)
+                .bind(path),
+            )
+            .await?;
+        rows.iter().map(|r| r.opt_text(0)).collect()
+    }
+
+    /// The page stored with each table of the current set of `path`, by table
+    /// number, for the SPEC-0103 tests.
+    #[cfg(test)]
+    pub(crate) async fn current_table_pages_for_test(
+        &self,
+        path: &str,
+    ) -> Result<Vec<Option<i64>>> {
+        let rows = self
+            .db
+            .query(
+                &Query::new(
+                    "SELECT t.page FROM doc_tables t \
+                     JOIN doc_artifact_current c ON c.volume_id = t.volume_id \
+                     AND c.set_id = t.set_id WHERE c.volume_id=?1 AND c.path=?2 \
+                     ORDER BY t.seq",
+                )
+                .bind(&self.volume_id)
+                .bind(path),
+            )
+            .await?;
+        rows.iter().map(|r| r.opt_i64(0)).collect()
+    }
+
+    /// Count of `doc_headings` rows for `set_id` in this volume, for the sweep test.
+    pub(crate) async fn count_doc_heading_rows_for_test(&self, set_id: &str) -> Result<i64> {
+        let row = self
+            .db
+            .query_opt(
+                &Query::new("SELECT COUNT(*) FROM doc_headings WHERE volume_id=?1 AND set_id=?2")
                     .bind(&self.volume_id)
                     .bind(set_id),
             )
@@ -2542,6 +2745,7 @@ mod tests {
                 "doc_artifact_sets",
                 "doc_images",
                 "doc_tables",
+                "doc_headings",
                 "chunk_sets",
                 "chunks",
             ]

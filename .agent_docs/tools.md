@@ -458,7 +458,7 @@ wrong password on a malformed archive gets the header refusal. Streamed zips
 | `fs.list_images` | images kept by a document's last conversion, `page` null outside PDF/PowerPoint | `path`, `marker?` | `images[{id,caption,page}],marker` | RO,I,!OW | member |
 | `fs.get_image` | one kept image, picture byte identical as base64, format `png`/`jpeg`/`gif`/`webp`/`tiff`/`bmp` | `path`, `id` | `id,format,caption,page,base64` | RO,I,!OW | member |
 | `fs.list_tables` | tables kept by a document's last conversion | `path`, `marker?` | `tables[{id,caption,rows,columns,csv_quality}],marker` | RO,I,!OW | member |
-| `fs.get_table` | one kept table, `markdown` (default) or `csv`, FR-NEW-002 bytes | `path`, `id`, `format?` | `id,format,content` | RO,I,!OW | member |
+| `fs.get_table` | one kept table, `markdown` (default) or `csv`, FR-NEW-002 bytes; `csv` answers the converter's exact file verbatim when the manifest gave one (`CSV quality: exact`, SPEC-0103) | `path`, `id`, `format?` | `id,format,content` | RO,I,!OW | member |
 | `fs.get_document_view` | the stored conversion text with `[Image image-n: caption]` lines and tables as `markdown` (default), `csv-reference` or `both`; never reads the sibling | `path`, `captions?`=true, `table_mode?` | `path,text` | RO,I,!OW | member |
 
 Rules (2026-10-10, SPEC-0019):
@@ -479,7 +479,7 @@ Rules (2026-10-10, SPEC-0019):
   any write; a refusal keeps the previous set.
 * REST twins (same functions, byte identical payloads, FR-NEW-020): `GET /api/fs/{mount_id}/`
   `images`, `image`, `tables`, `table`, `document-view`.
-* Known limitation (2026-10-10): the real `doc-convert` writes no `artifacts.json`, so its images carry no page and no caption failure marker; it emits PNG only and deduplicates identical figures, so one picture referenced twice is one image.
+* The real `doc-convert` emits PNG only and deduplicates identical figures, so one picture referenced twice is one image. Manifest version 2 is defined (SPEC-0103, README "Manifest version 2"): without a manifest, images carry no page and tables an approximate CSV.
 
 ## fs document (3)
 

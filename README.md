@@ -231,6 +231,28 @@ The manifest `{outdir}/artifacts.json` (or the bundle's `manifest`) is optional:
 `{"pictures": {"figures/f1.png": {"caption": "...", "caption_failed": false, "page": 3}}}`;
 a missing field means an empty caption, no failure marker, no page.
 
+**Manifest version 2** (SPEC-0103). The manifest may carry `"version": 2` (no version or 1 is
+the reading above; a newer number is read as 2 with a note; an invalid one ignores the whole
+manifest). Version 2 adds, all optional and typed field by field (a wrong typed field is
+dropped with a report line, the conversion still succeeds):
+
+* `pictures.<file>.ocr_text` (at most 100 000 characters) and `ocr_failed`: the text read
+  inside a picture, stored with the image and charged to the session write quota;
+* `tables`: one entry per pipe table in reading order, `{"csv": "<bundle file>", "caption":
+  "...", "page": 3}`; a `csv` file of the bundle (UTF-8, at most 5 000 000 characters) is the
+  table's exact CSV, so `fs.list_tables` shows `CSV quality: exact` and `fs.get_table` in
+  `csv` answers that file verbatim; without it the CSV stays derived (`approximate`);
+* `headings`: `[{"level": 1, "title": "...", "page": 1}]`, at most 10 000, kept as the
+  structure of the document; without the field the headings of the Markdown are derived.
+
+A version 2 manifest adds one line after the `<N> images, <M> tables` header of the
+`artifacts_report`: `metadata: <a> images with OCR text, <b> tables with exact CSV, <c>
+headings`. No manifest or version 1: no metadata line, and the report is what it was. A new
+conversion replaces the images, tables, OCR text, CSV and structure of the document as one
+set; a failed one keeps the previous set; documents converted before keep their data and
+nothing is converted at upgrade. The built in text extraction is unchanged (exact tables, no
+metadata line). Tests: `cargo test -p fsa-core --lib -- e2e_0103_`.
+
 The doc service surfaces, two tools and two routes:
 
 | Surface | Purpose |
@@ -256,8 +278,8 @@ Lists page by 100; the continuation marker is valid for its project, list and do
 for any member. A document changed since its conversion has no artifacts until it is
 converted again. The set is charged to the session write quota together with the sibling,
 before anything is written; artifacts are not files and never show in listings or exports.
-The real `doc-convert` writes no `artifacts.json` yet (no pages, no caption failure marker),
-emits PNG only and deduplicates identical figures.
+A converter that writes no manifest yields images without page or caption and tables with an
+approximate CSV; the real `doc-convert` emits PNG only and deduplicates identical figures.
 
 The existing multipart `POST /api/fs/{mount_id}/upload` takes the same flag as a form field
 (`"true"` or `"1"`), applied to every file of the form, and answers with a `documentation`

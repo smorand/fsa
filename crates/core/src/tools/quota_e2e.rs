@@ -919,7 +919,7 @@ fn bundle_conversion(markdown: String, pics: Vec<(String, Vec<u8>, String)>) -> 
         .into_iter()
         .map(|(t, _, caption)| (t, PictureMeta { caption, caption_failed: false, page: None }))
         .collect();
-    Conversion { markdown, files, manifest: Some(Manifest { pictures }) }
+    Conversion { markdown, files, manifest: Some(Manifest { pictures }.into()) }
 }
 
 /// Mia uploads `len` bytes to `path` requesting conversion through `doc`.

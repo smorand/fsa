@@ -14,6 +14,9 @@
 pub(crate) mod artifacts;
 pub mod docx;
 pub mod extract;
+pub mod manifest;
+#[cfg(test)]
+mod manifest_e2e;
 pub mod mime;
 pub mod ocr;
 pub(crate) mod pdf_bound;

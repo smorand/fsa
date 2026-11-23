@@ -289,3 +289,9 @@
 | US-0287 | SPEC-0102 | search reranks with the default reranker | US-0286 | 2 | landed |  |  |
 | US-0288 | SPEC-0102 | the REST interface of the registry | US-0287 | 2 | landed |  |  |
 | US-0289 | SPEC-0102 | the models screen, docs and contract | US-0288 | 1 | landed |  |  |
+| US-0290 | SPEC-0103 | the manifest reader, versions and manifest level report lines | main | 1 | landed | | |
+| US-0291 | SPEC-0103 | the document structure and the metadata line of the report | US-0290 | 1 | landed | | |
+| US-0292 | SPEC-0103 | OCR text of images | US-0291 | 1 | landed | | |
+| US-0293 | SPEC-0103 | tables with an exact CSV, a caption and a page | US-0291, US-0292 | 1 | landed | | |
+| US-0294 | SPEC-0103 | the converter output limit, the quota and the two forms | US-0293 | 2 | landed | | |
+| US-0295 | SPEC-0103 | replacing, upgrading, other paths and the docs | US-0294 | 2 | landed | | |

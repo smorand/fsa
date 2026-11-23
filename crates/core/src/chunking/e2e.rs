@@ -1073,14 +1073,17 @@ async fn e2e_0101_050_a_converted_document_is_chunked_from_its_metadata_text() {
         ]
         .into_iter()
         .collect(),
-        manifest: Some(Manifest {
-            pictures: [
-                ("figures/f1.png".to_string(), pic("Figure 1: sales", 1)),
-                ("figures/f2.png".to_string(), pic("Figure 2: costs", 2)),
-            ]
-            .into_iter()
-            .collect(),
-        }),
+        manifest: Some(
+            Manifest {
+                pictures: [
+                    ("figures/f1.png".to_string(), pic("Figure 1: sales", 1)),
+                    ("figures/f2.png".to_string(), pic("Figure 2: costs", 2)),
+                ]
+                .into_iter()
+                .collect(),
+            }
+            .into(),
+        ),
     };
     let s = &env.state;
     let converting = crate::state::AppState {

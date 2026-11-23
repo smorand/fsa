@@ -21,7 +21,8 @@ stay in `infra.blob` (local or S3).
 An optional `doc_service` section plugs an external document to Markdown converter in,
 either a CLI (`doc-convert --quiet -o {outdir} {document}`, sandboxed in a per call tempdir,
 `{outdir}` optional: without it the Markdown is stdout) or an HTTP endpoint (a JSON answer
-is a `{markdown, files, manifest}` bundle). It is off by default and drives `fs.write_bytes`'s
+is a `{markdown, files, manifest}` bundle; manifest version 2 adds OCR text per picture, an
+exact CSV, caption and page per table and the document headings, SPEC-0103). It is off by default and drives `fs.write_bytes`'s
 `trigger_documentation_service` flag, the same flag on the REST `/upload`, and
 `fs.documentize`. The companion is written at the path `fs.extract_text` already uses.
 
@@ -63,6 +64,7 @@ of changes (`setting_change`). `settings::Registry` is the one implementation; t
 and `admin.list_setting_changes` tools (`tools/models.rs`) are platform admin only, reading included.
 The same registry is served by the `/api/admin/{providers,models,defaults,setting-changes}` REST routes and by the
 `/app/models` browser screen (`models_screen.rs`, SPEC-0102 US-0289). Tests: `cargo test -p fsa-core --lib -- e2e_0102_`.
+Converter manifest version 2 tests (SPEC-0103, `docs/manifest_e2e.rs`): `cargo test -p fsa-core --lib -- e2e_0103_`.
 
 ## Key commands
 ```

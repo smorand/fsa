@@ -19,8 +19,10 @@ use std::sync::Arc;
 
 /// The converter limit of every test here, the figure the refusals name.
 pub(crate) const CAP: u64 = 1_048_576;
-/// The cap plus one 65 536 byte chunk: the most an answer may be held at.
-const HELD_MAX: u64 = 1_114_112;
+/// The cap, the 4 096 bytes of JSON framing a bundle answer may add on the wire
+/// (SPEC-0103 DEC-009, E2E-093: a bundle of exactly the limit must fit) and one
+/// 65 536 byte chunk: the most an answer may be held at.
+const HELD_MAX: u64 = 1_114_112 + 4_096;
 /// The refusal of an answer over [`CAP`].
 pub(crate) const OVER: &str =
     "document service output is over the doc_service.max_input_bytes limit of 1048576";

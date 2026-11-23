@@ -6,6 +6,7 @@
 //! `nodes` (DEC-002), so no enumerator of files ever sees them.
 
 pub(crate) mod capture;
+pub(crate) mod headings;
 pub(crate) mod parse;
 pub(crate) mod render;
 

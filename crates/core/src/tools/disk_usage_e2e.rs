@@ -461,7 +461,7 @@ async fn spec_0047_e2e_031_history_exports_and_artifacts_are_not_counted() {
     let doc: Arc<dyn DocService> = Arc::new(StubDocService::bundle(Conversion {
         markdown: md,
         files,
-        manifest: Some(Manifest { pictures }),
+        manifest: Some(Manifest { pictures }.into()),
     }));
     let upload = WriteBytesArgs {
         mount_id: ATLAS.into(),

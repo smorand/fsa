@@ -143,7 +143,9 @@ fn memo_conversion(target: &str, caption: &str) -> Conversion {
     Conversion {
         markdown: format!("# Memo\n\n![chart]({target})\n"),
         files: [(target.to_string(), b"org".to_vec())].into_iter().collect(),
-        manifest: Some(Manifest { pictures: [(target.to_string(), meta)].into_iter().collect() }),
+        manifest: Some(
+            Manifest { pictures: [(target.to_string(), meta)].into_iter().collect() }.into(),
+        ),
     }
 }
 

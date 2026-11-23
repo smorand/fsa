@@ -1976,6 +1976,7 @@ mod tests {
             size: 3,
             line_start: 0,
             line_count: 1,
+            ocr_text: None,
         }
     }
 
@@ -2000,6 +2001,12 @@ mod tests {
             note: None,
             images: vec![one_image(&image_sha)],
             tables: Vec::new(),
+            headings: vec![crate::storage::meta::NewDocHeading {
+                seq: 1,
+                level: 1,
+                title: "Title".into(),
+                page: None,
+            }],
         };
         client.blob.put(set.text_sha.as_deref().unwrap(), b"text").await.unwrap();
         store.commit_artifact_set(&set).await.unwrap();
@@ -2034,6 +2041,11 @@ mod tests {
             store.count_doc_image_rows_for_test("set-report-pdf").await.unwrap(),
             0,
             "the swept set's doc_images rows are gone"
+        );
+        assert_eq!(
+            store.count_doc_heading_rows_for_test("set-report-pdf").await.unwrap(),
+            0,
+            "the swept set's doc_headings rows are gone"
         );
         assert_eq!(
             store.blob_refcount_for_test(&image_sha).await.unwrap(),
@@ -2072,6 +2084,7 @@ mod tests {
             note: None,
             images: vec![one_image(new_sha)],
             tables: Vec::new(),
+            headings: Vec::new(),
         };
         client.blob.put("sha-text-v2", b"text2").await.unwrap();
         store.commit_artifact_set(&current).await.unwrap();

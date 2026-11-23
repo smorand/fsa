@@ -232,7 +232,9 @@ fn memo_conversion() -> Conversion {
     Conversion {
         markdown: format!("# Memo\n\n![chart]({target})\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n"),
         files: [(target.to_string(), IMG_A.to_vec())].into_iter().collect(),
-        manifest: Some(Manifest { pictures: [(target.to_string(), meta)].into_iter().collect() }),
+        manifest: Some(
+            Manifest { pictures: [(target.to_string(), meta)].into_iter().collect() }.into(),
+        ),
     }
 }
 
