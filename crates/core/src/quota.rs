@@ -52,12 +52,29 @@ pub(crate) async fn admit_file(
     path: &str,
     new_size: i64,
 ) -> Result<Admission> {
+    admit_file_with(client, safety, person, mount_id, path, new_size, 0).await
+}
+
+/// [`admit_file`] with `extra_session` more bytes charged to the session only,
+/// never to the project: the weight of the artifacts a copy brings along
+/// (SPEC-0105 DEC-009). One check, so the file and its artifacts are refused
+/// or admitted together.
+pub(crate) async fn admit_file_with(
+    client: &VolumeClient,
+    safety: &SafetyManager,
+    person: &str,
+    mount_id: &str,
+    path: &str,
+    new_size: i64,
+    extra_session: i64,
+) -> Result<Admission> {
     let guard = client.admission.clone().lock_owned().await;
     let previous = match client.meta.get(path).await? {
         Some(node) if node.is_file() => node.size,
         _ => 0,
     };
-    check_and_charge(client, safety, person, mount_id, new_size, new_size - previous).await?;
+    let session = new_size.saturating_add(extra_session);
+    check_and_charge(client, safety, person, mount_id, session, new_size - previous).await?;
     Ok(Admission { _guard: guard })
 }
 

@@ -474,7 +474,12 @@ Rules (2026-10-10, SPEC-0019):
 * Check order: authorize, path is a file (`not a file: <path>`, `ERR_NOT_FOUND`), argument
   validation (format, table mode, marker), current set with a matching node `rev` (`No
   artifacts: document not extracted`, `ERR_NOT_FOUND`), id lookup (`Not found: <id>`).
-* A changed, moved or overwritten document loses its artifacts at once (rev mismatch).
+* A changed or overwritten document loses its artifacts at once (rev mismatch). A move, a trash
+  and a restore keep them; a copy gives the copy its own set (SPEC-0105); none calls the converter.
+* `fs.move` refuses `source` equal to, inside or above `destination` (`ERR_INVALID_ARGUMENT:
+  '<source>' cannot be moved onto or into itself`) before any overwrite deletes anything.
+* `fs.copy` charges the session write allowance the file bytes plus the weight of the artifacts
+  it copies, checked before anything is written: a refusal writes no file, set, audit entry or charge.
   Artifacts are not files: no listing, glob, grep, tree or export shows them.
 * The set, sibling and conversion text are charged once to the session write quota before
   any write; a refusal keeps the previous set.

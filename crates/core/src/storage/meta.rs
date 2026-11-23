@@ -8,6 +8,7 @@
 //! This store never touches bytes. It hands back the sha of a blob whose refcount
 //! reached zero and the caller garbage collects it.
 
+use crate::docs::artifacts::weight::{self, ImageWeight, TableWeight};
 use crate::errors::{Result, ToolError};
 use crate::storage::rel::dialect::{Assign, ColumnType, Dialect, Upsert};
 use crate::storage::rel::schema::{Column, ColumnMigration, Index, SchemaSet, Table};
@@ -142,6 +143,9 @@ const DOC_IMAGE_COLS: [&str; 12] = [
     "caption_line",
     "ocr_text",
 ];
+
+/// Every column of `doc_headings`, in the order its rows are copied.
+const DOC_HEADING_COLS: [&str; 6] = ["volume_id", "set_id", "seq", "level", "title", "page"];
 
 /// A fresh node revision: a node insert, path change or byte write calls this.
 fn new_rev() -> String {
@@ -1133,6 +1137,177 @@ impl RelationalMetaStore {
         tx.commit().await
     }
 
+    /// What the current artifact set of `path` weighs, 0 with none (SPEC-0105
+    /// DEC-007): the figure a copy of the document adds to the session write
+    /// allowance. Four indexed reads of the set's rows, linear in their size.
+    pub(crate) async fn artifact_set_weight(&self, path: &str) -> Result<i64> {
+        let Some(set_id) = self.current_artifact_set(path).await? else { return Ok(0) };
+        let volume = self.volume_id.as_str();
+        let by_set = |sql: &str| Query::new(sql).bind(volume).bind(set_id.as_str());
+        let images = self
+            .db
+            .query(&by_set(
+                "SELECT size, caption, ocr_text FROM doc_images WHERE volume_id=?1 AND set_id=?2",
+            ))
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(ImageWeight { size: r.i64(0)?, caption: r.text(1)?, ocr_text: r.opt_text(2)? })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let tables = self
+            .db
+            .query(&by_set(
+                "SELECT csv_text, cells, caption FROM doc_tables WHERE volume_id=?1 AND set_id=?2",
+            ))
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(TableWeight { csv_text: r.opt_text(0)?, cells: r.text(1)?, caption: r.text(2)? })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let titles = self
+            .db
+            .query(&by_set("SELECT title FROM doc_headings WHERE volume_id=?1 AND set_id=?2"))
+            .await?
+            .iter()
+            .try_fold(0i64, |sum, r| Ok::<_, ToolError>(sum + r.text(0)?.len() as i64))?;
+        let text_len = self
+            .db
+            .query_opt(&by_set(
+                "SELECT text_len FROM doc_artifact_sets WHERE volume_id=?1 AND set_id=?2",
+            ))
+            .await?
+            .map_or(Ok(0), |r| r.i64(0))?;
+        Ok(weight::of_rows(&images, &tables, titles, text_len))
+    }
+
+    /// Give each destination of `pairs` (source, destination) its own copy of
+    /// the source's current artifact set, in one transaction (SPEC-0105 DEC-008):
+    /// a new set id, the destination path and the destination node's present
+    /// revision, copies of the image, table and heading rows, one reference per
+    /// image blob and one for the text blob. The sets the destination had are
+    /// marked superseded and the destination pointer is replaced. A source with
+    /// no current set is skipped, so the destination is left with none. Returns
+    /// the number of sets made. Time: a handful of statements per pair, the row
+    /// copies done by the engine.
+    pub(crate) async fn copy_artifact_sets(&self, pairs: &[(String, String)]) -> Result<usize> {
+        let dialect = self.db.dialect();
+        let volume = self.volume_id.as_str();
+        let now = now_unix() as i64;
+        let mut tx = self.db.begin().await?;
+        let mut made = 0;
+        for (src, dst) in pairs {
+            let source = tx
+                .query_opt(
+                    &Query::new(
+                        "SELECT c.set_id, s.text_sha, s.text_len, s.report, s.note \
+                         FROM doc_artifact_current c \
+                         JOIN nodes n ON n.volume_id=c.volume_id AND n.path=c.path \
+                         JOIN doc_artifact_sets s ON s.volume_id=c.volume_id AND s.set_id=c.set_id \
+                         WHERE c.volume_id=?1 AND c.path=?2 AND n.rev=c.node_rev",
+                    )
+                    .bind(volume)
+                    .bind(src),
+                )
+                .await?;
+            // Read the destination's revision after the file landed: a copy made
+            // earlier would hold a revision the next write replaces.
+            let rev = tx_node_rev(&mut *tx, volume, dst).await?;
+            tx.execute(
+                &Query::new(
+                    "UPDATE doc_artifact_sets SET superseded_at=?1 \
+                     WHERE volume_id=?2 AND path=?3 AND superseded_at IS NULL",
+                )
+                .bind(now)
+                .bind(volume)
+                .bind(dst),
+            )
+            .await?;
+            let Some(source) = source else {
+                tx.execute(
+                    &Query::new("DELETE FROM doc_artifact_current WHERE volume_id=?1 AND path=?2")
+                        .bind(volume)
+                        .bind(dst),
+                )
+                .await?;
+                continue;
+            };
+            let Some(rev) = rev else { return Err(changed_during_conversion(dst)) };
+            let old_id = source.text(0)?;
+            let text_sha = source.opt_text(1)?;
+            let text_len = source.i64(2)?;
+            let new_id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                &Query::new(
+                    "INSERT INTO doc_artifact_sets (volume_id, set_id, path, node_rev, text_sha, \
+                     text_len, report, superseded_at, created_at, note) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                )
+                .bind(volume)
+                .bind(&new_id)
+                .bind(dst)
+                .bind(&rev)
+                .bind(text_sha.clone())
+                .bind(text_len)
+                .bind(source.text(3)?)
+                .bind(None::<i64>)
+                .bind(now)
+                .bind(source.opt_text(4)?),
+            )
+            .await?;
+            for (table, cols) in [
+                ("doc_tables", &DOC_TABLE_COLS[..]),
+                ("doc_images", &DOC_IMAGE_COLS[..]),
+                ("doc_headings", &DOC_HEADING_COLS[..]),
+            ] {
+                // The id is cast so PostgreSQL does not meet an untyped parameter
+                // in a select list.
+                let select = cols
+                    .iter()
+                    .map(|c| if *c == "set_id" { "CAST(?2 AS TEXT)" } else { c })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                tx.execute(
+                    &Query::new(format!(
+                        "INSERT INTO {table} ({}) SELECT {select} FROM {table} \
+                         WHERE volume_id=?1 AND set_id=?3",
+                        cols.join(", ")
+                    ))
+                    .bind(volume)
+                    .bind(&new_id)
+                    .bind(&old_id),
+                )
+                .await?;
+            }
+            let pictures = tx
+                .query(
+                    &Query::new(
+                        "SELECT sha256, size FROM doc_images WHERE volume_id=?1 AND set_id=?2",
+                    )
+                    .bind(volume)
+                    .bind(&new_id),
+                )
+                .await?;
+            for r in &pictures {
+                tx_incref(&mut *tx, dialect, volume, Some(&r.text(0)?), r.i64(1)?).await?;
+            }
+            tx_incref(&mut *tx, dialect, volume, text_sha.as_deref(), text_len).await?;
+            let pointer = dialect.render_upsert(&Upsert::replace(
+                "doc_artifact_current",
+                vec!["volume_id", "path", "set_id", "node_rev", "updated_at"],
+                vec!["volume_id", "path"],
+            ));
+            tx.execute(
+                &Query::new(pointer).bind(volume).bind(dst).bind(&new_id).bind(&rev).bind(now),
+            )
+            .await?;
+            made += 1;
+        }
+        tx.commit().await?;
+        Ok(made)
+    }
+
     /// Refuse when `path` no longer carries `rev`, a missing node included
     /// (FR-NEW-035). Run under the artifact lock before a conversion charges
     /// or writes anything, so an overtaken conversion leaves nothing behind.
@@ -1838,6 +2013,9 @@ async fn tx_delete_sets_under(
 /// Move `src` (and its subtree) to `dst` inside the caller's transaction. Shared
 /// by `rename` and `rename_into_trash` so the move logic exists once (SPEC-0044
 /// DR-001). `sm` is the case exact selection of `src` and what lies below it (SPEC-0050).
+// The two carry flags are the only difference between a move and a move to the
+// trash; a settings struct would be built twice just to be read here.
+#[allow(clippy::too_many_arguments)]
 async fn tx_rename(
     tx: &mut dyn RelationalTx,
     dialect: Dialect,
@@ -1846,6 +2024,7 @@ async fn tx_rename(
     dst: &str,
     sm: &SubtreeMatch,
     carry_sets: bool,
+    carry_artifacts: bool,
 ) -> Result<()> {
     // Shortest path first, so a parent is renamed before its children and no
     // intermediate state collides with a row that has not moved yet.
@@ -1861,7 +2040,7 @@ async fn tx_rename(
     let rows = tx
         .query(
             &Query::new(format!(
-                "SELECT path FROM nodes WHERE volume_id=?1 AND (path=?2 OR {within}) \
+                "SELECT path, rev FROM nodes WHERE volume_id=?1 AND (path=?2 OR {within}) \
                  ORDER BY {order}(path)",
                 within = sm.clause("path", 3, 4),
             ))
@@ -1871,11 +2050,13 @@ async fn tx_rename(
             .bind(&sm.prefix),
         )
         .await?;
-    let paths: Vec<String> = rows.iter().map(|r| r.text(0)).collect::<Result<_>>()?;
+    let paths: Vec<(String, String)> =
+        rows.iter().map(|r| Ok((r.text(0)?, r.text(1)?))).collect::<Result<_>>()?;
 
-    for old in paths {
+    for (old, old_rev) in paths {
         let new =
             if old == src { dst.to_string() } else { format!("{}{}", dst, &old[src.len()..]) };
+        let rev = new_rev();
         tx.execute(
             &Query::new(
                 "UPDATE nodes SET path=?1, parent=?2, name=?3, rev=?4 \
@@ -1884,7 +2065,7 @@ async fn tx_rename(
             .bind(&new)
             .bind(PosixPath::parent_of(&new))
             .bind(PosixPath::name_of(&new))
-            .bind(new_rev())
+            .bind(&rev)
             .bind(volume)
             .bind(&old),
         )
@@ -1898,6 +2079,46 @@ async fn tx_rename(
                     .bind(&new)
                     .bind(volume)
                     .bind(&old),
+            )
+            .await?;
+        }
+        // SPEC-0105 DEC-002: the artifact rows are keyed by path and tied to the
+        // node revision (the reader join and the sweep both compare them), so a
+        // move rewrites both columns with the node's new revision or the sweep
+        // would delete the set. Only a set built from the node's current revision
+        // is carried: one a rewrite already invalidated must not come back to life
+        // under a fresh revision. The pointer at the new path goes first: the
+        // destination was empty, so only an overwrite can have left one there.
+        // Cost: three statements per moved node, each on an indexed path.
+        if carry_artifacts {
+            tx.execute(
+                &Query::new("DELETE FROM doc_artifact_current WHERE volume_id=?1 AND path=?2")
+                    .bind(volume)
+                    .bind(&new),
+            )
+            .await?;
+            tx.execute(
+                &Query::new(
+                    "UPDATE doc_artifact_sets SET path=?1, node_rev=?2 \
+                     WHERE volume_id=?3 AND path=?4 AND node_rev=?5 AND superseded_at IS NULL",
+                )
+                .bind(&new)
+                .bind(&rev)
+                .bind(volume)
+                .bind(&old)
+                .bind(&old_rev),
+            )
+            .await?;
+            tx.execute(
+                &Query::new(
+                    "UPDATE doc_artifact_current SET path=?1, node_rev=?2 \
+                     WHERE volume_id=?3 AND path=?4 AND node_rev=?5",
+                )
+                .bind(&new)
+                .bind(&rev)
+                .bind(volume)
+                .bind(&old)
+                .bind(&old_rev),
             )
             .await?;
         }
@@ -2459,7 +2680,12 @@ impl MetaBackend for RelationalMetaStore {
             let (volume, path) = (volume.clone(), path.clone());
             Box::pin(async move {
                 if let Some(kind) = tx_kind(tx, &volume, &path).await? {
-                    if kind != "dir" || !exist_ok {
+                    if kind != "dir" {
+                        return Err(ToolError::no_clobber(format!(
+                            "'{path}' already exists and is not a directory"
+                        )));
+                    }
+                    if !exist_ok {
                         return Err(ToolError::no_clobber(format!("'{path}' already exists")));
                     }
                     return Ok(());
@@ -2515,7 +2741,9 @@ impl MetaBackend for RelationalMetaStore {
         let (src, dst) = (src.to_string(), dst.to_string());
         run_retrying(&*self.db, move |tx| {
             let (volume, src, dst, sm) = (volume.clone(), src.clone(), dst.clone(), sm.clone());
-            Box::pin(async move { tx_rename(tx, dialect, &volume, &src, &dst, &sm, true).await })
+            Box::pin(
+                async move { tx_rename(tx, dialect, &volume, &src, &dst, &sm, true, true).await },
+            )
         })
         .await
     }
@@ -2530,10 +2758,11 @@ impl MetaBackend for RelationalMetaStore {
                 (volume.clone(), src.clone(), dst.clone(), sm.clone(), entry.clone());
             Box::pin(async move {
                 // One transaction: the row exists exactly when the move does.
-                // The sets go with the file: a restore brings back the file, and
-                // its next rebuild makes the sets again.
+                // Chunk sets go with the file (its next rebuild makes them
+                // again); the artifact sets stay with the trashed item, so a
+                // restore gives them back (SPEC-0105 DEC-003).
                 tx_delete_sets_under(tx, &volume, &src, &sm).await?;
-                tx_rename(tx, dialect, &volume, &src, &dst, &sm, false).await?;
+                tx_rename(tx, dialect, &volume, &src, &dst, &sm, false, true).await?;
                 insert_trash_entry(
                     tx,
                     &volume,

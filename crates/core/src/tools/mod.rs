@@ -50,6 +50,8 @@ mod archive_tar_bound_e2e;
 pub(crate) mod archive_testkit;
 pub(crate) mod artifacts;
 #[cfg(test)]
+mod artifacts_follow_e2e;
+#[cfg(test)]
 mod case_paths_e2e;
 pub mod catalog;
 pub(crate) mod chunks;

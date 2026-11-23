@@ -9,6 +9,7 @@ pub(crate) mod capture;
 pub(crate) mod headings;
 pub(crate) mod parse;
 pub(crate) mod render;
+pub(crate) mod weight;
 
 pub(crate) use render::{table_csv, table_markdown, width};
 

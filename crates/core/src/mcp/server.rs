@@ -2382,7 +2382,7 @@ impl McpServer {
     // ── lifecycle family ─────────────────────────────────────────────────────
 
     #[tool(name = "fs.mkdir", description = "Create a directory (parents by default).")]
-    async fn fs_mkdir(
+    pub(crate) async fn fs_mkdir(
         &self,
         Parameters(a): Parameters<MkdirArgs>,
     ) -> Result<CallToolResult, ErrorData> {

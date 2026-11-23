@@ -1638,17 +1638,17 @@ fn plain() -> Answer {
 }
 
 /// Counts the conversions asked of the converter it wraps.
-struct Counting<'a> {
+pub(crate) struct Counting<'a> {
     inner: &'a dyn DocService,
     calls: std::sync::atomic::AtomicUsize,
 }
 
 impl<'a> Counting<'a> {
-    fn new(inner: &'a dyn DocService) -> Self {
+    pub(crate) fn new(inner: &'a dyn DocService) -> Self {
         Self { inner, calls: 0.into() }
     }
 
-    fn calls(&self) -> usize {
+    pub(crate) fn calls(&self) -> usize {
         self.calls.load(std::sync::atomic::Ordering::SeqCst)
     }
 }

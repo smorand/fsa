@@ -25,8 +25,8 @@ use crate::git::oauth::persistence::RelationalOAuthPersistence;
 use crate::git::oauth::store::OAuthSession;
 use crate::storage::admin::{ROLE_OWNER, RelationalAdminStore};
 use crate::storage::meta::{
-    NewArtifactSet, NewDocImage, NewDocTable, RelationalMetaStore, delete_export_link_if_live,
-    insert_export_link, select_expired_export_links,
+    NewArtifactSet, NewDocHeading, NewDocImage, NewDocTable, RelationalMetaStore,
+    delete_export_link_if_live, insert_export_link, select_expired_export_links,
 };
 use crate::storage::rel::{RelationalDb, SqliteRelationalDb};
 use crate::storage::traits::{AdminBackend, IndexMode, MODE_FILE, MetaBackend, PurgeConfig};
@@ -881,6 +881,53 @@ fn doc_image_with_sha(seq: i64, page: Option<i64>, sha256: &str) -> NewDocImage 
     }
 }
 
+/// SPEC-0105 DEC-007, DEC-008: a copied set is a second, equal set with its own
+/// id and blob references, a copy over a path replaces its set, and the weight
+/// is the same on every engine.
+async fn artifact_sets_are_copied(engine: &Engine, tag: &str) -> Result<()> {
+    let who = engine.name();
+    let db = engine.db().await?;
+    let m = RelationalMetaStore::open(db, format!("{tag}-copy")).await?;
+    m.put_file("/a.pdf", Some("sha-a"), 3, MODE_FILE).await?;
+    let rev = m.ensure_node_rev("/a.pdf").await?.expect("a rev");
+    let set = NewArtifactSet {
+        set_id: format!("{tag}-copy1"),
+        path: "/a.pdf".into(),
+        node_rev: rev,
+        text_sha: Some("sha-ctext".into()),
+        text_len: 40,
+        report: "1 images, 1 tables".into(),
+        note: None,
+        images: vec![doc_image_with_sha(1, Some(1), "sha-cimg")],
+        tables: vec![doc_table(1, "Q")],
+        headings: vec![NewDocHeading { seq: 1, level: 1, title: "Title".into(), page: None }],
+    };
+    m.commit_artifact_set(&set).await?;
+    // Picture 7 + caption "cap 1 é 😀" 13, CSV "h1,h2\na,b" 9 + Markdown 35 + caption 1,
+    // title 5, text 40.
+    let weight = m.artifact_set_weight("/a.pdf").await?;
+    assert_eq!(weight, 7 + 13 + 9 + 35 + 1 + 5 + 40, "{who}: weight");
+
+    m.put_file("/b.pdf", Some("sha-b"), 3, MODE_FILE).await?;
+    let copied = m.copy_artifact_sets(&[("/a.pdf".into(), "/b.pdf".into())]).await?;
+    assert_eq!(copied, 1, "{who}: one set made");
+    let (a, b) = (m.current_artifact_set("/a.pdf").await?, m.current_artifact_set("/b.pdf").await?);
+    assert!(a.is_some() && b.is_some() && a != b, "{who}: two sets");
+    let b = b.expect("a set");
+    assert_eq!(m.list_artifact_images(&b, 10, 0).await?.len(), 1, "{who}: image rows copied");
+    assert_eq!(m.list_artifact_tables(&b, 10, 0).await?.len(), 1, "{who}: table rows copied");
+    assert_eq!(m.artifact_headings(&b, 10, 0).await?.len(), 1, "{who}: heading rows copied");
+    assert_eq!(m.artifact_set_weight("/b.pdf").await?, weight, "{who}: equal weight");
+    assert_eq!(m.blob_refcount_for_test("sha-cimg").await?, Some(2), "{who}: image ref");
+    assert_eq!(m.blob_refcount_for_test("sha-ctext").await?, Some(2), "{who}: text ref");
+
+    // A source with no current set leaves the destination with none.
+    m.put_file("/plain", Some("sha-p"), 1, MODE_FILE).await?;
+    assert_eq!(m.copy_artifact_sets(&[("/plain".into(), "/b.pdf".into())]).await?, 0);
+    assert_eq!(m.current_artifact_set("/b.pdf").await?, None, "{who}: replaced by none");
+    Ok(())
+}
+
 /// The artifact tables, the `nodes.rev` validity token and the current set
 /// pointer behave the same on every engine (DEC-002, DEC-003, DEC-008).
 async fn doc_artifacts_round_trip(engine: &Engine, tag: &str) -> Result<()> {
@@ -1277,6 +1324,7 @@ async fn run_suite(engine: &Engine) -> Result<()> {
     oauth_legacy_table_is_rebuilt_identically(engine, &tag).await?;
     export_links_round_trip(engine, &tag).await?;
     doc_artifacts_round_trip(engine, &tag).await?;
+    artifact_sets_are_copied(engine, &tag).await?;
     meta_schema_applies_twice(engine, &tag).await?;
     trash_timestamps_round_trip(engine, &tag).await?;
     rename_into_trash_is_atomic(engine, &tag).await?;

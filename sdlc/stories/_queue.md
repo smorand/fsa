@@ -301,3 +301,10 @@
 | US-0299 | SPEC-0104 | the text only view and the full view | US-0298 | 1 | landed | | |
 | US-0300 | SPEC-0104 | the structure and the view through the web interface | US-0299, US-0297 | 2 | landed | | |
 | US-0301 | SPEC-0104 | access, older documents, re-conversion and the docs | US-0300 | 2 | landed | | |
+| US-0302 | SPEC-0105 | artifacts follow a moved or renamed document or folder | main | 1 | landed | | |
+| US-0303 | SPEC-0105 | overwrite by move and the move onto itself refusal | US-0302 | 2 | landed | | |
+| US-0304 | SPEC-0105 | trash and restore keep the artifacts | US-0303 | 1 | landed | | |
+| US-0305 | SPEC-0105 | removal for good and the rules that still discard | US-0304 | 2 | landed | | |
+| US-0306 | SPEC-0105 | copy a converted document with its artifacts | US-0302 | 1 | landed | | |
+| US-0307 | SPEC-0105 | copy a folder of converted documents | US-0306 | 2 | landed | | |
+| US-0308 | SPEC-0105 | non members, no converter call, audit and the docs | US-0307 | 2 | landed | | |

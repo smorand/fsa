@@ -1310,6 +1310,17 @@ pub async fn move_path(
     if !client.exists(src).await? {
         return Err(ToolError::not_found(format!("'{src}' does not exist")));
     }
+    // Before the overwrite deletes the destination: onto, into or over an ancestor of the
+    // source would destroy the source itself (SPEC-0105 DEC-006). A path prefix with a `/`
+    // boundary, so `/ab` is not inside `/a`; `/` is an ancestor of everything.
+    let under = |inner: &str, outer: &str| {
+        outer == "/" || inner.strip_prefix(outer).is_some_and(|rest| rest.starts_with('/'))
+    };
+    if src == dst || under(dst, src) || under(src, dst) {
+        return Err(ToolError::invalid_argument(format!(
+            "'{src}' cannot be moved onto or into itself"
+        )));
+    }
     if client.exists(dst).await? {
         if !overwrite {
             return Err(ToolError::no_clobber(format!("'{dst}' exists (pass overwrite=true)")));
@@ -1330,8 +1341,8 @@ pub async fn move_path(
 }
 
 /// Copy a file or, with `recursive`, a whole tree. Keys: `source`, `destination`.
-/// A folder copy charges nothing to the session budget, as in the C#
-/// original (FR-NEW-006); both branches still check the project limit once
+/// A folder copy charges its files nothing to the session budget, as in the C#
+/// original (FR-NEW-006), only the artifacts of its documents; both branches still check the project limit once
 /// for their total net change before writing anything (FR-NEW-007).
 pub async fn copy_path(
     client: &VolumeClient,
@@ -1355,30 +1366,97 @@ pub async fn copy_path(
                 "'{src}' is a directory (pass recursive=true)"
             )));
         }
-        let nodes = client.meta.subtree(src).await?;
-        let targets: Vec<(String, i64)> = nodes
-            .iter()
-            .filter(|n| !n.is_dir())
-            .map(|n| {
-                let rel = &n.path[src.len()..];
-                let target = if rel.is_empty() { dst.to_string() } else { format!("{dst}{rel}") };
-                (target, n.size)
-            })
-            .collect();
-        let _admission = quota::admit_paths(client, safety, person, mount_id, 0, &targets).await?;
-        client.copy_tree(src, dst).await?;
-        client.touch_atime_mtime(dst);
+        copy_folder(client, safety, person, mount_id, src, dst).await?;
     } else {
-        let data = client.read_bytes(src).await?;
-        let _admission =
-            quota::admit_file(client, safety, person, mount_id, dst, data.len() as i64).await?;
-        // No explicit makedirs: the metadata store creates missing parents on
-        // put_file, exactly like the C# path.
-        client.write_bytes_atomic(dst, &data).await?;
-        client.touch_atime_mtime(dst);
+        copy_file(client, safety, person, mount_id, src, dst).await?;
     }
     safety.record_audit(person, mount_id, "copy", src, &format!("-> {dst}"));
     Ok(json!({ "source": src, "destination": dst }))
+}
+
+/// The folder branch of [`copy_path`] (SPEC-0105 DEC-009, DEC-011). Every pair
+/// comes from one snapshot of the source tree, so a folder copied into itself
+/// copies each document once, and a merge onto an existing folder gives a
+/// destination with a counterpart the counterpart's set (or none) while the
+/// other destination files stay. The files charge nothing to the session; the
+/// artifacts charge their total weight in one amount, before anything is
+/// written, so a copy that does not fit keeps nothing. Time: O(n) files, one
+/// weight query per file.
+async fn copy_folder(
+    client: &VolumeClient,
+    safety: &SafetyManager,
+    person: &str,
+    mount_id: &str,
+    src: &str,
+    dst: &str,
+) -> Result<()> {
+    let nodes = client.meta.subtree(src).await?;
+    let mut targets: Vec<(String, i64)> = Vec::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut weight = 0i64;
+    for n in nodes.iter().filter(|n| !n.is_dir()) {
+        let rel = &n.path[src.len()..];
+        let target = if rel.is_empty() { dst.to_string() } else { format!("{dst}{rel}") };
+        if let Some(store) = &client.trash {
+            weight = weight.saturating_add(store.artifact_set_weight(&n.path).await?);
+            pairs.push((n.path.clone(), target.clone()));
+        }
+        targets.push((target, n.size));
+    }
+    let _admission = quota::admit_paths(client, safety, person, mount_id, weight, &targets).await?;
+    // A folder copied onto itself rewrites nothing, like a file onto itself: a
+    // rewrite would renew every revision and hide the artifacts it means to keep.
+    if src != dst {
+        client.copy_tree(src, dst).await?;
+        client.touch_atime_mtime(dst);
+        if let Some(store) = &client.trash {
+            // The files are written and cannot be undone (they may have replaced
+            // others): the error is reported as it is and no set is made.
+            store.copy_artifact_sets(&pairs).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The single file branch of [`copy_path`] (SPEC-0105 DEC-009, DEC-010): the copy
+/// of a converted document brings its own artifact set, charged to the session
+/// allowance with the file and refused with it before anything is written. A
+/// file copied onto itself is not rewritten, since a new revision would hide its
+/// artifacts, but is charged as a copy.
+async fn copy_file(
+    client: &VolumeClient,
+    safety: &SafetyManager,
+    person: &str,
+    mount_id: &str,
+    src: &str,
+    dst: &str,
+) -> Result<()> {
+    let data = client.read_bytes(src).await?;
+    let len = data.len() as i64;
+    let weight = match &client.trash {
+        Some(store) => store.artifact_set_weight(src).await?,
+        None => 0,
+    };
+    let existed = client.exists(dst).await?;
+    let _admission =
+        quota::admit_file_with(client, safety, person, mount_id, dst, len, weight).await?;
+    // No explicit makedirs: the metadata store creates missing parents on
+    // put_file, exactly like the C# path.
+    if src != dst {
+        client.write_bytes_atomic(dst, &data).await?;
+    }
+    client.touch_atime_mtime(dst);
+    let Some(store) = &client.trash else { return Ok(()) };
+    if let Err(e) = store.copy_artifact_sets(&[(src.to_string(), dst.to_string())]).await {
+        // Keep nothing of a copy whose artifacts failed: a file that did not
+        // exist before goes, and the whole charge is given back. An overwrite
+        // cannot be undone, so the error is reported as it is.
+        if !existed && client.delete_file(dst).await.is_ok() {
+            safety.refund_write(person, mount_id, len.saturating_add(weight));
+        }
+        return Err(e);
+    }
+    Ok(())
 }
 
 // ──────────────────────────────────────────────────────────────── helpers ─────

@@ -246,7 +246,7 @@ async fn load_image(
 ) -> Result<(DocImage, Vec<u8>)> {
     let client = state.stores.client(mount_id).await?;
     ensure_file(&client, path).await?;
-    let (store, set_id) = current_set(&client, path).await?;
+    let (store, set_id) = current_set(&client, path, &state.safety.config().trash_dir).await?;
     let not_found = || ToolError::not_found(format!("Not found: {id}"));
     let seq = artifact_seq("image-", id).ok_or_else(not_found)?;
     let image = store.artifact_image(&set_id, seq).await?.ok_or_else(not_found)?;
@@ -284,7 +284,7 @@ async fn current_page(
         Some(raw) => decode_marker(raw, mount_id, kind, path)?,
         None => 0,
     };
-    let (store, set_id) = current_set(&client, path).await?;
+    let (store, set_id) = current_set(&client, path, &state.safety.config().trash_dir).await?;
     Ok((store, set_id, offset))
 }
 
@@ -302,7 +302,13 @@ async fn ensure_file(client: &VolumeClient, path: &str) -> Result<()> {
 async fn current_set(
     client: &VolumeClient,
     path: &str,
+    trash_dir: &str,
 ) -> Result<(Arc<RelationalMetaStore>, String)> {
+    // A trashed item keeps its sets, readable only after the restore
+    // (SPEC-0105 DEC-004).
+    if path.starts_with(&format!("/{}/", trash_dir.trim_matches('/'))) {
+        return Err(ToolError::not_found(NO_ARTIFACTS));
+    }
     let store = client
         .trash
         .clone()
@@ -370,7 +376,7 @@ pub(crate) async fn get_table(
     let client = state.stores.client(mount_id).await?;
     ensure_file(&client, path).await?;
     let format = TableFormat::parse(format)?;
-    let (store, set_id) = current_set(&client, path).await?;
+    let (store, set_id) = current_set(&client, path, &state.safety.config().trash_dir).await?;
     let not_found = || ToolError::not_found(format!("Not found: {id}"));
     let seq = artifact_seq("table-", id).ok_or_else(not_found)?;
     let raw = store.artifact_table_cells(&set_id, seq).await?.ok_or_else(not_found)?;
@@ -410,7 +416,7 @@ pub(crate) async fn document_view(
     // stated one (DEC-005); the table mode is checked whatever the view.
     let view = View::parse(view)?;
     let mode = TableMode::parse(table_mode)?;
-    let (store, set_id) = current_set(&client, path).await?;
+    let (store, set_id) = current_set(&client, path, &state.safety.config().trash_dir).await?;
     let text = match store.artifact_text_sha(&set_id).await? {
         Some(sha) => String::from_utf8(client.blob.get(&sha, 0, None).await?)
             .map_err(|e| ToolError::internal(format!("stored conversion text: {e}")))?,
@@ -3842,56 +3848,63 @@ mod e2e {
         report_ids(&images(&server, "/report.pdf", None).await);
     }
 
-    /// SPEC-0019/E2E-087: a moved document has no artifacts until it is
-    /// converted again at its new path (FR-NEW-011, FR-NEW-001).
+    /// SPEC-0019/E2E-087, rewritten by SPEC-0105 DEC-014 (FR-MOD-001): a moved
+    /// document keeps its artifacts at the new path, and converting it again
+    /// there still works.
     #[tokio::test]
-    async fn spec_0019_e2e_087_a_moved_document_converts_again() {
+    async fn spec_0019_e2e_087_a_moved_document_keeps_its_artifacts() {
         let (_f, server, _) = report_with_images().await;
         move_to(&server, "/report.pdf", "/archive/r.pdf").await;
-        no_artifacts(&server, "/archive/r.pdf").await;
+        report_ids(&images(&server, "/archive/r.pdf", None).await);
         convert(&server, "/archive/r.pdf").await;
         report_ids(&images(&server, "/archive/r.pdf", None).await);
     }
 
-    /// SPEC-0019/E2E-088: after a move the new path has no artifacts and the
-    /// old one is not a file (FR-NEW-011, FR-NEW-028).
+    /// SPEC-0019/E2E-088, rewritten by SPEC-0105 DEC-014 (FR-MOD-001): after a
+    /// move the artifacts are at the new path and the old one is not a file.
     #[tokio::test]
-    async fn spec_0019_e2e_088_a_move_leaves_no_artifacts_on_either_path() {
+    async fn spec_0019_e2e_088_a_move_carries_the_artifacts_to_the_new_path() {
         let (_f, server, _) = report_with_images().await;
         move_to(&server, "/report.pdf", "/b.pdf").await;
-        no_artifacts(&server, "/b.pdf").await;
+        report_ids(&images(&server, "/b.pdf", None).await);
         let err = err_text(
             server.fs_list_images(Parameters(list_images_args("/report.pdf", None))).await,
         );
         assert!(err.contains("not a file: /report.pdf"), "got: {err}");
     }
 
-    /// SPEC-0019/E2E-089: a copy starts with no artifacts, the source keeps
-    /// its own (FR-NEW-012).
+    /// SPEC-0019/E2E-089, rewritten by SPEC-0105 DEC-014 (FR-MOD-002): a copy has
+    /// its own artifacts, equal to the source's, which keeps its own.
     #[tokio::test]
-    async fn spec_0019_e2e_089_a_copy_has_no_artifacts() {
+    async fn spec_0019_e2e_089_a_copy_has_its_own_artifacts() {
         let (_f, server, _) = report_with_images().await;
         copy_to(&server, "/report.pdf", "/copy.pdf", false).await;
-        no_artifacts(&server, "/copy.pdf").await;
+        report_ids(&images(&server, "/copy.pdf", None).await);
         report_ids(&images(&server, "/report.pdf", None).await);
     }
 
-    /// FR-NEW-012: the copy is charged the file bytes only, never the
-    /// source's artifacts.
+    /// Rewritten by SPEC-0105 DEC-014 (FR-MOD-002, FR-NEW-003): the copy is
+    /// charged the file bytes and the weight of the artifacts it brings.
     #[tokio::test]
-    async fn a_copy_is_charged_the_file_bytes_only() {
+    async fn a_copy_is_charged_the_file_bytes_and_its_artifacts() {
         let (f, server, _) = report_with_images().await;
+        let weight = {
+            let c = f.state.stores.client(PROJECT).await.unwrap();
+            c.trash.as_ref().unwrap().artifact_set_weight("/report.pdf").await.unwrap()
+        };
+        assert!(weight > 0);
         let before = f.state.safety.bytes_written(ALICE, PROJECT);
         copy_to(&server, "/report.pdf", "/copy.pdf", false).await;
         let size = b"%PDF-1.4 source".len() as i64;
-        assert_eq!(f.state.safety.bytes_written(ALICE, PROJECT) - before, size);
+        assert_eq!(f.state.safety.bytes_written(ALICE, PROJECT) - before, size + weight);
     }
 
-    /// SPEC-0019/E2E-090: a document deleted to the trash and restored has
-    /// no artifacts (FR-NEW-011).
+    /// SPEC-0019/E2E-090, updated by SPEC-0105 DEC-014: a document deleted to
+    /// the trash and restored keeps its artifacts (FR-NEW-007, FR-NEW-008).
     #[tokio::test]
-    async fn spec_0019_e2e_090_trash_and_restore_discards_the_artifacts() {
+    async fn spec_0019_e2e_090_trash_and_restore_keeps_the_artifacts() {
         let (_f, server, _) = report_with_images().await;
+        let before = images(&server, "/report.pdf", None).await;
         let args = DeleteArgs {
             mount_id: PROJECT.into(),
             path: "/report.pdf".into(),
@@ -3902,7 +3915,7 @@ mod e2e {
         let trash_path = out["trash_path"].as_str().expect("a trash path").to_string();
         let restore = TrashRestoreArgs { mount_id: PROJECT.into(), trash_path };
         ok_json(server.fs_trash_restore(Parameters(restore)).await);
-        no_artifacts(&server, "/report.pdf").await;
+        assert_eq!(images(&server, "/report.pdf", None).await, before);
     }
 
     /// SPEC-0019/E2E-091: writing the same bytes again discards the
@@ -3914,10 +3927,10 @@ mod e2e {
         no_artifacts(&server, "/report.pdf").await;
     }
 
-    /// SPEC-0019/E2E-093: another document copied over the converted one
-    /// leaves no artifacts (FR-NEW-011, FR-NEW-012).
+    /// SPEC-0019/E2E-093, rewritten by SPEC-0105 DEC-014 (FR-MOD-002, FR-NEW-006):
+    /// a plain document copied over the converted one leaves it no artifacts.
     #[tokio::test]
-    async fn spec_0019_e2e_093_a_copy_over_the_document_discards_the_artifacts() {
+    async fn spec_0019_e2e_093_a_copy_over_the_document_replaces_the_artifacts() {
         let (f, server, _) = report_with_images().await;
         put(&f, "/notes.pdf", b"%PDF-1.4 notes").await;
         copy_to(&server, "/notes.pdf", "/report.pdf", true).await;
@@ -3944,15 +3957,15 @@ mod e2e {
         no_artifacts(&server, "/report.pdf").await;
     }
 
-    /// SPEC-0019/E2E-095: moving the folder holding the document discards
-    /// its artifacts (FR-NEW-011).
+    /// SPEC-0019/E2E-095, rewritten by SPEC-0105 DEC-014 (FR-MOD-001): moving
+    /// the folder holding the document carries its artifacts.
     #[tokio::test]
-    async fn spec_0019_e2e_095_a_moved_folder_discards_the_artifacts() {
+    async fn spec_0019_e2e_095_a_moved_folder_carries_the_artifacts() {
         let (f, server) = converting_bundle("/q1/report.pdf", report_bundle()).await;
         convert(&server, "/q1/report.pdf").await;
         report_ids(&images(&server, "/q1/report.pdf", None).await);
         move_to(&server, "/q1", "/archive").await;
-        no_artifacts(&server, "/archive/report.pdf").await;
+        report_ids(&images(&server, "/archive/report.pdf", None).await);
         drop(f);
     }
 
@@ -3965,14 +3978,14 @@ mod e2e {
         report_ids(&images(&server, "/report.pdf", None).await);
     }
 
-    /// SPEC-0019/E2E-097: a move away and back discards the artifacts
-    /// (FR-NEW-011).
+    /// SPEC-0019/E2E-097, rewritten by SPEC-0105 DEC-014 (FR-MOD-001): a move
+    /// away and back keeps the artifacts.
     #[tokio::test]
-    async fn spec_0019_e2e_097_away_and_back_discards_the_artifacts() {
+    async fn spec_0019_e2e_097_away_and_back_keeps_the_artifacts() {
         let (_f, server, _) = report_with_images().await;
         move_to(&server, "/report.pdf", "/b.pdf").await;
         move_to(&server, "/b.pdf", "/report.pdf").await;
-        no_artifacts(&server, "/report.pdf").await;
+        report_ids(&images(&server, "/report.pdf", None).await);
     }
 
     /// SPEC-0019/E2E-108: an in place edit discards the artifacts
@@ -4324,10 +4337,11 @@ mod e2e {
         assert_eq!(entries[0]["original_path"], json!("/report.pdf"));
     }
 
-    /// SPEC-0019/E2E-099: copying a converted document charges only its file
-    /// bytes, never its artifact bytes (FR-NEW-012, FR-NEW-013).
+    /// SPEC-0019/E2E-099, rewritten by SPEC-0105 DEC-014 (FR-MOD-002, FR-NEW-003):
+    /// copying a converted document charges its file bytes and the weight of its
+    /// artifacts to the session allowance, never the artifacts to the project.
     #[tokio::test]
-    async fn spec_0019_e2e_099_a_copy_charges_only_the_file_bytes() {
+    async fn spec_0019_e2e_099_a_copy_charges_the_file_and_its_artifacts() {
         let (f, _) = setup(Some(1_000_000)).await;
         let pixels = vec![7u8; 200_000];
         let conversion = bundle(
@@ -4338,20 +4352,20 @@ mod e2e {
         let small = vec![9u8; 5_000];
         put(&f, "/small.pdf", &small).await;
         convert(&server, "/small.pdf").await;
+        let weight = {
+            let c = f.state.stores.client(PROJECT).await.unwrap();
+            c.trash.as_ref().unwrap().artifact_set_weight("/small.pdf").await.unwrap()
+        };
+        assert!(weight > 200_000, "the picture alone weighs 200 000: {weight}");
 
-        // Pin the remaining session quota to exactly 10 000 bytes, whatever
-        // the setup write and the conversion itself already charged.
-        f.state.safety.refund_write(ALICE, PROJECT, 10_000_000);
-        f.state.safety.charge_write(ALICE, PROJECT, 990_000).unwrap();
+        // Pin the remaining session quota to exactly the copy plus 1 000 bytes,
+        // whatever the setup write and the conversion itself already charged.
+        let left = f.state.safety.session_remaining(ALICE, PROJECT);
+        f.state.safety.charge_write(ALICE, PROJECT, left - (5_000 + weight + 1_000)).unwrap();
 
         copy_to(&server, "/small.pdf", "/c.pdf", false).await;
-        let write = write_args("/new.bin", &vec![1u8; 4_000], false);
-        ok_json(server.fs_write_bytes(Parameters(write)).await);
+        assert_eq!(f.state.safety.session_remaining(ALICE, PROJECT), 1_000);
 
-        // The copy charged only `small.pdf`'s 5 000 file bytes (never the
-        // artifact bytes), so 10 000 - 5 000 - 4 000 leaves exactly 1 000
-        // bytes of session quota remaining: a 1 000 byte write succeeds, and
-        // one more byte is refused.
         let fits = write_args("/fits.bin", &vec![2u8; 1_000], false);
         ok_json(server.fs_write_bytes(Parameters(fits)).await);
 

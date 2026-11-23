@@ -66,6 +66,7 @@ The same registry is served by the `/api/admin/{providers,models,defaults,settin
 `/app/models` browser screen (`models_screen.rs`, SPEC-0102 US-0289). Tests: `cargo test -p fsa-core --lib -- e2e_0102_`.
 Converter manifest version 2 tests (SPEC-0103, `docs/manifest_e2e.rs`): `cargo test -p fsa-core --lib -- e2e_0103_`.
 Read tools of the document metadata (SPEC-0104, `tools/read_metadata_e2e.rs`): `cargo test -p fsa-core --lib -- e2e_0104_` (OCR text on the image reads, `fs.get_document_structure`, the `view` argument, the `image-file` download, access and older documents).
+Artifacts follow their document (SPEC-0105, `tools/artifacts_follow_e2e.rs`): a move, copy, trash and restore keep or copy the images, tables, headings and conversion text, never call the converter; `cargo test -p fsa-core --lib -- e2e_0105_`. Details in `.agent_docs/architecture.md`.
 
 ## Key commands
 ```

@@ -278,7 +278,11 @@ byte identical payloads:
 
 Lists page by 100; the continuation marker is valid for its project, list and document,
 for any member. A document changed since its conversion has no artifacts until it is
-converted again. The set is charged to the session write quota together with the sibling,
+converted again. Artifacts follow their document: a move or rename (a folder too), a trash
+and a restore keep them, a copy gives the copy its own set, and none of these calls the
+converter. A copy adds the artifacts' weight to the session write allowance and is refused
+whole when it does not fit. A move onto, into or over an ancestor of itself is refused.
+Tests: `cargo test -p fsa-core --lib -- e2e_0105_`. The set is charged to the session write quota together with the sibling,
 before anything is written; artifacts are not files and never show in listings or exports.
 A converter that writes no manifest yields images without page or caption and tables with an
 approximate CSV; the real `doc-convert` emits PNG only and deduplicates identical figures.

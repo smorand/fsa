@@ -54,7 +54,7 @@ pub async fn sweep_project_files(
 /// reading the wall clock, so a test can pin the staleness threshold to the
 /// exact instant it seeded fixture data against (avoids wall-clock drift
 /// between seeding and sweeping on a boundary test).
-async fn sweep_project_files_at(
+pub(crate) async fn sweep_project_files_at(
     now: f64,
     client: &VolumeClient,
     admin: &dyn AdminBackend,
@@ -300,7 +300,7 @@ async fn sweep_project_artifacts(client: &VolumeClient) -> Result<usize> {
 
 /// Same as [`sweep_project_artifacts`], but with an explicit `now`, for the
 /// same boundary-test reason as [`sweep_project_files_at`].
-async fn sweep_project_artifacts_at(now: i64, client: &VolumeClient) -> Result<usize> {
+pub(crate) async fn sweep_project_artifacts_at(now: i64, client: &VolumeClient) -> Result<usize> {
     let Some(store) = client.trash.as_deref() else { return Ok(0) };
     let (sets_swept, gc) =
         store.sweep_stale_artifact_sets(now, ARTIFACT_SWEEP_GRACE_SECONDS).await?;
@@ -2013,14 +2013,15 @@ mod tests {
         image_sha
     }
 
-    /// Independent Test (US-0013): convert `/report.pdf`, move it, run
-    /// `run_cycle`, and observe the stale set's blob references gone.
+    /// Independent Test (US-0013), rewritten by SPEC-0105 (a move now carries
+    /// the set, so a rewrite is what orphans it): convert `/report.pdf`, rewrite
+    /// it, run `run_cycle`, and observe the stale set's blob references gone.
     #[tokio::test]
-    async fn e2e_new_independent_run_cycle_sweeps_a_set_orphaned_by_a_move() {
+    async fn e2e_new_independent_run_cycle_sweeps_a_set_orphaned_by_a_rewrite() {
         let f = export_fixture().await;
         let image_sha = convert(&f, "/report.pdf", b"%PDF-1.4").await;
         let client = f.stores.client("proj").await.unwrap();
-        client.rename("/report.pdf", "/moved.pdf").await.unwrap();
+        client.write_bytes_atomic("/report.pdf", b"%PDF-1.4 rewritten").await.unwrap();
 
         let summary = run_cycle(&f.stores, &f.admin, &f.safety, None).await.unwrap();
 

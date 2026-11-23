@@ -161,6 +161,21 @@ The images and tables a conversion keeps live in four meta tables, every row key
   (one quota charge). The commit is one transaction: refuse when the node rev moved
   (`Document changed during conversion`), mark the previous set superseded, insert the new
   set and its rows, replace the pointer. A reader that resolved the old set keeps reading it.
+* **Artifacts follow their document (SPEC-0105, 2026-11-26).** `tx_rename` (`storage/meta.rs`),
+  shared by move and trash, rewrites `doc_artifact_sets.path` and `node_rev` and the pointer
+  `doc_artifact_current` to the node's new `rev`, inside the rename transaction, only for a set
+  whose `node_rev` equals the node's old `rev` and that is not superseded (a set a rewrite already
+  invalidated stays dead). The pointer at the destination is deleted first, so an overwrite keeps
+  no old pointer; the old set is then swept. Cost: three indexed statements per moved node. Trash
+  keeps the sets (the trash path carries them), restore carries them back, so the sweep sees a
+  matching revision. Removal for good relies on the sweep: no write path touches the artifact
+  tables. A copy (`copy_artifact_sets`, one transaction) makes a new set per destination with the
+  destination's revision and its own blob references; its `artifact_set_weight` (images with
+  caption and OCR text, tables CSV and Markdown, headings, conversion text) is admitted with the
+  file bytes (`admit_file_with` extra session bytes, `admit_paths` for a folder) so a refusal
+  precedes every write. `fs_ops::move_path` refuses a move onto, into or above itself before the
+  overwrite deletes the destination. No operation calls the converter; chunk sets and the audit
+  log keep their rules (a restore writes no audit entry). Tests: `e2e_0105_`.
 * **Per path lock.** `lock_artifacts(path)` orders overlapping conversions of one document,
   so the one committing last also wrote the sibling. Ordinary writers take no lock.
 * **Sweep.** `purge::run_cycle` calls `sweep_stale_artifact_sets`: a set superseded for more
