@@ -2,7 +2,7 @@
 
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
-multi-project filesystem** (136 tools: 53 `fs.*`, 29 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
+multi-project filesystem** (146 tools: 53 `fs.*`, 39 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
 + 4 `search.*` when search enabled),
 a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger UI at
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
@@ -58,6 +58,8 @@ result whose file changed meanwhile, and records every job in the admin table `d
 one chunk set (kind `chunks`, optional `set_id`, SPEC-0101); engine
 `tools/derived.rs`, MCP only. Details in `.agent_docs/search.md`, "Rebuild scheduler".
 
+Document converters set up by an administrator (SPEC-0106, `settings/converter*.rs`, `converters_screen.rs`): the ten `admin.*converter*` tools (platform admin only), `/api/admin/{converters,converter-default,projects/{id}/converter}` and the `/app/converters` screen. A conversion resolves the project converter, then the platform default, then the `doc_service` converter of the file (unchanged, validated at start, `AppState::doc_service_for`). Secrets are write only, http converters never follow a redirect, failure texts redact the secret. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`. Details in `.agent_docs/architecture.md`, "Document converters registry".
+
 Platform settings live in the admin store (SPEC-0102, `settings/`): model providers and their models (`admin.create_model`, `update_model`, `delete_model`, `list_models`) with write only
 secrets encrypted under `FSA_TOKEN_KEY` (checked at boot: a malformed key stops `serve`), and the record
 of changes (`setting_change`). `settings::Registry` is the one implementation; the `admin.*_provider`, `admin.*_model`
@@ -88,6 +90,7 @@ cargo test -p fsa-core --lib --features rar -- e2e_0080_  the `.rar` extraction 
 cargo test -p fsa-core --lib --features rar -- e2e_0087_ api::dataplane tool_contract   the truncated RAR tests (SPEC-0087)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0089_ api::dataplane tool_contract --test-threads=1   the PDF and converter bound tests (SPEC-0089)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
+cargo test -p fsa-core --lib -- e2e_0106_   the document converter registry tests (SPEC-0106, settings/converters_e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0100_   the settle delay rebuild tests (SPEC-0100, paused clock, search/derived_e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0101_   the chunk set tests (SPEC-0101, paused clock, chunking/e2e.rs)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0094_ --test-threads=1   the damaged PDF page tests (SPEC-0094; 21 tests in tools/damage_e2e.rs, E2E-009 waits 1100 ms of real time)
@@ -121,7 +124,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   wrapping `mcp::server::McpServer`, `LocalSessionManager` + `legacy_session_mode: true` so
   `initialize` is mandatory; see `.agent_docs/architecture.md` for the exact wire shapes), `/health`.
 - `mcp/` : `server.rs` only — `McpServer`, one `#[tool]` method per entry in `TOOL_CONTRACT.txt`
-  (136 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
+  (146 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
   calls, never reimplementing an operation. The hand-rolled JSON-RPC/SSE framing layer this module
   used to own (`ToolRegistry`/`ToolSchema`/`Args`/`ToolHandler`) is gone (SPEC-0013); what remains
   of that machinery lives at `tools::registry_support`, kept only because `Args`/`ToolCtx` are the
@@ -179,7 +182,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   (the real logic, called directly by `mcp::server::McpServer`'s `#[tool]` methods and by the
   REST plane); `register(&mut ToolRegistry)` survives only as `#[cfg(test)]`-gated glue for the
   shared test harness, except the five optional families (`web`/`context7`/`sqlite`/`db`/`doc`,
-  off by default, not part of the 136-tool contract), whose `register()`/`catalog()` are genuine
+  off by default, not part of the 146-tool contract), whose `register()`/`catalog()` are genuine
   production code backing `/api/swagger.json`. `catalog.rs` holds the transport-agnostic
   `ToolCatalogEntry` shape; `all.rs` has the now-test-only `register_all`. `trash.rs` holds
   `fs.trash_list`/`fs.trash_restore` (SPEC-0011): the backfill of untracked trash nodes into
@@ -252,7 +255,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   `mcp.rs` (stateless JSON-RPC, fuzzy tool name resolution), `llm.rs` (OpenAI compatible
   streaming with tool calling), `input.rs` (wrap aware line editor), `ui.rs` (markdown to
   ANSI), `spinner.rs`, `session.rs`. Config: `config/agent_test.yaml`.
-- `TOOL_CONTRACT.txt` : the 136 tool schemas and return shapes, human readable. **This is
+- `TOOL_CONTRACT.txt` : the 146 tool schemas and return shapes, human readable. **This is
   the authoritative contract.**
 - `tool-contract-golden.json` : the same contract, machine checked. Three tests compare
   every name, description and `inputSchema` against it, serialized, so a reordered schema
@@ -327,7 +330,7 @@ The backlog is the `backlog/` directory: one `BL-NNNN_slug.md` file per item.
 ## Documentation index
 - `.agent_docs/architecture.md` : storage model, project usage and quota admission, document
   artifact store, request lifecycle, safety, error logging.
-- `.agent_docs/tools.md` : the 136 tool reference (families, parameters, authorization).
+- `.agent_docs/tools.md` : the 146 tool reference (families, parameters, authorization).
 - `.agent_docs/api.md` : the `/api/fs` REST plane and the OpenAPI single source of truth.
 - `.agent_docs/git.md` : git objects in the blob store, HTTP smart protocol, the
   `git.hosts` host map, OAuth/PAT tokens (per person+host), the remote pipeline

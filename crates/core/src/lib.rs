@@ -13,6 +13,7 @@ pub mod app;
 pub mod chunking;
 pub mod cli;
 pub mod config;
+pub mod converters_screen;
 pub mod core;
 pub mod deleted_projects_screen;
 pub mod docs;

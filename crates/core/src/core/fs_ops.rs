@@ -647,6 +647,7 @@ pub async fn write_bytes_documented(
     let service = if documentation {
         let service = ensure_documentable(doc, norm)?;
         ensure_input_size(service, norm, data.len())?;
+        service.preflight()?;
         Some(service)
     } else {
         None
@@ -710,6 +711,7 @@ pub async fn documentize(
     let service = ensure_documentable(doc, norm)?;
     let data = client.read_bytes(norm).await?;
     ensure_input_size(service, norm, data.len())?;
+    service.preflight()?;
     ensure_well_formed(norm, &data)?;
     client.touch_atime(norm);
 

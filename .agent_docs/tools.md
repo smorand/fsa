@@ -1,4 +1,4 @@
-# Tool reference (136 tools)
+# Tool reference (146 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -633,6 +633,16 @@ BL-0153 (no total across cross reference streams).
 | `admin.clear_default_model` | remove the server default of a kind; a kind with none answers the same and writes no record | `kind` | `cleared: true` | !D,!RO,I,!OW | admin; the kind text |
 | `admin.get_default_models` | the server default of each kind | (none) | `text_embedding` and `reranker`, each a model or null | RO,I,!OW | admin |
 | `admin.list_setting_changes` | the record of changes, newest first (`change_id` descending), 100 per answer; a refused or no op change writes nothing; a secret appears as the field name `secret` only | `marker=""` | `changes[{change_id (chg- plus 12 digits), at, person (lower case), action, target_kind, target_id, target_name, fields[]}]`, `marker` | RO,I,!OW | admin; `marker is not valid` |
+| `admin.create_converter` | register a document converter (SPEC-0106, US-0309: the `program` form; the `http` form is refused with `ERR_NOT_SUPPORTED` until US-0310); every input is untyped and checked by `settings/converter_rules.rs`, `null` equals omitted | `name`, `form` (`program` or `http`), `command` (list of texts, `{document}` once, `{outdir}` at most once), `extensions?`, `max_input_bytes?` (default 536870912), `timeout_seconds?` (default 900); the http fields `url`, `auth_header`, `secret`, `file_field`, `response_field` are refused on a program converter, an empty text included | `converter_id` (`conv-` plus 12 hex), `name`, `form`, `command`, `url`, `auth_header`, `has_secret`, `file_field`, `response_field`, `extensions`, `max_input_bytes`, `timeout_seconds`, `created_at`, `updated_at` (null for a field of the other form) | !D,!RO,!I,!OW | admin first; then `name must be 1 to 64 characters`, `a converter named '<name>' already exists`, `form must be 'program' or 'http'`, `command must be a list of text arguments`, `command is required for a program converter`, the two placeholder counts, `<field> is not valid for a program converter`; recorded as `create_converter` |
+| `admin.update_converter` | change a converter, never its form (SPEC-0106, US-0312); a field not given keeps its value, a blank `secret` keeps the stored one, `clear_secret` removes it; the creation checks run on the converter after the update; an answer sent back is accepted | `converter_id`, the creation fields but `form` (given only with the stored value), `clear_secret?` (untyped, boolean) | the converter, as `admin.create_converter` (a no op returns it unchanged, `updated_at` included) | !D,!RO,I,!OW | admin first; `converter not found: <id>`, `form cannot be changed`, `converter_id in the body does not match`, `secret and clear_secret cannot be given together`, `clear_secret is not valid for a program converter`, `clear_secret must be true or false`, then the creation texts; recorded as `update_converter` with the field names, no value |
+| `admin.list_converters` | converters by name without regard to case, 100 per answer (SPEC-0106) | `marker` (untyped, `null` or empty reads the first page) | `converters[]`, `marker` (`null` on the last page) | RO,I,!OW | admin first; `marker is not valid` |
+| `admin.delete_converter` | delete a converter and its secret (SPEC-0106, US-0314) | `converter_id` | `converter_id` | D,!RO,!I,!OW | admin first; `converter not found: <id>`; `converter '<name>' is the platform default`; `converter '<name>' is used by <n> project(s)` (a project in its grace period counts); recorded as `delete_converter` |
+| `admin.set_default_converter` | make a converter the platform default (SPEC-0106, US-0313; one row in `converter_default`) | `converter_id` | `converter` | !D,!RO,I,!OW | admin first; `converter not found: <id>`; recorded as `set_default_converter` (target kind `default_converter`), none when it is already the default |
+| `admin.clear_default_converter` | remove the platform default | none | `converter: null` | !D,!RO,I,!OW | admin first; recorded as `clear_default_converter`, none when no default was set |
+| `admin.get_default_converter` | read the platform default | none | `converter` or null | RO,I,!OW | admin first |
+| `admin.set_project_converter` | make a converter the converter of a project (`project.converter_id`); a soft removed project included, kept over a restore, dropped with a removal for good; gives no file access | `project_id`, `converter_id` | `project_id`, `converter` | !D,!RO,I,!OW | admin first; `project '<id>' not found` before `converter not found: <id>`; recorded as `set_project_converter` (target kind `project_converter`, id the project), none when unchanged |
+| `admin.clear_project_converter` | remove the converter of a project, which then uses the default | `project_id` | `project_id`, `converter: null` | !D,!RO,I,!OW | admin first; `project '<id>' not found`; recorded as `clear_project_converter`, none when none was set |
+| `admin.get_project_converter` | read the converter of a project | `project_id` | `project_id`, `converter` or null | RO,I,!OW | admin first; `project '<id>' not found` |
 | `admin.get_project_quota` | read a project's limit and current usage, trashed files included (SPEC-0020); also `GET /api/admin/projects/{project_id}/quota` | `project_id` | `project_id`, `max_mb` (null when unlimited), `used_bytes` | RO,I,!OW | admin or owner; a non admin gets the owner refusal even for a missing project |
 
 2026-10-12 (SPEC-0020): the limit refuses every growing `fs.*`/`git.*` operation on its net change with `ERR_PROJECT_QUOTA_EXCEEDED` (`project storage quota of <N> MB exceeded: <U> bytes used, <W> bytes requested`, HTTP 507), before the session quota. Moves, trash, restore, aborts and pushes are never checked; a limit below usage removes nothing.
@@ -782,11 +792,11 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 82 (53 `fs.*`, 29 `admin.*`) |
-| git flag on | 136 |
-| git and search flags on | 140 |
-| every flag, pandoc on `PATH` | 162 (160 without pandoc: `doc.*` registers nothing) |
-| one optional family alone | 82 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
+| default | 92 (53 `fs.*`, 39 `admin.*`) |
+| git flag on | 146 |
+| git and search flags on | 150 |
+| every flag, pandoc on `PATH` | 171 (169 without pandoc: `doc.*` registers nothing) |
+| one optional family alone | 92 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
 `#[tool]` methods: `add_optional_families` in `mcp/server.rs` runs each enabled
@@ -852,5 +862,12 @@ Observed while hardening the extraction paths; none is a reported defect, all ar
 ## Registry tools and the models screen (SPEC-0102, 2026-11-22)
 
 The 12 registry tools (`admin.create_provider` to `admin.list_setting_changes`) are platform admin only, reading
-included, and count in the 29 `admin.*` tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
+included, and count in the 39 `admin.*` tools, with the ten SPEC-0106 converter tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
 screen `/app/models` calls the same functions of `tools/models.rs`. No tool logs an argument; a secret is a `SecretText`.
+
+## Document converters (SPEC-0106)
+
+The ten `admin.*converter*` tools above are platform administrator only, reading included, and nothing in
+them gives file access. Resolution at conversion time is project, then platform default, then the
+configuration file converter; see `architecture.md` "Document converters registry". The secret is write
+only (`secret`, `clear_secret`), answers carry `has_secret`. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`.

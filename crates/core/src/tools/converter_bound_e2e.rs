@@ -788,16 +788,29 @@ async fn e2e_0089_036_web_answer_one_byte_over_the_converte() {
 async fn e2e_0089_043_web_failure_status_with_a_huge_body() {
     let _heavy = heavy().await;
     let f = converter_fixture().await;
-    let (url, sent) = web(500, "text/plain", "upstream broke", b'x', GIB, "").await;
-    let svc = api(url);
+    // SPEC-0106 FR-MOD-001: the answer quotes the converter's token, which the
+    // failure text now shows as `[redacted]`.
+    let (url, sent) = web(500, "text/plain", "upstream broke tok-SECRET-123 ", b'x', GIB, "").await;
+    let svc = ApiDocService::new(
+        &crate::config::DocServiceApiConfig {
+            url,
+            timeout_secs: 600,
+            auth_token: crate::config::Secret::new("tok-SECRET-123"),
+            ..Default::default()
+        },
+        vec![".pptx".into(), ".docx".into()],
+        CAP,
+    )
+    .unwrap();
     held_reset();
 
     let v = ask(&f, &svc, OWNER, "/docs/deck.pptx", false).await;
 
     let Err(e) = &v else { panic!("the conversion must be refused: {v:?}") };
     assert_eq!(e.code, code::INTERNAL_ERROR, "{e:?}");
+    assert!(!e.message.contains("tok-SECRET-123"), "{}", e.message);
     assert!(
-        e.message.starts_with("document service returned HTTP 500: upstream broke"),
+        e.message.starts_with("document service returned HTTP 500: upstream broke [redacted] "),
         "{}",
         e.message
     );

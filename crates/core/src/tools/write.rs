@@ -137,10 +137,15 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
                         "argument 'base64' is not valid base64: {e}"
                     ))
                 })?;
+            let doc = if a.bool_or("trigger_documentation_service", false) {
+                ctx.state.doc_service_for(&mount).await?
+            } else {
+                None
+            };
             let out = fs_ops::write_bytes_documented(
                 &client,
                 &ctx.state.safety,
-                ctx.state.doc_service.as_deref(),
+                doc.as_deref(),
                 &ctx.person,
                 &mount,
                 &path,

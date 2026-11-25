@@ -20,7 +20,7 @@ const MODEL_NAME_MAX: usize = 128;
 const ENDPOINT_MAX: usize = 2048;
 const SECRET_MAX: usize = 4096;
 
-fn now() -> String {
+pub(super) fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
@@ -93,7 +93,7 @@ fn duplicate(name: &str) -> ToolError {
 }
 
 /// What a change record names.
-struct Target<'a> {
+pub(super) struct Target<'a> {
     kind: &'static str,
     id: &'a str,
     name: &'a str,
@@ -106,6 +106,14 @@ impl<'a> Target<'a> {
 
     fn model(m: &'a Model) -> Self {
         Self { kind: "model", id: &m.model_id, name: &m.name }
+    }
+
+    pub(super) fn of(kind: &'static str, id: &'a str, name: &'a str) -> Self {
+        Self { kind, id, name }
+    }
+
+    pub(super) fn converter(c: &'a super::converter::Converter) -> Self {
+        Self { kind: "converter", id: &c.converter_id, name: &c.name }
     }
 }
 
@@ -167,8 +175,8 @@ fn model_duplicate(name: &str, provider: &str) -> ToolError {
 }
 
 pub struct Registry {
-    store: SettingsStore,
-    key: Option<[u8; 32]>,
+    pub(super) store: SettingsStore,
+    pub(super) key: Option<[u8; 32]>,
     /// `config.search.embedding.dimensions`: the width of the stored vectors,
     /// which a default text embedding model must match (DEC-012).
     vector_dimension: u32,
@@ -192,7 +200,7 @@ impl Registry {
     /// A primary key conflict between two concurrent writers (the change id or
     /// the name) surfaces as an internal error; one retry reads the new state,
     /// where the name check then answers in words (DEC-004).
-    fn retry(attempt: usize, e: &ToolError) -> bool {
+    pub(super) fn retry(attempt: usize, e: &ToolError) -> bool {
         attempt == 0 && e.code == code::INTERNAL_ERROR
     }
 
@@ -651,7 +659,12 @@ impl Registry {
         Ok(Page { items: rows, marker })
     }
 
-    async fn record(
+    /// The newest `limit` changes of the given target kinds, newest first.
+    pub async fn list_changes_of_kinds(&self, kinds: &[&str], limit: usize) -> Result<Vec<Change>> {
+        self.store.list_changes_of_kinds(kinds, limit).await
+    }
+
+    pub(super) async fn record(
         &self,
         tx: &mut Box<dyn crate::storage::rel::RelationalTx>,
         person: &str,

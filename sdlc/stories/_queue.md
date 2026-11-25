@@ -308,3 +308,16 @@
 | US-0306 | SPEC-0105 | copy a converted document with its artifacts | US-0302 | 1 | landed | | |
 | US-0307 | SPEC-0105 | copy a folder of converted documents | US-0306 | 2 | landed | | |
 | US-0308 | SPEC-0105 | non members, no converter call, audit and the docs | US-0307 | 2 | landed | | |
+| US-0309 | SPEC-0106 | create and list program converters | main | 1 | landed | | |
+| US-0310 | SPEC-0106 | http converters and their encrypted secret | US-0309 | 1 | landed | | |
+| US-0311 | SPEC-0106 | extensions, answer cap, timeout and value types | US-0310 | 2 | landed | | |
+| US-0312 | SPEC-0106 | update a converter | US-0311 | 2 | landed | | |
+| US-0313 | SPEC-0106 | the platform default and the converter of a project | US-0312 | 1 | landed | | |
+| US-0314 | SPEC-0106 | delete a converter | US-0313 | 2 | landed | | |
+| US-0315 | SPEC-0106 | a conversion uses the resolved converter | US-0314 | 1 | landed | | |
+| US-0316 | SPEC-0106 | extensions, size cap, unreadable secret and batch behavior | US-0315 | 1 | landed | | |
+| US-0317 | SPEC-0106 | arguments stay literal, secrets stay hidden, no redirect | US-0316 | 1 | landed | | |
+| US-0318 | SPEC-0106 | reading the record of converter changes | US-0317 | 2 | landed | | |
+| US-0319 | SPEC-0106 | the web routes for converters | US-0318 | 2 | landed | | |
+| US-0320 | SPEC-0106 | the converters screen | US-0319 | 2 | landed | | |
+| US-0321 | SPEC-0106 | the journey, the upgrade and the docs | US-0320 | 2 | landed | | |

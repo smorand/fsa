@@ -1613,6 +1613,111 @@ pub struct UpdateProviderArgs {
     pub clear_secret: bool,
 }
 
+// SPEC-0106 DEC-004: every input is an untyped value, so the rule module words
+// a wrong type itself, and `null` equals omitted. No `Debug`: `secret` would print.
+#[derive(Deserialize, JsonSchema)]
+pub struct CreateConverterArgs {
+    /// Name of the converter, 1 to 64 characters, unique without regard to case.
+    #[serde(default)]
+    pub name: Option<serde_json::Value>,
+    /// Form of the converter: 'program' or 'http'.
+    #[serde(default)]
+    pub form: Option<serde_json::Value>,
+    /// Program form: the command as a list of text arguments, holding '{document}' exactly once and '{outdir}' at most once. Never run through a shell.
+    #[serde(default)]
+    pub command: Option<serde_json::Value>,
+    /// Http form: the http or https address the document is sent to.
+    #[serde(default)]
+    pub url: Option<serde_json::Value>,
+    /// Http form: the header carrying the secret. Default Authorization.
+    #[serde(default)]
+    pub auth_header: Option<serde_json::Value>,
+    /// Http form: the value of the auth_header header, stored encrypted. Never returned.
+    #[serde(default)]
+    pub secret: Option<serde_json::Value>,
+    /// Http form: the form field holding the document. Default file.
+    #[serde(default)]
+    pub file_field: Option<serde_json::Value>,
+    /// Http form: the field of a JSON answer holding the Markdown; empty means the whole answer.
+    #[serde(default)]
+    pub response_field: Option<serde_json::Value>,
+    /// Accepted extensions without a dot, up to 64 names of 1 to 16 letters or digits; empty means the built in document list.
+    #[serde(default)]
+    pub extensions: Option<serde_json::Value>,
+    /// Largest document and answer in bytes, 1 to 4294967296. Default 536870912.
+    #[serde(default)]
+    pub max_input_bytes: Option<serde_json::Value>,
+    /// Longest conversion in seconds, 1 to 86400. Default 900.
+    #[serde(default)]
+    pub timeout_seconds: Option<serde_json::Value>,
+}
+
+/// The creation fields but `form`, which an answer sent back may still carry;
+/// the fields of an answer that are not input (`has_secret`, `created_at`,
+/// `updated_at`) are ignored by the parser. No `Debug`: `secret` would print.
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateConverterArgs {
+    /// Id of the converter to change.
+    pub converter_id: String,
+    /// New name, 1 to 64 characters, unique without regard to case.
+    #[serde(default)]
+    pub name: Option<serde_json::Value>,
+    /// The form the converter has; it cannot be changed.
+    #[serde(default)]
+    pub form: Option<serde_json::Value>,
+    /// Program form: the new command, a list of text arguments, holding '{document}' exactly once and '{outdir}' at most once.
+    #[serde(default)]
+    pub command: Option<serde_json::Value>,
+    /// Http form: the new http or https address.
+    #[serde(default)]
+    pub url: Option<serde_json::Value>,
+    /// Http form: the new header carrying the secret.
+    #[serde(default)]
+    pub auth_header: Option<serde_json::Value>,
+    /// Http form: the new secret, stored encrypted; empty or not given keeps the stored one. Never returned.
+    #[serde(default)]
+    pub secret: Option<serde_json::Value>,
+    /// Http form: the new form field holding the document.
+    #[serde(default)]
+    pub file_field: Option<serde_json::Value>,
+    /// Http form: the new field of a JSON answer holding the Markdown.
+    #[serde(default)]
+    pub response_field: Option<serde_json::Value>,
+    /// New accepted extensions without a dot, up to 64 names of 1 to 16 letters or digits.
+    #[serde(default)]
+    pub extensions: Option<serde_json::Value>,
+    /// New largest document and answer in bytes, 1 to 4294967296.
+    #[serde(default)]
+    pub max_input_bytes: Option<serde_json::Value>,
+    /// New longest conversion in seconds, 1 to 86400.
+    #[serde(default)]
+    pub timeout_seconds: Option<serde_json::Value>,
+    /// True removes the stored secret of an http converter. Default false.
+    #[serde(default)]
+    pub clear_secret: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListConvertersArgs {
+    /// The marker of the previous answer, to read the next page.
+    #[serde(default)]
+    pub marker: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetDefaultConverterArgs {
+    /// Id of the converter.
+    pub converter_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetProjectConverterArgs {
+    /// Id of the project.
+    pub project_id: String,
+    /// Id of the converter.
+    pub converter_id: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProviderIdArgs {
     /// Id of the provider to delete.
@@ -2044,10 +2149,15 @@ impl McpServer {
                         "argument 'base64' is not valid base64: {e}"
                     ))
                 })?;
+            let doc = if a.trigger_documentation_service {
+                self.state.doc_service_for(&a.mount_id).await?
+            } else {
+                None
+            };
             let res = fs_ops::write_bytes_documented(
                 &client,
                 &self.state.safety,
-                self.state.doc_service.as_deref(),
+                doc.as_deref(),
                 &self.person,
                 &a.mount_id,
                 &path,
@@ -2962,10 +3072,11 @@ impl McpServer {
         let out = async {
             let client = self.volume(&a.mount_id).await?;
             let path = self.norm(&a.path)?;
+            let doc = self.state.doc_service_for(&a.mount_id).await?;
             let res = fs_ops::documentize(
                 &client,
                 &self.state.safety,
-                self.state.doc_service.as_deref(),
+                doc.as_deref(),
                 &self.person,
                 &a.mount_id,
                 &path,
@@ -3474,6 +3585,181 @@ impl McpServer {
     ) -> Result<CallToolResult, ErrorData> {
         let out = crate::tools::models::list_providers(&self.state, &self.person, &a.marker).await;
         to_call_result("admin.list_providers", out)
+    }
+
+    #[tool(
+        name = "admin.create_converter",
+        description = "Register a document converter: a name and a form, 'program' (a command, a list of arguments holding {document} once and {outdir} at most once, never run through a shell) or 'http' (an address, an optional header and secret stored encrypted and never returned), with optional accepted extensions, answer cap in bytes and timeout in seconds (platform admin only)."
+    )]
+    pub(crate) async fn admin_create_converter(
+        &self,
+        Parameters(a): Parameters<CreateConverterArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let input = crate::settings::ConverterInput {
+            name: a.name,
+            form: a.form,
+            command: a.command,
+            url: a.url,
+            auth_header: a.auth_header,
+            secret: a.secret,
+            file_field: a.file_field,
+            response_field: a.response_field,
+            extensions: a.extensions,
+            max_input_bytes: a.max_input_bytes,
+            timeout_seconds: a.timeout_seconds,
+            ..Default::default()
+        };
+        let out =
+            crate::tools::converters::create_converter(&self.state, &self.person, input).await;
+        to_call_result("admin.create_converter", out)
+    }
+
+    #[tool(
+        name = "admin.update_converter",
+        description = "Change the fields given of a document converter, never its form; a field not given keeps its value; a secret not given or blank keeps the stored one, clear_secret removes it (platform admin only)."
+    )]
+    pub(crate) async fn admin_update_converter(
+        &self,
+        Parameters(a): Parameters<UpdateConverterArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let input = crate::settings::ConverterInput {
+            name: a.name,
+            form: a.form,
+            command: a.command,
+            url: a.url,
+            auth_header: a.auth_header,
+            secret: a.secret,
+            file_field: a.file_field,
+            response_field: a.response_field,
+            extensions: a.extensions,
+            max_input_bytes: a.max_input_bytes,
+            timeout_seconds: a.timeout_seconds,
+            clear_secret: a.clear_secret,
+            converter_id: None,
+        };
+        let out = crate::tools::converters::update_converter(
+            &self.state,
+            &self.person,
+            &a.converter_id,
+            input,
+        )
+        .await;
+        to_call_result("admin.update_converter", out)
+    }
+
+    #[tool(
+        name = "admin.list_converters",
+        description = "List the document converters ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only)."
+    )]
+    pub(crate) async fn admin_list_converters(
+        &self,
+        Parameters(a): Parameters<ListConvertersArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::converters::list_converters(&self.state, &self.person, a.marker).await;
+        to_call_result("admin.list_converters", out)
+    }
+
+    #[tool(
+        name = "admin.set_default_converter",
+        description = "Make a document converter the platform default, used by every project that has no converter of its own (platform admin only)."
+    )]
+    pub(crate) async fn admin_set_default_converter(
+        &self,
+        Parameters(a): Parameters<SetDefaultConverterArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::converters::set_default_converter(
+            &self.state,
+            &self.person,
+            &a.converter_id,
+        )
+        .await;
+        to_call_result("admin.set_default_converter", out)
+    }
+
+    #[tool(
+        name = "admin.delete_converter",
+        description = "Delete a document converter and its secret, unless it is the platform default or the converter of a project (platform admin only)."
+    )]
+    pub(crate) async fn admin_delete_converter(
+        &self,
+        Parameters(a): Parameters<SetDefaultConverterArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::converters::delete_converter(&self.state, &self.person, &a.converter_id)
+                .await;
+        to_call_result("admin.delete_converter", out)
+    }
+
+    #[tool(
+        name = "admin.clear_default_converter",
+        description = "Remove the platform default converter; answers converter null (platform admin only)."
+    )]
+    pub(crate) async fn admin_clear_default_converter(&self) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::converters::clear_default_converter(&self.state, &self.person).await;
+        to_call_result("admin.clear_default_converter", out)
+    }
+
+    #[tool(
+        name = "admin.get_default_converter",
+        description = "Read the platform default converter, null when none is set (platform admin only)."
+    )]
+    pub(crate) async fn admin_get_default_converter(&self) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::converters::get_default_converter(&self.state, &self.person).await;
+        to_call_result("admin.get_default_converter", out)
+    }
+
+    #[tool(
+        name = "admin.set_project_converter",
+        description = "Make a document converter the converter of a project, a project in its grace period included; gives no access to the files of the project (platform admin only)."
+    )]
+    pub(crate) async fn admin_set_project_converter(
+        &self,
+        Parameters(a): Parameters<SetProjectConverterArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::converters::set_project_converter(
+            &self.state,
+            &self.person,
+            &a.project_id,
+            &a.converter_id,
+        )
+        .await;
+        to_call_result("admin.set_project_converter", out)
+    }
+
+    #[tool(
+        name = "admin.clear_project_converter",
+        description = "Remove the converter of a project, which then uses the platform default; answers converter null (platform admin only)."
+    )]
+    pub(crate) async fn admin_clear_project_converter(
+        &self,
+        Parameters(a): Parameters<ProjectIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::converters::clear_project_converter(
+            &self.state,
+            &self.person,
+            &a.project_id,
+        )
+        .await;
+        to_call_result("admin.clear_project_converter", out)
+    }
+
+    #[tool(
+        name = "admin.get_project_converter",
+        description = "Read the converter of a project, null when it has none (platform admin only)."
+    )]
+    pub(crate) async fn admin_get_project_converter(
+        &self,
+        Parameters(a): Parameters<ProjectIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::converters::get_project_converter(
+            &self.state,
+            &self.person,
+            &a.project_id,
+        )
+        .await;
+        to_call_result("admin.get_project_converter", out)
     }
 
     #[tool(
@@ -4584,11 +4870,13 @@ mod tests {
         // fs 50, total 125; fs.create_chunk_set and fs.delete_chunk_set: fs 52, total 127.
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
         // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
+        // SPEC-0106 US-0309 adds admin.create_converter and admin.list_converters: admin 31, total 142. US-0312 adds admin.update_converter: admin 32, total 143.
+        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150.
         assert_eq!(fs_count, 53, "got: {names:?}");
-        assert_eq!(admin_count, 29, "got: {names:?}");
+        assert_eq!(admin_count, 39, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 140, "got: {names:?}");
+        assert_eq!(names.len(), 150, "got: {names:?}");
     }
 
     #[test]
@@ -4925,7 +5213,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 136, "the frozen contract covers 136 non-search tools");
+        assert_eq!(checked, 146, "the frozen contract covers 146 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -4946,8 +5234,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 136, "got: {names:?}");
-        assert_eq!(expected.len(), 136, "the golden contract itself must hold 136 names");
+        assert_eq!(names.len(), 146, "got: {names:?}");
+        assert_eq!(expected.len(), 146, "the golden contract itself must hold 146 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

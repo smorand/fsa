@@ -3,11 +3,26 @@ admin.add_member
   params: project_id:string, person:string
   required: ['project_id', 'person']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.clear_default_converter
+  desc: Remove the platform default converter; answers converter null (platform admin only).
+  params: (none)
+  required: []
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.clear_default_model
   desc: Remove the server default of a kind, text_embedding or reranker; a kind with no default is not an error (platform admin only).
   params: kind:string
   required: ['kind']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.clear_project_converter
+  desc: Remove the converter of a project, which then uses the platform default; answers converter null (platform admin only).
+  params: project_id:string
+  required: ['project_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.create_converter
+  desc: Register a document converter: a name and a form, 'program' (a command, a list of arguments holding {document} once and {outdir} at most once, never run through a shell) or 'http' (an address, an optional header and secret stored encrypted and never returned), with optional accepted extensions, answer cap in bytes and timeout in seconds (platform admin only).
+  params: name:<untyped>=null, form:<untyped>=null, command:<untyped>=null, url:<untyped>=null, auth_header:<untyped>=null, secret:<untyped>=null, file_field:<untyped>=null, response_field:<untyped>=null, extensions:<untyped>=null, max_input_bytes:<untyped>=null, timeout_seconds:<untyped>=null
+  required: []
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 admin.create_model
   desc: Register a model of a provider: a name, a kind (text_embedding, image_embedding, reranker, ocr or chat), for the embedding kinds a dimension, and optionally a limit of input tokens (platform admin only).
   params: provider_id:string, name:string, kind:string, dimension:integer=null, max_input_tokens:integer=null
@@ -23,6 +38,11 @@ admin.create_provider
   params: name:string, endpoint:string, auth_scheme:string="none", secret:string=""
   required: ['name', 'endpoint']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.delete_converter
+  desc: Delete a document converter and its secret, unless it is the platform default or the converter of a project (platform admin only).
+  params: converter_id:string
+  required: ['converter_id']
+  annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=false, openWorldHint=false
 admin.delete_model
   desc: Delete a model that is not a server default (platform admin only).
   params: model_id:string
@@ -38,6 +58,11 @@ admin.delete_provider
   params: provider_id:string
   required: ['provider_id']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.get_default_converter
+  desc: Read the platform default converter, null when none is set (platform admin only).
+  params: (none)
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.get_default_models
   desc: Read the server default text embedding model and the server default reranker, null for a kind with none (platform admin only).
   params: (none)
@@ -45,6 +70,11 @@ admin.get_default_models
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.get_index_mode
   desc: Get the current search index mode for a project (member or platform admin).
+  params: project_id:string
+  required: ['project_id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.get_project_converter
+  desc: Read the converter of a project, null when it has none (platform admin only).
   params: project_id:string
   required: ['project_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
@@ -66,6 +96,11 @@ admin.get_project_quota
 admin.list_all_projects
   desc: List every project (platform admin only).
   params: (none)
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.list_converters
+  desc: List the document converters ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only).
+  params: marker:<untyped>=null
   required: []
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.list_deleted_projects
@@ -108,6 +143,11 @@ admin.remove_member
   params: project_id:string, person:string
   required: ['project_id', 'person']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.set_default_converter
+  desc: Make a document converter the platform default, used by every project that has no converter of its own (platform admin only).
+  params: converter_id:string
+  required: ['converter_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.set_default_model
   desc: Make a model the server default of its kind, text_embedding or reranker, replacing the previous default; a text embedding model must have the dimension of the vector store (platform admin only).
   params: kind:string, model_id:string
@@ -118,6 +158,11 @@ admin.set_index_mode
   params: project_id:string, mode:string
   required: ['project_id', 'mode']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.set_project_converter
+  desc: Make a document converter the converter of a project, a project in its grace period included; gives no access to the files of the project (platform admin only).
+  params: project_id:string, converter_id:string
+  required: ['project_id', 'converter_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.set_project_quota
   desc: Set or clear a project's maximum storage size in megabytes (platform admin only). max_mb absent or null clears the quota (unlimited); max_mb must be > 0 when present. Lowering the quota below current usage is accepted and evicts nothing.
   params: project_id:string, max_mb:number|null
@@ -133,6 +178,11 @@ admin.undelete_project
   params: project_id:string
   required: ['project_id']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
+admin.update_converter
+  desc: Change the fields given of a document converter, never its form; a field not given keeps its value; a secret not given or blank keeps the stored one, clear_secret removes it (platform admin only).
+  params: converter_id:string, name:<untyped>=null, form:<untyped>=null, command:<untyped>=null, url:<untyped>=null, auth_header:<untyped>=null, secret:<untyped>=null, file_field:<untyped>=null, response_field:<untyped>=null, extensions:<untyped>=null, max_input_bytes:<untyped>=null, timeout_seconds:<untyped>=null, clear_secret:<untyped>=null
+  required: ['converter_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.update_model
   desc: Change the name, the dimension or the input token limit of a model; a field not given keeps its value; max_input_tokens 0 removes the limit (platform admin only).
   params: model_id:string, name:string=null, dimension:integer=null, max_input_tokens:integer=null
@@ -841,6 +891,16 @@ admin.get_index_mode: {"project_id": "parity-probe", "index_mode": "bm25"}
 admin.get_project_quota: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234}
 admin.get_project_disk_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "file_count": 1, "truncated": false, "entries": [{"path": "/a.txt", "size": 1234, "state": "Active", "original_path": null}]}
 admin.get_project_folder_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "folder": {"path": "/", "size": 1234, "file_count": 1}, "item_count": 1, "truncated": false, "items": [{"path": "/a.txt", "kind": "File", "size": 1234}]}
+admin.create_converter: {"converter_id": "conv-0123456789ab", "name": "Pandoc local", "form": "program", "command": ["pandoc-convert", "--out", "{outdir}", "{document}"], "url": null, "auth_header": null, "has_secret": false, "file_field": null, "response_field": null, "extensions": [], "max_input_bytes": 536870912, "timeout_seconds": 900, "created_at": "2026-11-24T10:00:00Z", "updated_at": "2026-11-24T10:00:00Z"} (a field of the other form is null; the secret is never returned)
+admin.update_converter: the converter, as admin.create_converter, with its id and form kept (an update that changes nothing returns it unchanged, updated_at included; an answer sent back as an update is accepted)
+admin.list_converters: {"converters": [<converter>, ...], "marker": "<opaque>"|null} (null on the last page)
+admin.set_default_converter: {"converter": <converter>} (setting the current default again writes no record)
+admin.clear_default_converter: {"converter": null} (also when none was set)
+admin.get_default_converter: {"converter": <converter>|null}
+admin.set_project_converter: {"project_id": "parity-probe", "converter": <converter>} (a project in its grace period included)
+admin.clear_project_converter: {"project_id": "parity-probe", "converter": null} (also when none was set)
+admin.get_project_converter: {"project_id": "parity-probe", "converter": <converter>|null}
+admin.delete_converter: {"converter_id": "conv-0123456789ab"} (refused for the platform default, then for a converter used by projects, a project in its grace period included)
 admin.create_provider: {"provider_id": "prov-0123456789ab", "name": "Cloud Embeddings", "endpoint": "https://api.example.com/v1", "auth_scheme": "bearer", "has_secret": true, "created_at": "2026-11-21T10:00:00Z", "updated_at": "2026-11-21T10:00:00Z"} (the secret is never returned)
 admin.update_provider: the provider, as admin.create_provider (an update that changes nothing returns it unchanged, updated_at included)
 admin.delete_provider: {"deleted": true}

@@ -633,6 +633,86 @@ const OPERATIONS: &[Op] = &[
         body: "",
     },
     Op {
+        method: "POST",
+        sub: "converters",
+        path: "/api/admin/converters",
+        tool: "admin.create_converter",
+        params: NO_PARAMS,
+        body: "CreateConverterBody",
+    },
+    Op {
+        method: "GET",
+        sub: "converters",
+        path: "/api/admin/converters",
+        tool: "admin.list_converters",
+        params: MARKER,
+        body: "",
+    },
+    Op {
+        method: "PATCH",
+        sub: "{converter_id}",
+        path: "/api/admin/converters/{converter_id}",
+        tool: "admin.update_converter",
+        params: NO_PARAMS,
+        body: "UpdateConverterBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "{converter_id}",
+        path: "/api/admin/converters/{converter_id}",
+        tool: "admin.delete_converter",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "GET",
+        sub: "converter-default",
+        path: "/api/admin/converter-default",
+        tool: "admin.get_default_converter",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "PUT",
+        sub: "converter-default",
+        path: "/api/admin/converter-default",
+        tool: "admin.set_default_converter",
+        params: NO_PARAMS,
+        body: "SetConverterBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "converter-default",
+        path: "/api/admin/converter-default",
+        tool: "admin.clear_default_converter",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "GET",
+        sub: "converter",
+        path: "/api/admin/projects/{project_id}/converter",
+        tool: "admin.get_project_converter",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
+        method: "PUT",
+        sub: "converter",
+        path: "/api/admin/projects/{project_id}/converter",
+        tool: "admin.set_project_converter",
+        params: NO_PARAMS,
+        body: "SetConverterBody",
+    },
+    Op {
+        method: "DELETE",
+        sub: "converter",
+        path: "/api/admin/projects/{project_id}/converter",
+        tool: "admin.clear_project_converter",
+        params: NO_PARAMS,
+        body: "",
+    },
+    Op {
         method: "GET",
         sub: "roots",
         path: "/api/fs/roots",
@@ -1450,6 +1530,11 @@ const fn nullable(name: &'static str, ty: &'static str) -> Prop {
     Prop { name, ty, format: "", default: Def::Absent, items: "", nullable: true }
 }
 
+/// A nullable list of text, the shape of a converter command or extension list.
+const fn nullable_list(name: &'static str) -> Prop {
+    Prop { name, ty: "array", format: "", default: Def::Absent, items: "string", nullable: true }
+}
+
 const fn flag(name: &'static str, default: bool) -> Prop {
     Prop {
         name,
@@ -1530,6 +1615,49 @@ const SCHEMAS: &[Schema] = &[
         tool: "admin.set_default_model",
         required: &["model_id"],
         props: &[plain("model_id", "string")],
+    },
+    Schema {
+        name: "CreateConverterBody",
+        tool: "admin.create_converter",
+        required: &[],
+        props: &[
+            nullable("name", "string"),
+            nullable("form", "string"),
+            nullable_list("command"),
+            nullable("url", "string"),
+            nullable("auth_header", "string"),
+            nullable("secret", "string"),
+            nullable("file_field", "string"),
+            nullable("response_field", "string"),
+            nullable_list("extensions"),
+            nullable("max_input_bytes", "integer"),
+            nullable("timeout_seconds", "integer"),
+        ],
+    },
+    Schema {
+        name: "UpdateConverterBody",
+        tool: "admin.update_converter",
+        required: &[],
+        props: &[
+            nullable("name", "string"),
+            nullable("form", "string"),
+            nullable_list("command"),
+            nullable("url", "string"),
+            nullable("auth_header", "string"),
+            nullable("secret", "string"),
+            nullable("file_field", "string"),
+            nullable("response_field", "string"),
+            nullable_list("extensions"),
+            nullable("max_input_bytes", "integer"),
+            nullable("timeout_seconds", "integer"),
+            nullable("clear_secret", "boolean"),
+        ],
+    },
+    Schema {
+        name: "SetConverterBody",
+        tool: "admin.set_default_converter",
+        required: &["converter_id"],
+        props: &[plain("converter_id", "string")],
     },
     Schema {
         name: "MkdirBody",

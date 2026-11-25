@@ -4,15 +4,27 @@
 //!
 //! `store` owns the SQL on the admin database, `registry` every rule, `secrets`
 //! the master key and the secret carrier. Tools call [`Registry`] only.
+//!
+//! SPEC-0106 adds the document converters to the same registry: `converter`
+//! holds the shapes, `converter_rules` the input checks, `converter_store` the
+//! SQL and `converters` the operations.
 
+pub mod converter;
+mod converter_rules;
+mod converter_store;
+pub(crate) mod converters;
 pub mod model;
 pub mod registry;
 pub mod secrets;
 pub mod store;
 
 #[cfg(test)]
+mod converters_e2e;
+#[cfg(test)]
 mod e2e;
 
+pub use converter::{Converter, ConverterInput};
+pub use converters::page_json as converter_page_json;
 pub use model::{
     Change, Defaults, Model, ModelInput, ModelUpdate, Page, Provider, ProviderInput, ProviderUpdate,
 };

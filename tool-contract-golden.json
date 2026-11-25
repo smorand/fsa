@@ -30,6 +30,20 @@
       }
     },
     {
+      "name": "admin.clear_default_converter",
+      "description": "Remove the platform default converter; answers converter null (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.clear_default_model",
       "description": "Remove the server default of a kind, text_embedding or reranker; a kind with no default is not an error (platform admin only).",
       "inputSchema": {
@@ -48,6 +62,87 @@
         "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.clear_project_converter",
+      "description": "Remove the converter of a project, which then uses the platform default; answers converter null (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.create_converter",
+      "description": "Register a document converter: a name and a form, 'program' (a command, a list of arguments holding {document} once and {outdir} at most once, never run through a shell) or 'http' (an address, an optional header and secret stored encrypted and never returned), with optional accepted extensions, answer cap in bytes and timeout in seconds (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Name of the converter, 1 to 64 characters, unique without regard to case.",
+            "default": null
+          },
+          "form": {
+            "description": "Form of the converter: 'program' or 'http'.",
+            "default": null
+          },
+          "command": {
+            "description": "Program form: the command as a list of text arguments, holding '{document}' exactly once and '{outdir}' at most once. Never run through a shell.",
+            "default": null
+          },
+          "url": {
+            "description": "Http form: the http or https address the document is sent to.",
+            "default": null
+          },
+          "auth_header": {
+            "description": "Http form: the header carrying the secret. Default Authorization.",
+            "default": null
+          },
+          "secret": {
+            "description": "Http form: the value of the auth_header header, stored encrypted. Never returned.",
+            "default": null
+          },
+          "file_field": {
+            "description": "Http form: the form field holding the document. Default file.",
+            "default": null
+          },
+          "response_field": {
+            "description": "Http form: the field of a JSON answer holding the Markdown; empty means the whole answer.",
+            "default": null
+          },
+          "extensions": {
+            "description": "Accepted extensions without a dot, up to 64 names of 1 to 16 letters or digits; empty means the built in document list.",
+            "default": null
+          },
+          "max_input_bytes": {
+            "description": "Largest document and answer in bytes, 1 to 4294967296. Default 536870912.",
+            "default": null
+          },
+          "timeout_seconds": {
+            "description": "Longest conversion in seconds, 1 to 86400. Default 900.",
+            "default": null
+          }
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": false,
         "openWorldHint": false
       }
     },
@@ -178,6 +273,28 @@
       }
     },
     {
+      "name": "admin.delete_converter",
+      "description": "Delete a document converter and its secret, unless it is the platform default or the converter of a project (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "converter_id": {
+            "description": "Id of the converter.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "converter_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.delete_model",
       "description": "Delete a model that is not a server default (platform admin only).",
       "inputSchema": {
@@ -244,6 +361,19 @@
       }
     },
     {
+      "name": "admin.get_default_converter",
+      "description": "Read the platform default converter, null when none is set (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.get_default_models",
       "description": "Read the server default text embedding model and the server default reranker, null for a kind with none (platform admin only).",
       "inputSchema": {
@@ -264,6 +394,27 @@
         "properties": {
           "project_id": {
             "description": "Id of the project whose search index mode is read.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.get_project_converter",
+      "description": "Read the converter of a project, null when it has none (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
             "type": "string"
           }
         },
@@ -367,6 +518,24 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.list_converters",
+      "description": "List the document converters ordered by name without regard to case, 100 per answer, each with has_secret instead of its secret (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "marker": {
+            "description": "The marker of the previous answer, to read the next page.",
+            "default": null
+          }
+        }
       },
       "annotations": {
         "readOnlyHint": true,
@@ -529,6 +698,28 @@
       }
     },
     {
+      "name": "admin.set_default_converter",
+      "description": "Make a document converter the platform default, used by every project that has no converter of its own (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "converter_id": {
+            "description": "Id of the converter.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "converter_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.set_default_model",
       "description": "Make a model the server default of its kind, text_embedding or reranker, replacing the previous default; a text embedding model must have the dimension of the vector store (platform admin only).",
       "inputSchema": {
@@ -577,6 +768,33 @@
       },
       "annotations": {
         "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.set_project_converter",
+      "description": "Make a document converter the converter of a project, a project in its grace period included; gives no access to the files of the project (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          },
+          "converter_id": {
+            "description": "Id of the converter.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "converter_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": true,
         "openWorldHint": false
@@ -673,6 +891,76 @@
         "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": false,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.update_converter",
+      "description": "Change the fields given of a document converter, never its form; a field not given keeps its value; a secret not given or blank keeps the stored one, clear_secret removes it (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "converter_id": {
+            "description": "Id of the converter to change.",
+            "type": "string"
+          },
+          "name": {
+            "description": "New name, 1 to 64 characters, unique without regard to case.",
+            "default": null
+          },
+          "form": {
+            "description": "The form the converter has; it cannot be changed.",
+            "default": null
+          },
+          "command": {
+            "description": "Program form: the new command, a list of text arguments, holding '{document}' exactly once and '{outdir}' at most once.",
+            "default": null
+          },
+          "url": {
+            "description": "Http form: the new http or https address.",
+            "default": null
+          },
+          "auth_header": {
+            "description": "Http form: the new header carrying the secret.",
+            "default": null
+          },
+          "secret": {
+            "description": "Http form: the new secret, stored encrypted; empty or not given keeps the stored one. Never returned.",
+            "default": null
+          },
+          "file_field": {
+            "description": "Http form: the new form field holding the document.",
+            "default": null
+          },
+          "response_field": {
+            "description": "Http form: the new field of a JSON answer holding the Markdown.",
+            "default": null
+          },
+          "extensions": {
+            "description": "New accepted extensions without a dot, up to 64 names of 1 to 16 letters or digits.",
+            "default": null
+          },
+          "max_input_bytes": {
+            "description": "New largest document and answer in bytes, 1 to 4294967296.",
+            "default": null
+          },
+          "timeout_seconds": {
+            "description": "New longest conversion in seconds, 1 to 86400.",
+            "default": null
+          },
+          "clear_secret": {
+            "description": "True removes the stored secret of an http converter. Default false.",
+            "default": null
+          }
+        },
+        "required": [
+          "converter_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
         "openWorldHint": false
       }
     },

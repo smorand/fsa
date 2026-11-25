@@ -28,9 +28,9 @@ pub(crate) fn name_key(name: &str) -> String {
 
 #[derive(Clone)]
 pub struct SettingsStore {
-    db: Arc<dyn RelationalDb>,
+    pub(super) db: Arc<dyn RelationalDb>,
     /// The master key handed over at boot (DEC-003); never stored.
-    key: Option<[u8; 32]>,
+    pub(super) key: Option<[u8; 32]>,
 }
 
 impl SettingsStore {
@@ -456,6 +456,28 @@ impl SettingsStore {
                 "SELECT {CHANGE_COLS} FROM setting_change ORDER BY change_id DESC LIMIT {limit}"
             )),
         };
+        self.db.query(&q).await?.iter().map(Self::read_change).collect()
+    }
+
+    /// The newest `limit` changes whose `target_kind` is one of `kinds`, newest
+    /// first by `change_id`. One filtered read, so a screen showing a single
+    /// registry is not starved by the changes of another (DEC-013).
+    pub(crate) async fn list_changes_of_kinds(
+        &self,
+        kinds: &[&str],
+        limit: usize,
+    ) -> Result<Vec<Change>> {
+        if kinds.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = (1..=kinds.len()).map(|n| format!("?{n}")).collect::<Vec<_>>().join(", ");
+        let mut q = Query::new(format!(
+            "SELECT {CHANGE_COLS} FROM setting_change WHERE target_kind IN ({marks}) \
+             ORDER BY change_id DESC LIMIT {limit}"
+        ));
+        for k in kinds {
+            q = q.bind(*k);
+        }
         self.db.query(&q).await?.iter().map(Self::read_change).collect()
     }
 }

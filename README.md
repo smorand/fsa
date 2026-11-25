@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-136 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+146 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -555,6 +555,31 @@ when the `mcpfs_token` cookie authenticated the request). The screen shows provi
 operation; secret inputs are password fields, never prefilled, and an empty secret on an edit keeps the
 stored one. Tests: `cargo test -p fsa-core --lib -- e2e_0102_`.
 
+## Document converters set up by an administrator
+
+(SPEC-0106.) A platform administrator defines document converters at run time, with no restart and no
+edit of the configuration file. A converter has a unique name (compared without regard to case), a form
+and the fields of that form. The `program` form is an argument list with one `{document}` placeholder and
+at most one `{outdir}` placeholder, run as the file converter runs (no shell). The `http` form is a
+URL, a header name, an optional secret, a file field and a response field. Both take a timeout, an answer
+cap (`max_input_bytes`) and a list of extensions. The secret is write only: it is encrypted under
+`FSA_TOKEN_KEY`, never returned (the answers carry `has_secret`), never logged and redacted from failure
+texts. An `http` converter never follows a redirect, so a token header cannot leave for another host.
+
+One converter may be the **platform default**, and each project may have its **own converter**. For every
+conversion (`fs.write_bytes` with the flag, an upload, `fs.documentize`) the platform resolves, in this
+order: the converter of the project, the platform default, the `doc_service` converter of the
+configuration file. With an empty registry the platform behaves exactly as before, and the file converter
+is still checked when the platform starts. A change applies to the next conversion; a conversion already
+running keeps the converter it began with. A converter that is the default or that a project uses cannot
+be deleted until it is cleared. Every change is recorded (field names only, never a value).
+
+Three doors, all platform administrator only: the ten `admin.*` tools (`admin.create_converter`,
+`update_converter`, `list_converters`, `delete_converter`, `set_default_converter`,
+`get_default_converter`, `clear_default_converter`, `set_project_converter`, `get_project_converter`,
+`clear_project_converter`), the REST routes under `/api/admin/{converters,converter-default,projects/{id}/converter}`
+and the browser screen `/app/converters`. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`.
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or
@@ -656,7 +681,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 136 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 146 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash

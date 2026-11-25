@@ -160,10 +160,46 @@ pub fn schema() -> SchemaSet {
                 ],
                 vec!["change_id"],
             ),
+            // SPEC-0106 DEC-003: the document converters. As for `provider`, the
+            // primary key on the caseless name keeps two equal names out on both
+            // engines; `command` and `extensions` are JSON lists, the http columns
+            // are null for a program converter.
+            Table::new(
+                "converter",
+                vec![
+                    Column::required("name_key", ColumnType::Text),
+                    Column::required("converter_id", ColumnType::Text),
+                    Column::required("name", ColumnType::Text),
+                    Column::required("form", ColumnType::Text),
+                    Column::new("command", ColumnType::Text),
+                    Column::new("url", ColumnType::Text),
+                    Column::new("auth_header", ColumnType::Text),
+                    Column::new("secret_enc", ColumnType::Blob),
+                    Column::new("file_field", ColumnType::Text),
+                    Column::new("response_field", ColumnType::Text),
+                    Column::required("extensions", ColumnType::Text),
+                    Column::required("max_input_bytes", ColumnType::BigInt),
+                    Column::required("timeout_seconds", ColumnType::BigInt),
+                    Column::required("created_at", ColumnType::Text),
+                    Column::required("updated_at", ColumnType::Text),
+                ],
+                vec!["name_key"],
+            ),
+            // SPEC-0106 DEC-003: the platform default converter, one row at most
+            // (`slot` is always `default`).
+            Table::new(
+                "converter_default",
+                vec![
+                    Column::required("slot", ColumnType::Text),
+                    Column::required("converter_id", ColumnType::Text),
+                ],
+                vec!["slot"],
+            ),
         ],
         vec![
             Index { name: "idx_provider_id", table: "provider", columns: vec!["provider_id"] },
             Index { name: "idx_model_id", table: "model", columns: vec!["model_id"] },
+            Index { name: "idx_converter_id", table: "converter", columns: vec!["converter_id"] },
             Index { name: "idx_model_kind", table: "model", columns: vec!["kind"] },
             Index {
                 name: "idx_derived_job_key",
@@ -211,6 +247,16 @@ pub fn schema() -> SchemaSet {
         table: "project",
         column: "quota_bytes",
         ty: ColumnType::BigInt,
+        not_null: false,
+        default: "NULL",
+    })
+    // SPEC-0106 DEC-003: the converter of a project, null when it uses the
+    // platform default. On the row, so a removal for good takes it along and a
+    // soft removal keeps it (FR-NEW-021).
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "converter_id",
+        ty: ColumnType::Text,
         not_null: false,
         default: "NULL",
     })

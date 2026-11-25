@@ -144,6 +144,12 @@ async fn http_cap(a: &Answer, cap: u64) -> Option<ApiDocService> {
 
 /// A stub answering `body` as JSON, under the converter limit `cap`.
 async fn serve(body: String, cap: u64) -> ApiDocService {
+    let cfg = DocServiceApiConfig { url: stub_url(body).await, ..Default::default() };
+    ApiDocService::new(&cfg, extensions(), cap).unwrap()
+}
+
+/// The address of a stub that answers `body` as JSON to every POST.
+pub(crate) async fn stub_url(body: String) -> String {
     let app = axum::Router::new().route(
         "/convert",
         axum::routing::post(move || {
@@ -156,8 +162,7 @@ async fn serve(body: String, cap: u64) -> ApiDocService {
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    let cfg = DocServiceApiConfig { url: format!("http://{addr}/convert"), ..Default::default() };
-    ApiDocService::new(&cfg, extensions(), cap).unwrap()
+    format!("http://{addr}/convert")
 }
 
 pub(crate) async fn fixture() -> Fixture {

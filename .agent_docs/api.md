@@ -15,7 +15,7 @@ Implementation: `api/dataplane.rs` (routes), `api/openapi.rs` (spec plus UI).
 | `/api/fs/roots` | required | none (the answer *is* the ACL for the caller) |
 | `/api/fs/{mount_id}/**` | required | `require_member(mount_id, person)` |
 | `/api/admin/projects/{project_id}/quota` | required | none: the tool's own gate (admin, or owner; a non admin gets 403 even for a missing project) |
-| `/api/admin/{providers,models,defaults,setting-changes}/**` | required | none: platform admin only, reading included (the tool's own gate, `ERR_FORBIDDEN: '<person>' is not a platform admin`) |
+| `/api/admin/{providers,models,defaults,setting-changes,converters,converter-default,projects/{id}/converter}/**` | required | none: platform admin only, reading included (the tool's own gate, `ERR_FORBIDDEN: '<person>' is not a platform admin`) |
 | `/api/swagger.json`, `/api/docs`, `/api/docs/*` | none | none |
 
 The bearer comes from the configured header (`auth.jwt.header`, default
@@ -58,6 +58,10 @@ schemas). `REST_ROUTES` keys a route ending in a path parameter by its braces (`
 | GET | `/api/admin/defaults` | none | `admin.get_default_models` |
 | PUT, DELETE | `/api/admin/defaults/{kind}` | PUT body `{model_id}` | `admin.set_default_model`, `admin.clear_default_model` |
 | GET | `/api/admin/setting-changes` | query `marker` | `admin.list_setting_changes` |
+| POST, GET | `/api/admin/converters` | body (converter fields); query `marker` | `admin.create_converter`, `admin.list_converters` |
+| PATCH, DELETE | `/api/admin/converters/{converter_id}` | body (converter fields, `clear_secret`) | `admin.update_converter`, `admin.delete_converter` |
+| GET, PUT, DELETE | `/api/admin/converter-default` | PUT body `converter_id` | `admin.get_default_converter`, `admin.set_default_converter`, `admin.clear_default_converter` |
+| GET, PUT, DELETE | `/api/admin/projects/{project_id}/converter` | PUT body `converter_id` | `admin.get_project_converter`, `admin.set_project_converter`, `admin.clear_project_converter` |
 
 `trigger_documentation_service` on the upload applies to **every** file of the
 form, and only `"true"` or `"1"` turn it on, because a form field is free text and
@@ -242,3 +246,10 @@ A success answers 303 to `/app/models`; a refused action renders the page again 
 (`ERR_<CODE>: <text>`) and the status of the error; an ordinary member gets 403 with
 `ERR_FORBIDDEN: '<person>' is not a platform admin` and no page. Empty optional fields are fields not given;
 an empty secret on `provider/update` keeps the stored secret, `clear_secret=true` removes it.
+
+## Converter routes (SPEC-0106)
+
+The five route families of the converters table above call the same functions as the `admin.*converter*`
+tools and are platform administrator only. `/app/converters` is the browser screen (session cookie plus one
+time form token, as `/app/models`): converters with `Secret stored` or `No secret`, the default, the project
+choices and the latest 20 converter changes.

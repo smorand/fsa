@@ -122,6 +122,17 @@ pub const REST_ROUTES: &[(&str, &str)] = &[
     ("PUT", "{kind}"),
     ("DELETE", "{kind}"),
     ("GET", "setting-changes"),
+    // SPEC-0106 DEC-017: the converter routes of `api/admin_converters.rs`.
+    ("POST", "converters"),
+    ("GET", "converters"),
+    ("PATCH", "{converter_id}"),
+    ("DELETE", "{converter_id}"),
+    ("GET", "converter-default"),
+    ("PUT", "converter-default"),
+    ("DELETE", "converter-default"),
+    ("GET", "converter"),
+    ("PUT", "converter"),
+    ("DELETE", "converter"),
 ];
 
 /// Request body ceiling for the JSON endpoints. Axum defaults to 2 MiB, which is
@@ -687,12 +698,13 @@ async fn upload(
             destinations.push(r.norm(&PosixPath::normpath(&joined))?);
         }
 
-        let doc_service = r.state.doc_service.as_deref();
         if documentation {
             // The engine's own gate, run over the whole batch first: one
             // ineligible file fails the request with nothing written.
+            // Resolved once for the whole batch (DEC-019).
+            let doc = r.state.doc_service_for(&r.mount).await?;
             for dest in &destinations {
-                fs_ops::ensure_documentable(doc_service, dest)?;
+                fs_ops::ensure_documentable(doc.as_deref(), dest)?;
             }
         }
 
@@ -702,10 +714,13 @@ async fn upload(
             // Through the engine so an upload is charged against the write quota and
             // audited. Writing via the volume client (as this did) made the highest
             // volume write path the only one with no accounting at all.
+            // Resolved again as this file's conversion starts (FR-NEW-010): a
+            // refusal here stops the upload, the files already written stay.
+            let doc = if documentation { r.state.doc_service_for(&r.mount).await? } else { None };
             let result = fs_ops::write_bytes_documented(
                 &r.client,
                 r.safety(),
-                doc_service,
+                doc.as_deref(),
                 &r.person,
                 &r.mount,
                 dest,
@@ -1625,10 +1640,15 @@ async fn write_bytes(
             .map_err(|e| {
                 ToolError::invalid_argument(format!("argument 'base64' is not valid base64: {e}"))
             })?;
+        let doc = if a.bool_or("trigger_documentation_service", false) {
+            r.state.doc_service_for(&r.mount).await?
+        } else {
+            None
+        };
         let out = fs_ops::write_bytes_documented(
             &r.client,
             r.safety(),
-            r.state.doc_service.as_deref(),
+            doc.as_deref(),
             &r.person,
             &r.mount,
             &norm,
@@ -1657,10 +1677,11 @@ async fn documentize(
     guarded_json(state, headers, mount, |r| async move {
         let a = body_args(&body)?;
         let norm = r.norm(&a.str("path")?)?;
+        let doc = r.state.doc_service_for(&r.mount).await?;
         let out = fs_ops::documentize(
             &r.client,
             r.safety(),
-            r.state.doc_service.as_deref(),
+            doc.as_deref(),
             &r.person,
             &r.mount,
             &norm,
@@ -2842,7 +2863,7 @@ mod tests {
         // added images and image, 45 since US-0008 added document-view, 46 since
         // SPEC-0020 US-0015 added the admin quota read, 47 since SPEC-0045
         // US-0059 added diff, 48 since SPEC-0047 added disk-usage, 49 since SPEC-0049 added folder-usage.
-        assert_eq!(REST_ROUTES.len(), 63);
+        assert_eq!(REST_ROUTES.len(), 73);
         assert!(REST_ROUTES.contains(&("GET", "folder-usage")));
         assert!(REST_ROUTES.contains(&("GET", "disk-usage")));
         assert!(REST_ROUTES.contains(&("GET", "diff")));

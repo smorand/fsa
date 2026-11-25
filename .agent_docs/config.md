@@ -260,6 +260,13 @@ doc_service:
 `env_clear` is deliberately NOT used: a converter legitimately needs `HOME`,
 `PATH` and its model caches.
 
+### Registry converters take precedence (SPEC-0106)
+
+A converter of the registry (`admin.create_converter`, `/app/converters`) wins over this block: the
+project converter first, then the platform default, then this `doc_service` converter, which stays the
+fallback exactly as before and is still validated when the platform starts. With an empty registry nothing
+changes. Details in `architecture.md` "Document converters registry".
+
 ## `git`
 
 | Key | Type | Default | Meaning |

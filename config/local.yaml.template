@@ -53,6 +53,9 @@ extract:
 # External document to Markdown converter (opt-in), used by the
 # trigger_documentation_service flag on byte uploads and by fs.documentize.
 # PowerPoint, Word, PDF, audio and video only. Off by default.
+# An administrator can also define converters at run time (admin.create_converter,
+# /app/converters); a project converter, then the platform default, win over this
+# block, which stays the fallback and is still checked at start.
 # doc_service:
 #   enabled: false
 #   mode: cli                      # cli | api

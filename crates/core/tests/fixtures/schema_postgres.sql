@@ -48,9 +48,15 @@ CREATE TABLE IF NOT EXISTS "default_model" ("kind" TEXT NOT NULL, "model_id" TEX
 
 CREATE TABLE IF NOT EXISTS "setting_change" ("change_id" TEXT NOT NULL, "at" TEXT NOT NULL, "person" TEXT NOT NULL, "action" TEXT NOT NULL, "target_kind" TEXT NOT NULL, "target_id" TEXT NOT NULL, "target_name" TEXT NOT NULL, "fields" TEXT NOT NULL, PRIMARY KEY ("change_id"))
 
+CREATE TABLE IF NOT EXISTS "converter" ("name_key" TEXT NOT NULL, "converter_id" TEXT NOT NULL, "name" TEXT NOT NULL, "form" TEXT NOT NULL, "command" TEXT, "url" TEXT, "auth_header" TEXT, "secret_enc" BYTEA, "file_field" TEXT, "response_field" TEXT, "extensions" TEXT NOT NULL, "max_input_bytes" BIGINT NOT NULL, "timeout_seconds" BIGINT NOT NULL, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, PRIMARY KEY ("name_key"))
+
+CREATE TABLE IF NOT EXISTS "converter_default" ("slot" TEXT NOT NULL, "converter_id" TEXT NOT NULL, PRIMARY KEY ("slot"))
+
 CREATE INDEX IF NOT EXISTS "idx_provider_id" ON "provider" ("provider_id")
 
 CREATE INDEX IF NOT EXISTS "idx_model_id" ON "model" ("model_id")
+
+CREATE INDEX IF NOT EXISTS "idx_converter_id" ON "converter" ("converter_id")
 
 CREATE INDEX IF NOT EXISTS "idx_model_kind" ON "model" ("kind")
 

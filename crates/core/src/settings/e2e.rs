@@ -22,7 +22,7 @@ const ALICE: &str = "admin@example.com";
 const BOB: &str = "bob@example.com";
 const PROJ: &str = "proj";
 const SECRET: &str = "sk-test-123";
-const KEY: [u8; 32] = [42u8; 32];
+pub(crate) const KEY: [u8; 32] = [42u8; 32];
 
 /// The model name of the configuration's embedding block.
 const YAML_MODEL: &str = "yaml-model";
@@ -55,8 +55,8 @@ impl std::io::Write for Capture {
 /// The registry fixture: Alice is the platform administrator, Bob an ordinary
 /// member who owns `proj`.
 pub(crate) struct Fx {
-    dir: tempfile::TempDir,
-    state: Arc<AppState>,
+    pub(super) dir: tempfile::TempDir,
+    pub(super) state: Arc<AppState>,
     seen: Mutex<Vec<String>>,
     logs: Arc<Mutex<Vec<u8>>>,
     /// `search.embedding.dimensions` of the configuration the platform runs on.
@@ -223,7 +223,7 @@ impl Fx {
     }
 
     /// One REST call as `who`: the status and the JSON body (`Null` when empty).
-    async fn rest(
+    pub(crate) async fn rest(
         &self,
         who: &str,
         method: &str,
@@ -260,13 +260,13 @@ impl Fx {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
-    fn server(&self, person: &str) -> McpServer {
+    pub(crate) fn server(&self, person: &str) -> McpServer {
         McpServer::new(self.state.clone(), person.to_string())
     }
 
     /// The refusal as the registry worded it, without the MCP wrapper's
     /// `An error occurred invoking '<tool>': ` lead.
-    fn keep(&self, out: Result<Value, String>) -> Result<Value, String> {
+    pub(crate) fn keep(&self, out: Result<Value, String>) -> Result<Value, String> {
         self.seen.lock().unwrap().push(match &out {
             Ok(v) => v.to_string(),
             Err(e) => e.clone(),
@@ -465,6 +465,19 @@ impl Fx {
             .map(|r| match r.value(0).unwrap() {
                 crate::storage::rel::SqlValue::Null => None,
                 _ => Some(r.blob(0).unwrap()),
+            })
+            .collect()
+    }
+
+    /// The secret of every converter row as decrypted with the fixture key,
+    /// `None` for a row without one.
+    pub(crate) async fn converter_secrets(&self) -> Vec<Option<String>> {
+        let db = SqliteRelationalDb::open(self.dir.path().join("admin.db")).unwrap();
+        let rows = db.query(&Query::new("SELECT secret_enc FROM converter")).await.unwrap();
+        rows.iter()
+            .map(|r| match r.value(0).unwrap() {
+                crate::storage::rel::SqlValue::Null => None,
+                _ => Some(crate::git::oauth::cipher::decrypt(&KEY, &r.blob(0).unwrap()).unwrap()),
             })
             .collect()
     }
@@ -2562,7 +2575,7 @@ async fn e2e_0102_074_the_rest_description_lists_the_operations() {
 
 /// How a browser or a client names itself to the screen.
 #[derive(Clone, Copy)]
-enum Via {
+pub(super) enum Via {
     /// The forwarded header: no ambient credential, no token needed.
     Header(&'static str),
     /// The `mcpfs_token` cookie: a form needs its one time token.
@@ -2602,7 +2615,7 @@ impl Fx {
 
     /// One call to the screen: the status and the body text, kept for the
     /// secret search.
-    async fn page(
+    pub(super) async fn page(
         &self,
         router: &axum::Router,
         via: Via,
@@ -2657,7 +2670,7 @@ impl Fx {
 }
 
 /// The first `csrf_token` value of a page.
-fn token_of(html: &str) -> String {
+pub(super) fn token_of(html: &str) -> String {
     let at = html.find("name=\"csrf_token\" value=\"").expect("a token in the page");
     let rest = &html[at + "name=\"csrf_token\" value=\"".len()..];
     rest[..rest.find('"').unwrap()].to_string()

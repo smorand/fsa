@@ -12,6 +12,7 @@
 //!
 //! Both are mounted only when `api.enabled` is true; the caller owns that check.
 
+pub mod admin_converters;
 pub mod admin_settings;
 pub mod dataplane;
 pub mod openapi;
@@ -24,5 +25,7 @@ use std::sync::Arc;
 /// Every authenticated REST route: the `/api/fs` data plane, the project admin
 /// reads, and the registry routes of SPEC-0102.
 pub fn router(state: Arc<AppState>) -> axum::Router {
-    dataplane::router(state.clone()).merge(admin_settings::router(state))
+    dataplane::router(state.clone())
+        .merge(admin_settings::router(state.clone()))
+        .merge(admin_converters::router(state))
 }

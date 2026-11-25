@@ -115,10 +115,11 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
         handler(|ctx, a| async move {
             let (mount, client) = volume(&ctx, &a).await?;
             let path = norm(&ctx, &a, "path")?;
+            let doc = ctx.state.doc_service_for(&mount).await?;
             let out = fs_ops::documentize(
                 &client,
                 &ctx.state.safety,
-                ctx.state.doc_service.as_deref(),
+                doc.as_deref(),
                 &ctx.person,
                 &mount,
                 &path,

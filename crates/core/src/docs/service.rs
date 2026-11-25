@@ -130,6 +130,13 @@ pub trait DocService: Send + Sync {
 
     /// Refuse to convert an input larger than this (`doc_service.max_input_bytes`).
     fn max_input_bytes(&self) -> u64;
+
+    /// A check that must pass before anything is written for a conversion. Run by
+    /// the engine after the extension and size gates, so those refusals keep
+    /// their texts (SPEC-0106 DEC-007). Cheap and local: it never calls the service.
+    fn preflight(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Extension gate against the built-in set, case insensitive.
@@ -175,7 +182,7 @@ pub fn from_config(cfg: &DocServiceConfig) -> Result<Option<Arc<dyn DocService>>
 }
 
 /// The configured override, normalized, or the built-in set when it is empty.
-fn resolve_extensions(configured: &[String]) -> Vec<String> {
+pub(crate) fn resolve_extensions(configured: &[String]) -> Vec<String> {
     let narrowed: Vec<String> = configured
         .iter()
         .map(|e| e.trim().to_ascii_lowercase())
@@ -542,6 +549,10 @@ impl ApiDocService {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .user_agent(USER_AGENT)
+            // A redirect would resend the request, token header included, to a
+            // place the administrator never named (SPEC-0106 DEC-010); a 3xx is
+            // then reported as the non success status it is.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| ToolError::internal(format!("document service http client error: {e}")))?;
         Ok(Self { config: config.clone(), extensions, max_input_bytes, http })
@@ -611,7 +622,9 @@ impl DocService for ApiDocService {
             return Err(ToolError::internal(format!(
                 "document service returned HTTP {}: {}",
                 status.as_u16(),
-                head_of(&body, BODY_CAP)
+                // Redact the whole body first: cutting first would leave a prefix
+                // of a secret that straddles the cut (SPEC-0106 DEC-012).
+                head_of(&redact(&body, self.config.auth_token.expose()), BODY_CAP)
             )));
         }
         if over {
@@ -827,6 +840,13 @@ fn parse_api_bundle(body: &str, cap: u64) -> Result<Conversion> {
 fn tail_of(bytes: &[u8], cap: usize) -> String {
     let start = bytes.len().saturating_sub(cap);
     String::from_utf8_lossy(&bytes[start..]).trim().to_string()
+}
+
+/// `text` with every occurrence of the trimmed `secret` replaced by `[redacted]`;
+/// a blank secret changes nothing. One pass over the text, O(text * secret) worst case.
+pub fn redact(text: &str, secret: &str) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() { text.to_string() } else { text.replace(secret, "[redacted]") }
 }
 
 /// The first `cap` characters, on a character boundary.
@@ -1486,6 +1506,13 @@ mod tests {
     /// `cargo test -p fsa --lib docs::service -- --ignored`. It skips rather
     /// than fails when the binary is absent, because "not installed" is not a
     /// regression.
+    #[test]
+    fn redact_replaces_every_occurrence_and_ignores_a_blank_secret() {
+        assert_eq!(redact("a tok b tok", " tok "), "a [redacted] b [redacted]");
+        assert_eq!(redact("keep tok", "  "), "keep tok");
+        assert_eq!(redact("", "tok"), "");
+    }
+
     #[tokio::test]
     #[ignore = "needs a real doc-convert on PATH"]
     async fn real_doc_convert_produces_markdown_and_leaves_nothing_behind() {

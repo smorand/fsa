@@ -514,3 +514,26 @@ shaping of the answer. The screen shares the token screen's anti forgery items (
 `search.md` "Embedding source", `api.md`, `config.md`.
 * **Exact CSV, caption and page per table (SPEC-0103 US-0293, 2026-11-23).** A version 2 manifest `tables` entry `i` applies to pipe table `seq` `i` (malformed tables count, their entry is unused). `csv` is resolved by `resolve_target` and read only from the in memory `Conversion.files` (UTF-8, at most 5 000 000 `chars()`), else the line `table-<i>: CSV unavailable`; the text is stored in the nullable `doc_tables.csv_text` (never as a file), `quality` is `exact`, the non empty `caption` replaces the Markdown one, `page` goes to the nullable `doc_tables.page` (metadata only). Charge: the exact CSV bytes replace the derived CSV length. Extra entries add `manifest lists <n> tables, the document has <m>`. Code: `docs/manifest.rs::table`, `docs/artifacts/capture.rs::table_entry`.
 * **Lifecycle (SPEC-0103 US-0295, 2026-11-24).** No new mechanism: a conversion is one `commit_artifact_set` transaction that supersedes the previous set (images, tables, OCR text, CSV, headings together) or fails with nothing written; a converter failure, timeout or HTTP error happens before it, so the previous set stays. New columns read null and `doc_headings` is empty for sets stored before SPEC-0103; nothing converts at upgrade. The built in path (`PendingSet::builtin`) has no structure, no OCR and no metadata line. Session weight only: the OCR text and CSV are refused by the session write quota, not `ERR_PROJECT_QUOTA_EXCEEDED` (SPEC-0020 DEC-008; the spec E2E-075 wording says project quota, amendment pending).
+
+## Document converters registry (SPEC-0106, 2026-11-27)
+
+Tables `converter` and `converter_default` and the nullable `project.converter_id` live on the admin store;
+the code is `settings/{converter,converter_rules,converter_store,converters}.rs` on the SPEC-0102 registry
+(same record `setting_change`, same `SecretText`, same `FSA_TOKEN_KEY`). The tools (`tools/converters.rs`),
+the REST routes and `/app/converters` (`converters_screen.rs`) are thin adapters, each starting with the
+platform administrator check.
+* **Resolution order.** `AppState::doc_service_for(mount_id)` answers the project converter, else the
+  platform default, else `AppState.doc_service` (the configuration file converter, unchanged and still
+  validated at start, DEC-018). It builds the service from the row at every call (`docs/resolve.rs`), never
+  caches, and the caller holds the `Arc` for the whole conversion: a change applies to the next one, a
+  running conversion is not affected. Program rows feed the same `CliDocService`, http rows the same `ApiDocService`.
+* **Preflight.** `DocService::preflight` runs after the extension and size gates and before any write. A row
+  whose secret cannot be read is built as `BrokenSecretService`, whose preflight and convert answer
+  `ERR_INTERNAL_ERROR: the secret of converter '<name>' cannot be read`.
+* **Redirect rule.** Every http converter, file or registry, uses `redirect::Policy::none()`; a 3xx is the
+  existing `document service returned HTTP <status>` refusal.
+* **Redaction.** `redact` removes the trimmed secret from the whole response body before it is cut for a
+  failure text, for the registry secret and the file token. Rows expose `has_secret` only; records hold field
+  names only; no input struct derives `Debug` over a secret.
+* **Usage.** A project counts as using a converter whatever its `deleted_at`; a project removed for good no
+  longer counts. Upgrade: `connect()` creates the tables and the column empty and writes no record (E2E-105).
