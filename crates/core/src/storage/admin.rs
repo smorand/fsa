@@ -260,6 +260,44 @@ pub fn schema() -> SchemaSet {
         not_null: false,
         default: "NULL",
     })
+    // SPEC-0107 DEC-001: the indexing profile of a project, all null until an
+    // owner or an administrator sets it. On the row, so a removal for good takes
+    // it along and a soft removal keeps it.
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "chunk_strategy",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "chunk_settings",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "text_model_id",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "image_model_id",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "project",
+        column: "vectors_stale_at",
+        ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
 }
 
 pub struct RelationalAdminStore {

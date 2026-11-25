@@ -82,11 +82,22 @@ impl MigrationReport {
 
 /// Every column of a table, in declaration order, so both sides agree.
 fn columns_of(schema: &SchemaSet, table: &str) -> Result<Vec<&'static str>> {
+    // The columns added to a deployed table by a column migration are part of
+    // the row too: leaving them out dropped `index_mode`, `converter_id` and the
+    // indexing profile in a copy (SPEC-0107 FR-NEW-013).
     schema
         .tables
         .iter()
         .find(|t| t.name == table)
-        .map(|t| t.columns.iter().map(|c| c.name).collect())
+        .map(|t| {
+            let mut cols: Vec<&'static str> = t.columns.iter().map(|c| c.name).collect();
+            for m in schema.column_migrations.iter().filter(|m| m.table == table) {
+                if !cols.contains(&m.column) {
+                    cols.push(m.column);
+                }
+            }
+            cols
+        })
         .ok_or_else(|| ToolError::internal(format!("no table '{table}' in the declared schema")))
 }
 

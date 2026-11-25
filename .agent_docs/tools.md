@@ -1,4 +1,4 @@
-# Tool reference (146 tools)
+# Tool reference (148 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -616,6 +616,8 @@ BL-0153 (no total across cross reference streams).
 | `admin.list_members` | members of a project | `project_id` | `project_id`, `members[{person, role, added_by}]` | RO,I,!OW | member or admin |
 | `admin.set_index_mode` | set the search index mode and wipe or rebuild the index | `project_id`, `mode` | `project_id`, `index_mode`, `previous_mode`, `reindex_started` | D,!RO,I,!OW | owner/admin |
 | `admin.get_index_mode` | read the search index mode | `project_id` | `project_id`, `index_mode` | RO,I,!OW | member or admin |
+| `admin.get_indexing_profile` | read the indexing profile of a project (SPEC-0107) | `project_id` | `project_id`, `chunking{strategy, settings, filled, source}`, `text_model`, `image_model` (null or `{model_id, name, provider, kind, dimension, source}`), `vectors_out_of_date`, `vectors_out_of_date_since` | RO,I,!OW | member or admin |
+| `admin.set_indexing_profile` | change the fields given of the profile; an empty text clears; a changed model sets the out of date marker; no op writes nothing | `project_id`, `chunk_strategy`?, `chunk_settings`?, `text_model_id`?, `image_model_id`? | the profile, as `admin.get_indexing_profile` | !D,!RO,I,!OW | owner/admin; refusals as `fs.create_chunk_set` for the strategy, `chunk_settings need a chunk_strategy`, `model not found: <id>` (`ERR_NOT_FOUND`), `model '<name>' is not a text_embedding model` (or an image_embedding model) |
 | `admin.set_purge_config` | configure auto-purge: enable flag, internal/external driver, file and project retention | `project_id`, `autopurge_enabled`, `use_internal_purge`, `file_retention_days`?, `project_retention_days`? | `project_id`, `autopurge_enabled`, `use_internal_purge`, `file_retention_days`, `project_retention_days` | !D,!RO,I,!OW | owner/admin |
 | `admin.undelete_project` | clear a project's soft-delete flag, immediately restoring access | `project_id` | `project_id`, `undeleted` | !D,!RO,!I,!OW | owner/admin |
 | `admin.set_project_quota` | set or clear a project's maximum storage size (SPEC-0010) | `project_id`, `max_mb`? | `project_id`, `max_mb` | !D,!RO,I,!OW | admin |
@@ -792,10 +794,10 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 92 (53 `fs.*`, 39 `admin.*`) |
-| git flag on | 146 |
-| git and search flags on | 150 |
-| every flag, pandoc on `PATH` | 171 (169 without pandoc: `doc.*` registers nothing) |
+| default | 94 (53 `fs.*`, 41 `admin.*`) |
+| git flag on | 148 |
+| git and search flags on | 152 |
+| every flag, pandoc on `PATH` | 173 (171 without pandoc: `doc.*` registers nothing) |
 | one optional family alone | 92 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
@@ -834,8 +836,8 @@ server and a zip reader read the effect, not the tool answer).
 | Verified identity | `IdentityResolver::verify`, RS256, `iss`, `exp`/`nbf`, 30s leeway | every tool call, checked before dispatch |
 | Membership | `AdminBackend::require_member` | every `fs.*` and `git.*` tool |
 | Platform admin | caseless match against `auth.admins` | `admin.create_project`, `admin.list_all_projects`, `admin.list_users` |
-| Owner or platform admin | `AppState::require_owner_or_admin` | `admin.delete_project`, `admin.add_member`, `admin.remove_member`, `admin.set_index_mode`, `admin.set_purge_config` |
-| Member or platform admin | inline in `tools/admin.rs` | `admin.list_members`, `admin.get_index_mode` |
+| Owner or platform admin | `AppState::require_owner_or_admin` | `admin.set_indexing_profile`, `admin.delete_project`, `admin.add_member`, `admin.remove_member`, `admin.set_index_mode`, `admin.set_purge_config` |
+| Member or platform admin | inline in `tools/admin.rs` | `admin.list_members`, `admin.get_index_mode`, `admin.get_indexing_profile` |
 
 **Separation of duties.** A platform admin manages projects and membership and
 can list everything, but membership is never implied: `AppState::authorize` is
@@ -862,7 +864,7 @@ Observed while hardening the extraction paths; none is a reported defect, all ar
 ## Registry tools and the models screen (SPEC-0102, 2026-11-22)
 
 The 12 registry tools (`admin.create_provider` to `admin.list_setting_changes`) are platform admin only, reading
-included, and count in the 39 `admin.*` tools, with the ten SPEC-0106 converter tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
+included, and count in the 41 `admin.*` tools, with the ten SPEC-0106 converter tools and the two SPEC-0107 indexing profile tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
 screen `/app/models` calls the same functions of `tools/models.rs`. No tool logs an argument; a secret is a `SecretText`.
 
 ## Document converters (SPEC-0106)
@@ -871,3 +873,10 @@ The ten `admin.*converter*` tools above are platform administrator only, reading
 them gives file access. Resolution at conversion time is project, then platform default, then the
 configuration file converter; see `architecture.md` "Document converters registry". The secret is write
 only (`secret`, `clear_secret`), answers carry `has_secret`. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`.
+
+## Indexing profile (SPEC-0107)
+
+`admin.get_indexing_profile` and `admin.set_indexing_profile` count in the 41 `admin.*` tools. Deleting a model a
+profile names is refused (`admin.delete_model`, `model '<name>' is used by <n> project(s)`). See `architecture.md`
+"Indexing profile". Tests: `cargo test -p fsa-core --lib -- e2e_0107_`.
+

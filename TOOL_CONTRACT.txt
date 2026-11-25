@@ -73,6 +73,11 @@ admin.get_index_mode
   params: project_id:string
   required: ['project_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.get_indexing_profile
+  desc: Read the indexing profile of a project: the default chunk strategy with its settings, the text embedding model and the image embedding model, each with where it comes from, and whether the vectors are out of date (member or platform admin).
+  params: project_id:string
+  required: ['project_id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.get_project_converter
   desc: Read the converter of a project, null when it has none (platform admin only).
   params: project_id:string
@@ -158,6 +163,11 @@ admin.set_index_mode
   params: project_id:string, mode:string
   required: ['project_id', 'mode']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.set_indexing_profile
+  desc: Change the indexing profile of a project: the fields given only; an empty text clears a field; changing a model marks the vectors of the project out of date; answers the whole profile (owner or platform admin).
+  params: project_id:string, chunk_strategy:<untyped>=null, chunk_settings:<untyped>=null, text_model_id:<untyped>=null, image_model_id:<untyped>=null
+  required: ['project_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.set_project_converter
   desc: Make a document converter the converter of a project, a project in its grace period included; gives no access to the files of the project (platform admin only).
   params: project_id:string, converter_id:string
@@ -888,6 +898,8 @@ admin.list_users: {"users": [{"person": "admin@example.com", "is_admin": true}, 
 admin.list_members: {"project_id": "parity-probe", "members": [{"person": "admin@example.com", "role": "owner", "added_by": "admin@example.com"}]}
 admin.set_index_mode: {"project_id": "parity-probe", "index_mode": "bm25", "previous_mode": "none", "reindex_started": true}
 admin.get_index_mode: {"project_id": "parity-probe", "index_mode": "bm25"}
+admin.get_indexing_profile: {"project_id": "parity-probe", "chunking": {"strategy": "fixed"|"structural"|null, "settings": {"size_tokens": 512}, "filled": {"overlap_tokens": 0, "size_tokens": 512}|null, "source": "project"|"server_default"}, "text_model": <model view>|null, "image_model": <model view>|null, "vectors_out_of_date": false, "vectors_out_of_date_since": "2026-11-25T10:00:00Z"|null} (a model view is {"model_id": "mdl-0123456789ab"|null, "name": "qwen3-embedding-0.6b", "provider": "Local"|null, "kind": "text_embedding", "dimension": 1024, "source": "project"|"server_default"|"configuration"}; the text model falls back to the server default, then to search.embedding; the image model has no fallback)
+admin.set_indexing_profile: the profile, as admin.get_indexing_profile (a change that leaves every field as it is writes and records nothing; changing a model sets vectors_out_of_date; admin.delete_model refuses a model a profile names)
 admin.get_project_quota: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234}
 admin.get_project_disk_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "file_count": 1, "truncated": false, "entries": [{"path": "/a.txt", "size": 1234, "state": "Active", "original_path": null}]}
 admin.get_project_folder_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "folder": {"path": "/", "size": 1234, "file_count": 1}, "item_count": 1, "truncated": false, "items": [{"path": "/a.txt", "kind": "File", "size": 1234}]}

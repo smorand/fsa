@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-146 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+148 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -580,6 +580,23 @@ Three doors, all platform administrator only: the ten `admin.*` tools (`admin.cr
 `clear_project_converter`), the REST routes under `/api/admin/{converters,converter-default,projects/{id}/converter}`
 and the browser screen `/app/converters`. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`.
 
+## Indexing profile of a project
+
+(SPEC-0107.) Each project has an indexing profile: the default chunk strategy with its settings, the text
+embedding model and the image embedding model, each model chosen from the model registry. The owner of the
+project or a platform administrator changes it with `admin.set_indexing_profile` (only the fields given;
+an empty text clears a field); a member or an administrator reads it with `admin.get_indexing_profile`.
+The strategy and settings follow `fs.create_chunk_set`. The text model must be of kind `text_embedding` and
+the image model of kind `image_embedding`. Changing a model marks the vectors of the project out of date
+(`vectors_out_of_date`, `vectors_out_of_date_since`), because a vector from one model cannot be compared
+with one from another; changing only the chunk fields does not. A project with no text model reads the
+server default text model (`source: server_default`), else the `search.embedding` model
+(`source: configuration`); the image model has no fallback. A model a profile names cannot be deleted
+(`model '<name>' is used by <n> project(s)`). The profile is shown, read only, on `/app/models`, is kept
+by `fsa migrate`, and every change is recorded (field names only). This part stores and shows the
+profile; building vectors, search and the default chunk set will use it in the following parts.
+Tests: `cargo test -p fsa-core --lib -- e2e_0107_`.
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or
@@ -681,7 +698,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 146 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 148 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash

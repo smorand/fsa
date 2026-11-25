@@ -537,3 +537,21 @@ platform administrator check.
   names only; no input struct derives `Debug` over a secret.
 * **Usage.** A project counts as using a converter whatever its `deleted_at`; a project removed for good no
   longer counts. Upgrade: `connect()` creates the tables and the column empty and writes no record (E2E-105).
+
+## Indexing profile (SPEC-0107, 2026-11-25)
+
+Five nullable columns of `project` (`ColumnMigration`, no new table): `chunk_strategy`, `chunk_settings` (JSON
+object of the settings as requested, canonical order), `text_model_id`, `image_model_id`, `vectors_stale_at`.
+Code: `settings/profile.rs` (rules, `impl Registry`), `settings/profile_store.rs` (SQL), `tools/profile.rs`
+(access and loose JSON arguments), two `#[tool]` methods, `models_screen.rs::profile_section` (read only).
+* **Checks in order.** Project, strategy and settings (`chunking::service::Requested::parse`, the same texts as
+  `fs.create_chunk_set`), text model, image model. One transaction, one `UPDATE` of the five columns, one record
+  (`set_indexing_profile`, target kind `project_profile`, field names). A set that changes nothing writes nothing.
+* **Out of date.** `vectors_stale_at` is set when `text_model_id` or `image_model_id` changes (a clear included),
+  never by a chunk change. Part 2 clears it when the vectors are rebuilt.
+* **Fallback.** Text model: project, else the registry default `text_embedding`, else `search.embedding` when its
+  endpoint is set (`model_id` null, `source: configuration`); image model none. A strategy change drops the old settings.
+* **Delete guard.** `Registry::try_delete_model` counts `project` rows naming the model, soft removed projects included.
+* **Migrate.** `migrate.rs::columns_of` appends the `ColumnMigration` columns of a table; before, `fsa migrate` copied
+  neither these columns nor `index_mode`, `quota_bytes`, `deleted_at` or `converter_id`.
+

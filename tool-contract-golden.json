@@ -408,6 +408,27 @@
       }
     },
     {
+      "name": "admin.get_indexing_profile",
+      "description": "Read the indexing profile of a project: the default chunk strategy with its settings, the text embedding model and the image embedding model, each with where it comes from, and whether the vectors are out of date (member or platform admin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.get_project_converter",
       "description": "Read the converter of a project, null when it has none (platform admin only).",
       "inputSchema": {
@@ -768,6 +789,44 @@
       },
       "annotations": {
         "destructiveHint": true,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.set_indexing_profile",
+      "description": "Change the indexing profile of a project: the fields given only; an empty text clears a field; changing a model marks the vectors of the project out of date; answers the whole profile (owner or platform admin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          },
+          "chunk_strategy": {
+            "description": "Default chunk strategy of the project: 'fixed' or 'structural'; an empty text clears it and its settings.",
+            "default": null
+          },
+          "chunk_settings": {
+            "description": "Settings of the strategy as in fs.create_chunk_set, an object; omitted settings take the server defaults; an empty object clears them. Needs a chunk strategy.",
+            "default": null
+          },
+          "text_model_id": {
+            "description": "Id of a text_embedding model of the registry; an empty text clears it, the project then uses the server default.",
+            "default": null
+          },
+          "image_model_id": {
+            "description": "Id of an image_embedding model of the registry; an empty text clears it.",
+            "default": null
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
         "readOnlyHint": false,
         "idempotentHint": true,
         "openWorldHint": false

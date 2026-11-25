@@ -225,15 +225,17 @@ async fn render(
         let (providers, models_) = registry_rows(app, person).await?;
         let defaults = models::get_default_models(app, person).await?;
         let changes = models::list_setting_changes(app, person, "").await?;
-        Ok::<_, ToolError>((providers, models_, defaults, changes))
+        let profiles = crate::tools::profile::list_profiles(app, person).await?;
+        Ok::<_, ToolError>((providers, models_, defaults, changes, profiles))
     };
     match read.await {
-        Ok((providers, models_, defaults, changes)) => {
+        Ok((providers, models_, defaults, changes, profiles)) => {
             // Issued once the page is about to render, so a refused read never
             // leaves a token behind.
             let token = s.csrf.issue(person);
             let changes: Vec<Value> = changes["changes"].as_array().cloned().unwrap_or_default();
-            let body = page(person, &token, refused, &providers, &models_, &defaults, &changes);
+            let body =
+                page(person, &token, refused, &providers, &models_, &defaults, &changes, &profiles);
             html(status, body)
         }
         Err(e) => html(status_of(&e), error_page(&e)),
@@ -256,6 +258,37 @@ fn number_text(v: &Value, key: &str) -> String {
     v[key].as_i64().map(|n| n.to_string()).unwrap_or_default()
 }
 
+/// One project's indexing profile (SPEC-0107), every value escaped. Read only:
+/// the tools change it.
+fn profile_section(p: &Value) -> String {
+    let model = |m: &Value| {
+        if m.is_null() {
+            "none".to_string()
+        } else {
+            format!("{} ({})", text(m, "name"), text(m, "source"))
+        }
+    };
+    let chunking = &p["chunking"];
+    let strategy = match chunking["strategy"].as_str() {
+        Some(s) => format!("{} ({})", escape_html(s), text(chunking, "source")),
+        None => format!("none ({})", text(chunking, "source")),
+    };
+    let stale = match p["vectors_out_of_date_since"].as_str() {
+        Some(t) if p["vectors_out_of_date"].as_bool() == Some(true) => {
+            format!("vectors out of date since {}", escape_html(t))
+        }
+        _ => "vectors current".to_string(),
+    };
+    format!(
+        "<section data-project=\"{id}\">\n<h3>{id}</h3>\n<p>Chunk strategy: {strategy}</p>\n\
+         <p>Text model: {}</p>\n<p>Image model: {}</p>\n<p>{stale}</p>\n</section>\n",
+        model(&p["text_model"]),
+        model(&p["image_model"]),
+        id = text(p, "project_id"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn page(
     person: &str,
     token: &str,
@@ -264,6 +297,7 @@ fn page(
     models_: &[Value],
     defaults: &Value,
     changes: &[Value],
+    profiles: &[Value],
 ) -> String {
     let csrf =
         format!("<input type=\"hidden\" name=\"csrf_token\" value=\"{}\">", escape_html(token));
@@ -346,6 +380,10 @@ fn page(
          <input name=\"name\"><input name=\"endpoint\"><select name=\"auth_scheme\"><option>none</option><option>bearer</option></select>\
          <input name=\"secret\" type=\"password\" autocomplete=\"new-password\"><button type=\"submit\">Create provider</button></form>\n"
     ));
+    out.push_str("<h2>Project profiles</h2>\n");
+    for p in profiles {
+        out.push_str(&profile_section(p));
+    }
     out.push_str("<h2>Latest changes</h2>\n<table>\n<tbody>\n");
     for c in changes.iter().take(CHANGES_SHOWN) {
         let fields: Vec<&str> = c["fields"]

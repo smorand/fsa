@@ -1711,6 +1711,24 @@ pub struct SetDefaultConverterArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetIndexingProfileArgs {
+    /// Id of the project.
+    pub project_id: String,
+    /// Default chunk strategy of the project: 'fixed' or 'structural'; an empty text clears it and its settings.
+    #[serde(default)]
+    pub chunk_strategy: Option<serde_json::Value>,
+    /// Settings of the strategy as in fs.create_chunk_set, an object; omitted settings take the server defaults; an empty object clears them. Needs a chunk strategy.
+    #[serde(default)]
+    pub chunk_settings: Option<serde_json::Value>,
+    /// Id of a text_embedding model of the registry; an empty text clears it, the project then uses the server default.
+    #[serde(default)]
+    pub text_model_id: Option<serde_json::Value>,
+    /// Id of an image_embedding model of the registry; an empty text clears it.
+    #[serde(default)]
+    pub image_model_id: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SetProjectConverterArgs {
     /// Id of the project.
     pub project_id: String,
@@ -3763,6 +3781,41 @@ impl McpServer {
     }
 
     #[tool(
+        name = "admin.get_indexing_profile",
+        description = "Read the indexing profile of a project: the default chunk strategy with its settings, the text embedding model and the image embedding model, each with where it comes from, and whether the vectors are out of date (member or platform admin)."
+    )]
+    pub(crate) async fn admin_get_indexing_profile(
+        &self,
+        Parameters(a): Parameters<ProjectIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::profile::get_indexing_profile(&self.state, &self.person, &a.project_id)
+                .await;
+        to_call_result("admin.get_indexing_profile", out)
+    }
+
+    #[tool(
+        name = "admin.set_indexing_profile",
+        description = "Change the indexing profile of a project: the fields given only; an empty text clears a field; changing a model marks the vectors of the project out of date; answers the whole profile (owner or platform admin)."
+    )]
+    pub(crate) async fn admin_set_indexing_profile(
+        &self,
+        Parameters(a): Parameters<SetIndexingProfileArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::profile::set_indexing_profile(
+            &self.state,
+            &self.person,
+            &a.project_id,
+            a.chunk_strategy,
+            a.chunk_settings,
+            a.text_model_id,
+            a.image_model_id,
+        )
+        .await;
+        to_call_result("admin.set_indexing_profile", out)
+    }
+
+    #[tool(
         name = "admin.create_model",
         description = "Register a model of a provider: a name, a kind (text_embedding, image_embedding, reranker, ocr or chat), for the embedding kinds a dimension, and optionally a limit of input tokens (platform admin only)."
     )]
@@ -4871,12 +4924,12 @@ mod tests {
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
         // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
         // SPEC-0106 US-0309 adds admin.create_converter and admin.list_converters: admin 31, total 142. US-0312 adds admin.update_converter: admin 32, total 143.
-        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150.
+        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152.
         assert_eq!(fs_count, 53, "got: {names:?}");
-        assert_eq!(admin_count, 39, "got: {names:?}");
+        assert_eq!(admin_count, 41, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 150, "got: {names:?}");
+        assert_eq!(names.len(), 152, "got: {names:?}");
     }
 
     #[test]
@@ -5213,7 +5266,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 146, "the frozen contract covers 146 non-search tools");
+        assert_eq!(checked, 148, "the frozen contract covers 148 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -5234,8 +5287,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 146, "got: {names:?}");
-        assert_eq!(expected.len(), 146, "the golden contract itself must hold 146 names");
+        assert_eq!(names.len(), 148, "got: {names:?}");
+        assert_eq!(expected.len(), 148, "the golden contract itself must hold 148 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

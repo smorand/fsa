@@ -529,6 +529,10 @@ impl Registry {
                 current.name
             )));
         }
+        let used = SettingsStore::count_model_projects(&mut tx, model_id).await?;
+        if used > 0 {
+            return Err(invalid(format!("model '{}' is used by {used} project(s)", current.name)));
+        }
         SettingsStore::delete_model(&mut tx, model_id).await?;
         self.record(&mut tx, person, "delete_model", Target::model(&current), vec![], now())
             .await?;

@@ -106,6 +106,7 @@ pub(crate) mod pdf_testkit;
 mod pg_null_e2e;
 #[cfg(test)]
 mod pg_open_e2e;
+pub(crate) mod profile;
 #[cfg(test)]
 mod project_removal_e2e;
 #[cfg(test)]

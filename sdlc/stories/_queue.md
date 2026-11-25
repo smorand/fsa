@@ -321,3 +321,5 @@
 | US-0319 | SPEC-0106 | the web routes for converters | US-0318 | 2 | landed | | |
 | US-0320 | SPEC-0106 | the converters screen | US-0319 | 2 | landed | | |
 | US-0321 | SPEC-0106 | the journey, the upgrade and the docs | US-0320 | 2 | landed | | |
+| US-0322 | SPEC-0107 | profile storage, rules and the two tools | main | 1 | landed | spec-0107-indexing-profile | main |
+| US-0323 | SPEC-0107 | delete guard, models screen, contract and docs | US-0322 | 2 | landed | spec-0107-indexing-profile | main |
