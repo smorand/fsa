@@ -340,3 +340,7 @@
 | US-0338 | SPEC-0113 | the origin of a companion | main | 1 | landed | | |
 | US-0339 | SPEC-0113 | the conversion job after a source change | US-0338 | 1 | landed | | |
 | US-0340 | SPEC-0113 | fs.recalculate conversion, PostgreSQL, docs and contract | US-0339 | 1 | landed | | |
+| US-0341 | SPEC-0114 | the settings store and its rules | main | 1 | landed |  |  |
+| US-0342 | SPEC-0114 | boot reads the settings and the database URL | US-0341 | 1 | landed |  |  |
+| US-0343 | SPEC-0114 | tools, REST routes and the settings screen | US-0342 | 1 | landed |  |  |
+| US-0344 | SPEC-0114 | migrate, PostgreSQL, docs and contract | US-0343 | 1 | landed |  |  |

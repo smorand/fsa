@@ -72,7 +72,7 @@ mod tests {
         super::super::admin::register(&mut reg);
         // SPEC-0020 adds admin.get_project_quota, SPEC-0047 admin.get_project_disk_usage, SPEC-0049 admin.get_project_folder_usage: 17 admin tools.
         // SPEC-0102 adds five registry tools: 22; US-0284 adds four model tools: 26; US-0285 adds three default tools: 29; SPEC-0106 US-0309 adds two converter tools: 31; US-0312 adds admin.update_converter: 32; US-0313 adds six default and project converter tools: 38; US-0314 adds admin.delete_converter: 39; SPEC-0107 adds two indexing profile tools: 41; SPEC-0108 adds three recalculation tools: 44.
-        assert_eq!(reg.len(), 44);
+        assert_eq!(reg.len(), 47);
         assert!(reg.resolve("git.init").is_none());
         assert!(reg.resolve("git.auth").is_none());
         for name in ["git.token_set", "git.remote_push", "git.remote_fetch", "git.remote_pull"] {
@@ -89,7 +89,7 @@ mod tests {
         super::super::git_pr::register(&mut reg);
         // SPEC-0052 adds git.tag_create, git.tag_delete and git.remote_push_tag: 42 git.*.
         // SPEC-0053 adds git.remote_delete_tag: 43 git.*. SPEC-0054 adds git.remote_push_tags: 44.
-        assert_eq!(reg.len(), 44 + 44 + 4 + 6);
+        assert_eq!(reg.len(), 47 + 44 + 4 + 6);
         assert!(reg.resolve("git.remote_clone").is_some());
         assert!(reg.resolve("git.auth_revoke").is_some());
         assert!(reg.resolve("git.token_set").is_some());
@@ -118,7 +118,7 @@ mod tests {
         // 53 fs (SPEC-0104 adds fs.get_document_structure; SPEC-0019 adds fs.list_tables, fs.get_table, fs.list_images, fs.get_image,
         // fs.get_document_view, SPEC-0045 fs.diff_files, SPEC-0100 fs.list_derived_jobs, fs.recalculate, SPEC-0101 fs.list_chunk_sets, fs.list_chunks,
         // fs.get_chunk, fs.create_chunk_set, fs.delete_chunk_set) + 44 admin (SPEC-0108 adds three, SPEC-0020, SPEC-0047, SPEC-0049, SPEC-0102, SPEC-0106) + 5 web + 2 context7 = 99
-        assert_eq!(reg.len(), 105);
+        assert_eq!(reg.len(), 108);
         assert!(reg.resolve("web.search").is_some());
         assert!(reg.resolve("context7.resolve_library_id").is_some());
     }
@@ -142,7 +142,7 @@ mod tests {
         // + 2 doc.to_docx / doc.to_pptx if pandoc is in PATH, 0 otherwise
         // + 3 doc.open_editor / doc.close_editor / doc.list_editors always
         let doc_count = if which::which("pandoc").is_ok() { 2 } else { 0 };
-        assert_eq!(reg.len(), 172 + doc_count + 3);
+        assert_eq!(reg.len(), 175 + doc_count + 3);
     }
 
     #[test]
@@ -161,7 +161,7 @@ mod tests {
         super::register_all(&mut reg, &features, &config);
         let doc_count = if which::which("pandoc").is_ok() { 2 } else { 0 };
         // Base 166 (SPEC-0101 adds five fs.* tools, SPEC-0102 nine admin.*, SPEC-0106 ten) + doc + 3 editor + 4 search.*
-        assert_eq!(reg.len(), 172 + doc_count + 3 + 4);
+        assert_eq!(reg.len(), 175 + doc_count + 3 + 4);
         assert!(reg.resolve("search.index").is_some());
         assert!(reg.resolve("search.query").is_some());
         assert!(reg.resolve("search.delete").is_some());
@@ -237,7 +237,7 @@ mod tests {
         super::super::contract_golden::assert_family(
             &reg,
             |name| name.starts_with("admin.") || name.starts_with("git."),
-            98,
+            101,
             "admin.* and git.* tools",
         );
     }

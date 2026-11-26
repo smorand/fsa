@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-152 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+155 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -72,7 +72,7 @@ Interactive API docs: <http://127.0.0.1:5002/api/docs> (spec at `/api/swagger.js
 ## CLI
 
 ```
-fsa serve [--config PATH]      run the server
+fsa serve [--config PATH] [--database-url URL]   run the server
 fsa keys  [--dir DIR]          generate an RS256 keypair (default .keys)
 fsa token <email> [--key PATH] [--ttl SECONDS]
 fsa migrate --from A.yaml --to B.yaml   copy relational state between backends
@@ -84,6 +84,11 @@ Config resolution, highest priority first: `--config`, else `$FSA_CONFIG`, else
 `${FSA_CONFIG_DIR:-config}/${FSA_CONFIG_NAME:-local}.yaml`. The first two are used
 as given; the last two are probed, and when neither exists the error lists every path
 tried.
+
+`--database-url URL` (or `$FSA_DATABASE_URL`, the flag wins) names the admin store: `postgres://...`,
+`postgresql://...` or `sqlite:PATH`. It replaces `infra.admin` of the file and makes the file optional:
+with only the URL and `FSA_TOKEN_KEY` the server reads the settings stored in that database (see
+"Server settings in the database"). With neither a file nor a URL the start is refused as before.
 
 ### Switching backend with data in place
 
@@ -708,6 +713,28 @@ being rebuilt answers the job that waits, never a second one. A person who is no
 unknown file 404 (`file not found`), no identity 401. A post made with the cookie needs the one time token the
 page carries (403 otherwise). Every stored value is escaped and the page has no script. Tests:
 `cargo test -p fsa-core --lib -- e2e_0111_`.
+
+## Server settings in the database
+
+Eight sections of the configuration (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`,
+`search`) are settings a platform administrator reads and changes without editing a file: the tools
+`admin.list_settings`, `admin.get_setting` and `admin.set_setting`, `GET /api/admin/settings`,
+`GET|PUT /api/admin/settings/{section}` (body `{"value": {...}}`) and the `/app/settings` page. A change
+merges the keys given over the section, is checked by the same rules as the YAML (same messages, an unknown
+key or a wrong type is refused naming the section) and is applied **at the next start**: every answer says
+`restart_required`. The only secret of these sections, `doc_service.api.auth_token`, is stored encrypted under
+`FSA_TOKEN_KEY` and never returned: `get` shows `has_value` and the last 4 characters (none under 8
+characters); an empty text clears it. The change record (`admin.list_setting_changes`, `target_kind` `setting`)
+holds the key names, never a value.
+
+The YAML stays as an optional seed and fallback. At start a section with a stored row takes the stored value
+(the database wins); a section with no row takes the YAML or the default. When the configuration was read from a
+YAML file, each section with no row is imported once; **a later edit of the YAML does not override the database**
+(the start logs a warning when they differ). A stored secret needs the key it was stored with: a missing or other
+`FSA_TOKEN_KEY` stops the start naming the section. The command line flags `--sqlite`, `--db`, `--doc` still force
+their switch on. `server`, `auth`, `git`, `web`, `context7` and `infra` are still read from the file (BL-0179 to
+BL-0181), so a database only start still needs `auth` keys from a file until they move. `fsa purge` and `fsa
+migrate` read the file only. Tests: `cargo test -p fsa-core --lib -- e2e_0114_`.
 
 ## Project quota enforcement
 

@@ -268,3 +268,7 @@ The five route families of the converters table above call the same functions as
 tools and are platform administrator only. `/app/converters` is the browser screen (session cookie plus one
 time form token, as `/app/models`): converters with `Secret stored` or `No secret`, the default, the project
 choices and the latest 20 converter changes.
+
+## Server settings routes and screen (SPEC-0114, 2026-11-26)
+
+`GET /api/admin/settings`, `GET /api/admin/settings/{section}`, `PUT /api/admin/settings/{section}` with body `{"value": {...}}` (same answers and refusals as the tools, platform admin only, 403 otherwise). The screen `GET /app/settings` and `POST /app/settings/set` (form `section`, `value` a JSON object, `csrf_token`) is `settings_screen.rs`: sections with source and restart flag, secrets as `set, ends with ....`, one form per section, the latest 20 changes of kind `setting`. A refused value renders the page again with the refusal (400); a used or absent token is 403 for a cookie request.

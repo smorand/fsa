@@ -98,6 +98,11 @@ admin.get_project_quota
   params: project_id:string
   required: ['project_id']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.get_setting
+  desc: Read one server setting section: its value without secrets, for each secret whether it is set and its last 4 characters, where it comes from, and whether a restart is needed to apply it (platform admin only).
+  params: section:string
+  required: ['section']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.list_all_projects
   desc: List every project (platform admin only).
   params: (none)
@@ -136,6 +141,11 @@ admin.list_providers
 admin.list_setting_changes
   desc: List the record of changes of the platform settings, newest first, 100 per answer: who changed what, when, and which fields (platform admin only).
   params: marker:string=""
+  required: []
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.list_settings
+  desc: List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).
+  params: (none)
   required: []
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.list_users
@@ -197,6 +207,11 @@ admin.set_purge_config
   desc: Configure auto-purge for a project: enable flag, internal-vs-external driver choice, and the two independent retention thresholds (owner or platform admin). Either retention value may be absent to disable that axis independently.
   params: project_id:string, autopurge_enabled:boolean, use_internal_purge:boolean, file_retention_days:number|null, project_retention_days:number|null
   required: ['project_id', 'autopurge_enabled', 'use_internal_purge']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.set_setting
+  desc: Change keys of one server setting section: the keys given are merged over the section, an unknown key or a value that today's configuration check refuses is refused, a secret key set to an empty text is cleared; the change applies at the next start (platform admin only).
+  params: section:string, value:<untyped>=null
+  required: ['section']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 admin.undelete_project
   desc: Clear a project's soft-delete flag, immediately restoring access (owner or platform admin).
@@ -940,6 +955,9 @@ admin.set_index_mode: {"project_id": "parity-probe", "index_mode": "bm25", "prev
 admin.get_index_mode: {"project_id": "parity-probe", "index_mode": "bm25"}
 admin.get_indexing_profile: {"project_id": "parity-probe", "chunking": {"strategy": "fixed"|"structural"|null, "settings": {"size_tokens": 512}, "filled": {"overlap_tokens": 0, "size_tokens": 512}|null, "source": "project"|"server_default"}, "text_model": <model view>|null, "image_model": <model view>|null, "vectors_out_of_date": false, "vectors_out_of_date_since": "2026-11-25T10:00:00.123Z"|null} (a model view is {"model_id": "mdl-0123456789ab"|null, "name": "qwen3-embedding-0.6b", "provider": "Local"|null, "kind": "text_embedding", "dimension": 1024, "source": "project"|"server_default"|"configuration"}; the text model falls back to the server default, then to search.embedding; the image model has no fallback)
 admin.set_indexing_profile: the profile, as admin.get_indexing_profile (a change that leaves every field as it is writes and records nothing; changing a model sets vectors_out_of_date; admin.delete_model refuses a model a profile names)
+admin.list_settings: {"settings": [{"section": "safety", "source": "database"|"yaml"|"default", "restart_required": true, "updated_at": "2026-11-26T10:00:00Z"|null, "updated_by": "admin@example.com"|null}]} (the sections are safety, api, extract, doc, sqlite, db, doc_service, search, in that order)
+admin.get_setting: {"section": "doc_service", "value": {<the keys of the section as in the YAML, secrets absent>}, "secrets": {"api.auth_token": {"has_value": true, "last4": "3456"}} (last4 is empty under 8 characters), "source": "database"|"yaml"|"default", "restart_required": true, "updated_at": ..., "updated_by": ...} (restart_required is true when the stored section differs from the one the running server uses; a change applies at the next start)
+admin.set_setting: the section, as admin.get_setting (the keys given are merged over the section, nested objects merge, lists and scalars replace; a secret key set to an empty text clears it, absent keeps it; an unknown key, a wrong type or a value today's configuration check refuses is refused naming the section and writes nothing; one record per call in admin.list_setting_changes with target_kind "setting" and the changed key names, never a value)
 admin.recalculate_start: {"project_id": "proj", "job": {"job_id": "<uuid>", "path": "/", "kind": "vectors", "state": "running", "cause": "manual", "created_at": "2026-11-26T10:00:00Z", "progress": {"done": 0, "total": null}}, "already_running": false} (path is "/" for the whole project; the same scope again answers the running job with already_running true, another scope is ERR_INVALID_ARGUMENT)
 admin.recalculate_status: {"project_id": "proj", "job": null|{"job_id": "<uuid>", "path": "/", "kind": "vectors", "state": "running"|"done"|"failed"|"cancelled", "cause": "manual"|"change", "created_at": "2026-11-26T10:00:00Z", "ended_at": "2026-11-26T10:03:00Z", "reason": "embedding service unreachable", "progress": {"done": 3, "total": 3}}, "vectors_out_of_date": false} (ended_at once finished, reason when failed; a whole project job that ends done clears vectors_out_of_date unless a model changed meanwhile)
 admin.recalculate_cancel: {"project_id": "proj", "cancelled": true} (false when no recalculation runs; the job ends cancelled after its current file and the marker stays)

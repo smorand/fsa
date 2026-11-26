@@ -1,4 +1,4 @@
-# Tool reference (152 tools)
+# Tool reference (155 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -606,7 +606,7 @@ bytes; in bundle mode stdout is discarded. Known gaps: BL-0148 (web fetch tools 
 BL-0151 (parsed structures larger than their bytes), BL-0152 (converter's own children survive the kill),
 BL-0153 (no total across cross reference streams).
 
-## admin (17)
+## admin (20)
 
 | Tool | Purpose | Parameters | Returns | Annotations | Auth |
 |---|---|---|---|---|---|
@@ -662,6 +662,10 @@ with alphanumeric first and last characters. Creation provisions the volume and
 rolls the ACL row back if provisioning fails. Deletion also purges
 `state/git/{id}.db` and the bare repo directory when git is enabled, so a
 recreated id never inherits stale refs.
+| `admin.list_settings` | list the eight server setting sections (SPEC-0114) | none | `{settings: [{section, source, restart_required, updated_at, updated_by}]}` | RO,I,!OW | platform admin |
+| `admin.get_setting` | read one section without its secrets | `section` | `{section, value, secrets{path: {has_value, last4}}, source, restart_required, updated_at, updated_by}` | RO,I,!OW | platform admin; `unknown setting section '<x>', expected one of ...` |
+| `admin.set_setting` | merge the keys given over a section; applies at the next start | `section`, `value` (object) | the section, as `admin.get_setting` | !D,!RO,I,!OW | platform admin; `unknown key '<path>' in setting '<section>'`, `invalid setting '<section>': <reason>`, today's YAML check messages, `no master key is configured; set FSA_TOKEN_KEY` for a secret |
+
 
 ## git (44, registered only when `git.enabled`)
 
@@ -805,9 +809,9 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 98 (54 `fs.*`, 44 `admin.*`) |
-| git flag on | 152 |
-| git and search flags on | 159 |
+| default | 101 (54 `fs.*`, 47 `admin.*`) |
+| git flag on | 155 |
+| git and search flags on | 162 |
 | every flag, pandoc on `PATH` | 177 (175 without pandoc: `doc.*` registers nothing) |
 | one optional family alone | 92 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
@@ -901,3 +905,7 @@ other than `rag` or `both` (`ERR_NOT_SUPPORTED`), a path that is not a file (`ER
 tools count in the 44 `admin.*` tools; start and cancel refuse anyone but the owner or a platform administrator
 (`ERR_FORBIDDEN`), start also refuses an index mode without vectors, a path that is not a file of the project and a second scope
 while one runs. See `search.md` "Vectors per project". Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0108_`.
+
+## Server settings tools (SPEC-0114, 2026-11-26)
+
+`admin.list_settings`, `admin.get_setting`, `admin.set_setting` are in `tools/settings.rs` (typed functions the `#[tool]` methods, `/api/admin/settings` and `/app/settings` call). The access check comes first, so a non admin is refused before any shape check, reading included. The rules are in `settings/server_settings.rs`. Part 1 of BL-0173: sections `safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`, `search`.

@@ -534,6 +534,27 @@
       }
     },
     {
+      "name": "admin.get_setting",
+      "description": "Read one server setting section: its value without secrets, for each secret whether it is set and its last 4 characters, where it comes from, and whether a restart is needed to apply it (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service or search.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "section"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.list_all_projects",
       "description": "List every project (platform admin only).",
       "inputSchema": {
@@ -671,6 +692,19 @@
             "default": ""
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.list_settings",
+      "description": "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
       },
       "annotations": {
         "readOnlyHint": true,
@@ -992,6 +1026,32 @@
           "project_id",
           "autopurge_enabled",
           "use_internal_purge"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.set_setting",
+      "description": "Change keys of one server setting section: the keys given are merged over the section, an unknown key or a value that today's configuration check refuses is refused, a secret key set to an empty text is cleared; the change applies at the next start (platform admin only).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "section": {
+            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service or search.",
+            "type": "string"
+          },
+          "value": {
+            "description": "Object of the keys to change, named as in the YAML configuration, for example {\"max_read_lines\": 500}; nested keys are nested objects; a key not given keeps its value.",
+            "default": null
+          }
+        },
+        "required": [
+          "section"
         ]
       },
       "annotations": {

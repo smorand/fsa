@@ -1109,7 +1109,7 @@ impl Default for DocServiceConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub server: HttpConfig,
@@ -1126,9 +1126,126 @@ pub struct ServerConfig {
     pub doc: DocConfig,
     pub doc_service: DocServiceConfig,
     pub search: SearchConfig,
+    /// True when this configuration was read from a YAML file: only then are the
+    /// settings sections with no stored row imported (SPEC-0114 DEC-005).
+    #[serde(skip)]
+    pub from_yaml_file: bool,
+    /// The switches the command line forced on, kept so a stored value cannot
+    /// turn them off again (SPEC-0114 FR-NEW-015).
+    #[serde(skip)]
+    pub forced: Vec<String>,
+    /// The value each forced switch had before the flag.
+    #[serde(skip)]
+    pub unforced: std::collections::BTreeMap<String, bool>,
+}
+
+/// The 14 sections only: `from_yaml_file` and `forced` describe where the
+/// configuration came from, not what it says, and the recorded Debug values of
+/// the config tests must not move (SPEC-0114).
+impl fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("server", &self.server)
+            .field("auth", &self.auth)
+            .field("infra", &self.infra)
+            .field("safety", &self.safety)
+            .field("extract", &self.extract)
+            .field("api", &self.api)
+            .field("git", &self.git)
+            .field("web", &self.web)
+            .field("context7", &self.context7)
+            .field("sqlite", &self.sqlite)
+            .field("db", &self.db)
+            .field("doc", &self.doc)
+            .field("doc_service", &self.doc_service)
+            .field("search", &self.search)
+            .finish()
+    }
 }
 
 impl ServerConfig {
+    /// Force a switch on from the command line (`git`, `web`, `context7`, `sqlite`,
+    /// `db`, `doc`), remembered so a stored setting cannot turn it off again. The
+    /// value it had is kept in `unforced`, so a settings change never persists the
+    /// flag (SPEC-0114 FR-NEW-015).
+    pub fn force(&mut self, name: &str) {
+        if let Some(on) = self.enabled_mut(name) {
+            let before = *on;
+            self.unforced.entry(name.to_string()).or_insert(before);
+        }
+        if !self.forced.iter().any(|n| n == name) {
+            self.forced.push(name.to_string());
+        }
+        self.apply_forced();
+    }
+
+    /// The `enabled` switch of a section a flag can force.
+    fn enabled_mut(&mut self, name: &str) -> Option<&mut bool> {
+        match name {
+            "git" => Some(&mut self.git.enabled),
+            "web" => Some(&mut self.web.enabled),
+            "context7" => Some(&mut self.context7.enabled),
+            "sqlite" => Some(&mut self.sqlite.enabled),
+            "db" => Some(&mut self.db.enabled),
+            "doc" => Some(&mut self.doc.enabled),
+            _ => None,
+        }
+    }
+
+    /// Sets every forced switch on.
+    pub fn apply_forced(&mut self) {
+        for name in self.forced.clone() {
+            if let Some(on) = self.enabled_mut(&name) {
+                *on = true;
+            }
+        }
+    }
+
+    /// A section just replaced by a stored one: its switch is the value to go
+    /// back to when the flag is not given.
+    pub fn note_stored_switch(&mut self, name: &str) {
+        if self.forced.iter().any(|n| n == name)
+            && let Some(on) = self.enabled_mut(name)
+        {
+            let stored = *on;
+            self.unforced.insert(name.to_string(), stored);
+        }
+    }
+
+    /// This configuration as it is without the command line flags: what the
+    /// settings store compares with and persists from.
+    pub fn without_flags(&self) -> ServerConfig {
+        let mut c = self.clone();
+        for (name, original) in self.unforced.clone() {
+            if let Some(on) = c.enabled_mut(&name) {
+                *on = original;
+            }
+        }
+        c
+    }
+
+    /// Points the admin store at `url` (SPEC-0114 DEC-006): `postgres://` and
+    /// `postgresql://` name PostgreSQL, `sqlite:PATH` names a SQLite file. The
+    /// URL replaces whatever `infra.admin` held. Never echoes the URL.
+    pub fn set_database_url(&mut self, url: &str) -> Result<()> {
+        let url = url.trim();
+        let admin = &mut self.infra.admin;
+        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            admin.backend = backend::POSTGRES.into();
+            admin.dsn = Dsn::new(url);
+            Ok(())
+        } else if let Some(path) = url.strip_prefix("sqlite:").filter(|p| !p.trim().is_empty()) {
+            admin.backend = backend::SQLITE.into();
+            admin.path = path.trim().to_string();
+            admin.dsn = Dsn::default();
+            Ok(())
+        } else {
+            Err(ToolError::invalid_argument(
+                "the database URL must start with postgres://, postgresql:// or sqlite:PATH",
+            ))
+        }
+    }
+
     /// Load and parse a YAML config, expanding `${VAR}` / `${VAR:-default}` first.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -1138,7 +1255,9 @@ impl ServerConfig {
                 path.display()
             ))
         })?;
-        Self::from_yaml(&raw)
+        let mut config = Self::from_yaml(&raw)?;
+        config.from_yaml_file = true;
+        Ok(config)
     }
 
     pub fn from_yaml(raw: &str) -> Result<Self> {
@@ -1163,6 +1282,14 @@ impl ServerConfig {
 
     /// Reject a configuration that cannot work, naming the offending key.
     pub fn validate(&self) -> Result<()> {
+        self.check()?;
+        crate::git::remote::validate_hosts(&self.git)
+    }
+
+    /// Every check of [`Self::validate`], with no side effect: the git host map
+    /// is checked, not published (SPEC-0114: a settings change must not touch
+    /// the map the running server resolves hosts with).
+    pub fn check(&self) -> Result<()> {
         // First of all, so a removed database is always reported as removed, whatever else
         // is wrong with the file (SPEC-0051).
         self.reject_removed_backends()?;
@@ -1180,7 +1307,7 @@ impl ServerConfig {
         validate_store("oauth", &self.infra.oauth.backend, &self.infra.oauth.dsn)?;
         validate_doc_service(&self.doc_service)?;
         validate_search(&self.search)?;
-        crate::git::remote::validate_hosts(&self.git)?;
+        crate::git::remote::check_hosts(&self.git)?;
         Ok(())
     }
 

@@ -33,6 +33,7 @@ pub mod quota;
 pub mod safety;
 pub mod search;
 pub mod settings;
+pub mod settings_screen;
 pub mod state;
 pub mod storage;
 pub mod token_screen;

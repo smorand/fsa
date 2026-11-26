@@ -19,6 +19,8 @@ use std::process::ExitCode;
 pub const ENV_CONFIG: &str = "FSA_CONFIG";
 /// Env var holding the config directory (default `config`).
 pub const ENV_CONFIG_DIR: &str = "FSA_CONFIG_DIR";
+/// Env var holding the admin store URL, the `--database-url` flag's fallback (SPEC-0114).
+pub const ENV_DATABASE_URL: &str = "FSA_DATABASE_URL";
 /// Env var holding the config file stem (default `local`).
 pub const ENV_CONFIG_NAME: &str = "FSA_CONFIG_NAME";
 /// The names the three variables above had before the rename, read until release 1.0.0.
@@ -78,6 +80,12 @@ pub enum Command {
         /// Force doc.enabled = true (overrides config YAML).
         #[arg(long)]
         doc: bool,
+        /// The admin store: `postgres://...`, `postgresql://...` or `sqlite:PATH`; the
+        /// variable FSA_DATABASE_URL is the fallback.
+        /// Replaces `infra.admin` of the config file, and makes the file optional:
+        /// the settings read from this store (with FSA_TOKEN_KEY for the secrets).
+        #[arg(long, value_name = "URL")]
+        database_url: Option<String>,
     },
     /// Generate an RS256 keypair (jwt.key private, jwt.pub public).
     Keys {
@@ -159,6 +167,7 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         sqlite: false,
         db: false,
         doc: false,
+        database_url: None,
     }) {
         Command::Version => {
             println!("{}", crate::app::VERSION);
@@ -168,8 +177,12 @@ pub async fn dispatch(cli: Cli) -> anyhow::Result<()> {
         Command::Token { email, key, issuer, claim, ttl } => {
             cmd_token(&email, key.as_deref(), &issuer, &claim, ttl)
         }
-        Command::Serve { config, git, web, context7, sqlite, db, doc } => {
-            cmd_serve(config.as_deref(), git, web, context7, sqlite, db, doc).await
+        Command::Serve { config, git, web, context7, sqlite, db, doc, database_url } => {
+            // The flag wins over the variable.
+            let url = database_url
+                .or_else(|| std::env::var(ENV_DATABASE_URL).ok())
+                .filter(|v| !v.trim().is_empty());
+            cmd_serve(config.as_deref(), git, web, context7, sqlite, db, doc, url).await
         }
         Command::Migrate { from, to } => cmd_migrate(&from, &to).await,
         Command::Purge { config, project, on_demand } => {
@@ -208,6 +221,14 @@ async fn cmd_purge(
     let relational = std::sync::Arc::new(crate::storage::RelationalRegistry::new());
     let admin = crate::storage::build_admin_store(&config, &relational).await?;
     admin.connect().await?;
+    // The purge reads the same settings as the server (SPEC-0114): a stored
+    // limit or grace period wins over the file.
+    let key =
+        crate::settings::secrets::master_key_from_env().map_err(|e| anyhow::anyhow!(e.message))?;
+    let config = std::sync::Arc::new(
+        crate::settings::server_settings_boot::apply((*config).clone(), admin.as_ref(), key)
+            .await?,
+    );
     let stores = crate::storage::StoreManager::new(config.clone(), relational.clone());
     let safety = crate::safety::SafetyManager::new(config.safety.clone());
     // The purge verb only deletes, so no project limit can ever be consulted;
@@ -309,6 +330,8 @@ fn cmd_token(
     Ok(())
 }
 
+// The flags are the verb's own switches, one argument each, as clap hands them over.
+#[allow(clippy::too_many_arguments)]
 async fn cmd_serve(
     explicit: Option<&std::path::Path>,
     git: bool,
@@ -317,26 +340,21 @@ async fn cmd_serve(
     sqlite: bool,
     db: bool,
     doc: bool,
+    database_url: Option<String>,
 ) -> anyhow::Result<()> {
     crate::logging::init();
-    let (mut config, resolved) = load_config(explicit)?;
-    if git {
-        config.git.enabled = true;
-    }
-    if web {
-        config.web.enabled = true;
-    }
-    if context7 {
-        config.context7.enabled = true;
-    }
-    if sqlite {
-        config.sqlite.enabled = true;
-    }
-    if db {
-        config.db.enabled = true;
-    }
-    if doc {
-        config.doc.enabled = true;
+    let (mut config, resolved) = load_serve_config(explicit, database_url.as_deref())?;
+    for (on, name) in [
+        (git, "git"),
+        (web, "web"),
+        (context7, "context7"),
+        (sqlite, "sqlite"),
+        (db, "db"),
+        (doc, "doc"),
+    ] {
+        if on {
+            config.force(name);
+        }
     }
     // The banner goes to stderr so it never pollutes a piped stdout.
     eprintln!(
@@ -344,7 +362,9 @@ async fn cmd_serve(
         crate::app::VERSION,
         config.server.host,
         config.server.port,
-        resolved.display()
+        resolved
+            .as_ref()
+            .map_or_else(|| "none, settings from the database".into(), |p| p.display().to_string())
     );
     crate::app::serve(config).await
 }
@@ -444,6 +464,44 @@ pub fn resolve_config_path_with(
     Err(tried)
 }
 
+/// The configuration of `serve` (SPEC-0114 FR-NEW-011): the file when one is
+/// found, the defaults when none is and a database URL is given; the URL, when
+/// given, replaces `infra.admin`. No file and no URL keeps today's refusal.
+pub(crate) fn load_serve_config(
+    explicit: Option<&std::path::Path>,
+    database_url: Option<&str>,
+) -> Result<(ServerConfig, Option<PathBuf>), ToolError> {
+    load_serve_config_with(explicit, database_url, resolve_config_path)
+}
+
+/// [`load_serve_config`] over an injected path resolution, so the cases are
+/// testable without the machine's own config directories.
+pub(crate) fn load_serve_config_with(
+    explicit: Option<&std::path::Path>,
+    database_url: Option<&str>,
+    resolve: impl Fn(Option<&std::path::Path>) -> std::result::Result<PathBuf, Vec<PathBuf>>,
+) -> Result<(ServerConfig, Option<PathBuf>), ToolError> {
+    let url = database_url.map(str::trim).filter(|u| !u.is_empty());
+    let (mut config, path) = match (resolve(explicit), url) {
+        (Ok(path), _) => (ServerConfig::load(&path)?, Some(path)),
+        // Nothing found and nothing named: the URL alone is enough.
+        (Err(_), Some(_)) => (ServerConfig::default(), None),
+        (Err(tried), None) => return Err(not_found_error(&tried)),
+    };
+    if let Some(url) = url {
+        config.set_database_url(url)?;
+    }
+    Ok((config, path))
+}
+
+fn not_found_error(tried: &[PathBuf]) -> ToolError {
+    let list = tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
+    ToolError::invalid_argument(format!(
+        "no configuration file found, tried: {list}. \
+         Pass --config PATH, set FSA_CONFIG, or create one of those files"
+    ))
+}
+
 /// Resolve, then load, reporting every probed path when nothing was found.
 fn load_config(explicit: Option<&std::path::Path>) -> Result<(ServerConfig, PathBuf), ToolError> {
     match resolve_config_path(explicit) {
@@ -451,13 +509,7 @@ fn load_config(explicit: Option<&std::path::Path>) -> Result<(ServerConfig, Path
             let config = ServerConfig::load(&path)?;
             Ok((config, path))
         }
-        Err(tried) => {
-            let list = tried.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
-            Err(ToolError::invalid_argument(format!(
-                "no configuration file found, tried: {list}. \
-                 Pass --config PATH, set FSA_CONFIG, or create one of those files"
-            )))
-        }
+        Err(tried) => Err(not_found_error(&tried)),
     }
 }
 

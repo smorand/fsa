@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS "setting_change" ("change_id" TEXT NOT NULL, "at" TEX
 
 CREATE TABLE IF NOT EXISTS "converter" ("name_key" TEXT NOT NULL, "converter_id" TEXT NOT NULL, "name" TEXT NOT NULL, "form" TEXT NOT NULL, "command" TEXT, "url" TEXT, "auth_header" TEXT, "secret_enc" BLOB, "file_field" TEXT, "response_field" TEXT, "extensions" TEXT NOT NULL, "max_input_bytes" INTEGER NOT NULL, "timeout_seconds" INTEGER NOT NULL, "created_at" TEXT NOT NULL, "updated_at" TEXT NOT NULL, PRIMARY KEY ("name_key"))
 
+CREATE TABLE IF NOT EXISTS "server_setting" ("section" TEXT NOT NULL, "value" TEXT NOT NULL, "secret_enc" BLOB, "updated_at" TEXT NOT NULL, "updated_by" TEXT NOT NULL, PRIMARY KEY ("section"))
+
 CREATE TABLE IF NOT EXISTS "converter_default" ("slot" TEXT NOT NULL, "converter_id" TEXT NOT NULL, PRIMARY KEY ("slot"))
 
 CREATE INDEX IF NOT EXISTS "idx_provider_id" ON "provider" ("provider_id")

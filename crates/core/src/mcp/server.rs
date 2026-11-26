@@ -1744,6 +1744,21 @@ pub struct RecalculateStartArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SectionArgs {
+    /// Section name: safety, api, extract, doc, sqlite, db, doc_service or search.
+    pub section: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetSettingArgs {
+    /// Section name: safety, api, extract, doc, sqlite, db, doc_service or search.
+    pub section: String,
+    /// Object of the keys to change, named as in the YAML configuration, for example {"max_read_lines": 500}; nested keys are nested objects; a key not given keeps its value.
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SetIndexingProfileArgs {
     /// Id of the project.
     pub project_id: String,
@@ -4102,6 +4117,45 @@ impl McpServer {
     }
 
     #[tool(
+        name = "admin.list_settings",
+        description = "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only)."
+    )]
+    pub(crate) async fn admin_list_settings(&self) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::settings::list_settings(&self.state, &self.person).await;
+        to_call_result("admin.list_settings", out)
+    }
+
+    #[tool(
+        name = "admin.get_setting",
+        description = "Read one server setting section: its value without secrets, for each secret whether it is set and its last 4 characters, where it comes from, and whether a restart is needed to apply it (platform admin only)."
+    )]
+    pub(crate) async fn admin_get_setting(
+        &self,
+        Parameters(a): Parameters<SectionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::settings::get_setting(&self.state, &self.person, &a.section).await;
+        to_call_result("admin.get_setting", out)
+    }
+
+    #[tool(
+        name = "admin.set_setting",
+        description = "Change keys of one server setting section: the keys given are merged over the section, an unknown key or a value that today's configuration check refuses is refused, a secret key set to an empty text is cleared; the change applies at the next start (platform admin only)."
+    )]
+    pub(crate) async fn admin_set_setting(
+        &self,
+        Parameters(a): Parameters<SetSettingArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::settings::set_setting(
+            &self.state,
+            &self.person,
+            &a.section,
+            a.value.unwrap_or(serde_json::Value::Null),
+        )
+        .await;
+        to_call_result("admin.set_setting", out)
+    }
+
+    #[tool(
         name = "admin.get_project_disk_usage",
         description = "List a project's files from the largest to the smallest (platform admin \
              or project owner), with the limit in MB (null when unlimited), the bytes used, the \
@@ -5165,12 +5219,12 @@ mod tests {
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
         // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
         // SPEC-0106 US-0309 adds admin.create_converter and admin.list_converters: admin 31, total 142. US-0312 adds admin.update_converter: admin 32, total 143.
-        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156. SPEC-0109 adds search.chunks and search.images (6 search tools, total 158); SPEC-0110 adds search.documents (7, total 159).
+        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156. SPEC-0109 adds search.chunks and search.images (6 search tools, total 158); SPEC-0110 adds search.documents (7, total 159). SPEC-0114 adds three admin tools (admin 47, total 155 without search, 162 with it).
         assert_eq!(fs_count, 54, "got: {names:?}");
-        assert_eq!(admin_count, 44, "got: {names:?}");
+        assert_eq!(admin_count, 47, "got: {names:?}");
         assert_eq!(search_count, 7, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 159, "got: {names:?}");
+        assert_eq!(names.len(), 162, "got: {names:?}");
     }
 
     #[test]
@@ -5507,7 +5561,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 152, "the frozen contract covers 152 non-search tools");
+        assert_eq!(checked, 155, "the frozen contract covers 155 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -5528,8 +5582,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 152, "got: {names:?}");
-        assert_eq!(expected.len(), 152, "the golden contract itself must hold 152 names");
+        assert_eq!(names.len(), 155, "got: {names:?}");
+        assert_eq!(expected.len(), 155, "the golden contract itself must hold 155 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

@@ -10,7 +10,7 @@ use super::dataplane::{Q, body_args, error_response, person_of, unauthorized};
 use crate::errors::Result;
 use crate::settings::{ModelInput, ModelUpdate, ProviderUpdate, SecretText};
 use crate::state::AppState;
-use crate::tools::models;
+use crate::tools::{models, settings};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -36,6 +36,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/admin/defaults", get(get_defaults))
         .route("/api/admin/defaults/{kind}", axum::routing::put(set_default).delete(clear_default))
         .route("/api/admin/setting-changes", get(list_changes))
+        .route("/api/admin/settings", get(list_settings))
+        .route("/api/admin/settings/{section}", get(get_setting).put(set_setting))
         .with_state(state)
 }
 
@@ -234,6 +236,40 @@ async fn list_changes(
     let q = Q(q);
     run(state, headers, |state, person| async move {
         models::list_setting_changes(&state, &person, q.str_or("marker", "")).await
+    })
+    .await
+}
+
+async fn list_settings(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    run(
+        state,
+        headers,
+        |state, person| async move { settings::list_settings(&state, &person).await },
+    )
+    .await
+}
+
+async fn get_setting(
+    State(state): State<Arc<AppState>>,
+    Path(section): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    run(state, headers, |state, person| async move {
+        settings::get_setting(&state, &person, &section).await
+    })
+    .await
+}
+
+/// The body is `{"value": {...}}`, the tool's own argument.
+async fn set_setting(
+    State(state): State<Arc<AppState>>,
+    Path(section): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    run(state, headers, |state, person| async move {
+        let value = body_args(&body)?.raw("value").cloned().unwrap_or(Value::Null);
+        settings::set_setting(&state, &person, &section, value).await
     })
     .await
 }

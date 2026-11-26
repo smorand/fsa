@@ -125,6 +125,7 @@ pub mod registry_support;
 pub(crate) mod search;
 pub(crate) mod search_chunks;
 pub(crate) mod search_semantic;
+pub(crate) mod settings;
 pub mod sqlite;
 #[cfg(test)]
 mod teardown_e2e;

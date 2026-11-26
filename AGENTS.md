@@ -2,7 +2,7 @@
 
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
-multi-project filesystem** (152 tools: 54 `fs.*`, 44 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
+multi-project filesystem** (155 tools: 54 `fs.*`, 47 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
 + 7 `search.*` when search enabled),
 a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger UI at
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
@@ -76,6 +76,8 @@ Vectors per project dimension and recalculation (SPEC-0108, `search/vector_pg.rs
 
 Document converters set up by an administrator (SPEC-0106, `settings/converter*.rs`, `converters_screen.rs`): the ten `admin.*converter*` tools (platform admin only), `/api/admin/{converters,converter-default,projects/{id}/converter}` and the `/app/converters` screen. A conversion resolves the project converter, then the platform default, then the `doc_service` converter of the file (unchanged, validated at start, `AppState::doc_service_for`). Secrets are write only, http converters never follow a redirect, failure texts redact the secret. Tests: `cargo test -p fsa-core --lib -- e2e_0106_`. Details in `.agent_docs/architecture.md`, "Document converters registry".
 
+Server settings in the database (SPEC-0114, `settings/server_settings*.rs`, `tools/settings.rs`, `settings_screen.rs`): eight YAML sections (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`, `search`) are one JSON row each in the admin table `server_setting`, read and changed by `admin.list_settings`, `get_setting`, `set_setting` (platform admin only), `/api/admin/settings[/{section}]` and `/app/settings`; the secret `doc_service.api.auth_token` is encrypted under `FSA_TOKEN_KEY`, never returned (`has_value`, `last4`). A change is validated by `ServerConfig::check()` (the YAML rules, no side effect) and applies at the next start (`restart_required`). Boot: `settings::server_settings_boot::apply` after the admin store opens: a row replaces its section (the database wins), a YAML start seeds the missing sections once (`system:yaml`), a stored secret without its key stops the boot. `fsa serve --database-url` (or `FSA_DATABASE_URL`) makes the file optional. Parts 2 to 4 (BL-0179 git, web, context7; BL-0180 server, auth; BL-0181 infra) add sections by extending `SECTIONS`, `section_json`, `with_section`. Tests: `cargo test -p fsa-core --lib -- e2e_0114_`. Details in `.agent_docs/config.md`, "Server settings in the database".
+
 Platform settings live in the admin store (SPEC-0102, `settings/`): model providers and their models (`admin.create_model`, `update_model`, `delete_model`, `list_models`) with write only
 secrets encrypted under `FSA_TOKEN_KEY` (checked at boot: a malformed key stops `serve`), and the record
 of changes (`setting_change`). `settings::Registry` is the one implementation; the `admin.*_provider`, `admin.*_model`
@@ -97,7 +99,7 @@ make help                             list every target
 ./test.sh                             cargo test --workspace
 ./run.sh                              .env + config bootstrap + keys + build + serve :5002
 cargo clippy --all-targets --all-features -- -D warnings   quality gate, must be clean
-fsa serve | keys | token | migrate | purge | version
+fsa serve [--database-url URL] | keys | token | migrate | purge | version
 fsa migrate --from a.yaml --to b.yaml  offline copy of relational state between backends
 fsa purge [--project <id> [--on-demand]]  run the auto-purge sweep once; no --project runs
                                       every configured project plus the grace-period removal
@@ -109,6 +111,7 @@ env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplan
 cargo test -p fsa-core --lib --features rag -- e2e_0109_   search.chunks and search.images (SPEC-0109, settings/search_e2e.rs; the PostgreSQL ones need MCPFS_TEST_PG_DSN with pgvector)
 cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile   search.documents and the reconciliation formula (SPEC-0110, settings/search_e2e/documents_e2e.rs; E2E-014 needs MCPFS_TEST_PG_DSN with pgvector)
 cargo test -p fsa-core --lib -- e2e_0111_   the file metadata screen tests (SPEC-0111, file_metadata_screen/e2e.rs)
+cargo test -p fsa-core --lib -- e2e_0114_   the server settings store, boot overlay and screen tests (SPEC-0114, settings/server_settings_e2e.rs; the PostgreSQL ones need MCPFS_TEST_PG_DSN)
 cargo test -p fsa-core --lib -- e2e_0106_   the document converter registry tests (SPEC-0106, settings/converters_e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0107_   the per project indexing profile tests (SPEC-0107, settings/profile_e2e.rs)
 cargo test -p fsa-core --lib --features rag -- e2e_0108_   the vectors per dimension and recalculation tests (SPEC-0108, settings/vectors_e2e.rs, search/vector_store_e2e.rs; PostgreSQL ones need MCPFS_TEST_PG_DSN)
@@ -145,7 +148,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   wrapping `mcp::server::McpServer`, `LocalSessionManager` + `legacy_session_mode: true` so
   `initialize` is mandatory; see `.agent_docs/architecture.md` for the exact wire shapes), `/health`.
 - `mcp/` : `server.rs` only — `McpServer`, one `#[tool]` method per entry in `TOOL_CONTRACT.txt`
-  (152 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
+  (155 tools, `#[tool_router]`), each calling the same `core::fs_ops`/engine function the REST plane
   calls, never reimplementing an operation. The hand-rolled JSON-RPC/SSE framing layer this module
   used to own (`ToolRegistry`/`ToolSchema`/`Args`/`ToolHandler`) is gone (SPEC-0013); what remains
   of that machinery lives at `tools::registry_support`, kept only because `Args`/`ToolCtx` are the
@@ -203,7 +206,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   (the real logic, called directly by `mcp::server::McpServer`'s `#[tool]` methods and by the
   REST plane); `register(&mut ToolRegistry)` survives only as `#[cfg(test)]`-gated glue for the
   shared test harness, except the five optional families (`web`/`context7`/`sqlite`/`db`/`doc`,
-  off by default, not part of the 152-tool contract), whose `register()`/`catalog()` are genuine
+  off by default, not part of the 155-tool contract), whose `register()`/`catalog()` are genuine
   production code backing `/api/swagger.json`. `catalog.rs` holds the transport-agnostic
   `ToolCatalogEntry` shape; `all.rs` has the now-test-only `register_all`. `trash.rs` holds
   `fs.trash_list`/`fs.trash_restore` (SPEC-0011): the backfill of untracked trash nodes into
@@ -259,6 +262,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   latest 20 changes, eight form posts (`provider|model/{create,update,delete}`, `default/{set,clear}`), calling `tools::models`
   (never a second implementation); reuses `token_screen`'s `CsrfStore` (own instance per router), `resolve_person`,
   `check_csrf`, `escape_html`; no secret rendered, secret inputs never prefilled (SPEC-0102 DEC-014).
+- `settings_screen.rs` : the `/app/settings` browser screen (always mounted, SPEC-0114, platform admin only): sections, source, restart flag, secrets as `has_value` and last 4, one JSON patch form per section; calls `tools::settings` (never a second implementation); own `CsrfStore`, `resolve_person`, `check_csrf`, `escape_html` as `models_screen`.
 - `file_metadata_screen.rs` : the `/app/file-metadata` browser screen (always mounted, SPEC-0111): text, images (caption, OCR),
   tables, headings, chunk sets, one chunk with previous and next, 100 chunk rows per page, the jobs of the file, and a
   recalculate form (`search_index`, `chunks`) posting to `/app/file-metadata/recalculate`; calls the typed functions of
@@ -281,7 +285,7 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   `mcp.rs` (stateless JSON-RPC, fuzzy tool name resolution), `llm.rs` (OpenAI compatible
   streaming with tool calling), `input.rs` (wrap aware line editor), `ui.rs` (markdown to
   ANSI), `spinner.rs`, `session.rs`. Config: `config/agent_test.yaml`.
-- `TOOL_CONTRACT.txt` : the 152 tool schemas and return shapes, human readable. **This is
+- `TOOL_CONTRACT.txt` : the 155 tool schemas and return shapes, human readable. **This is
   the authoritative contract.**
 - `tool-contract-golden.json` : the same contract, machine checked. Three tests compare
   every name, description and `inputSchema` against it, serialized, so a reordered schema
@@ -356,7 +360,7 @@ The backlog is the `backlog/` directory: one `BL-NNNN_slug.md` file per item.
 ## Documentation index
 - `.agent_docs/architecture.md` : storage model, project usage and quota admission, document
   artifact store, request lifecycle, safety, error logging.
-- `.agent_docs/tools.md` : the 152 tool reference (families, parameters, authorization).
+- `.agent_docs/tools.md` : the 155 tool reference (families, parameters, authorization).
 - `.agent_docs/api.md` : the `/api/fs` REST plane and the OpenAPI single source of truth.
 - `.agent_docs/git.md` : git objects in the blob store, HTTP smart protocol, the
   `git.hosts` host map, OAuth/PAT tokens (per person+host), the remote pipeline

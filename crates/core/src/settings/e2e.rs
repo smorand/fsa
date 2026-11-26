@@ -675,6 +675,7 @@ async fn e2e_0102_013_the_cli_exits_non_zero_with_the_cipher_message() {
                 sqlite: false,
                 db: false,
                 doc: false,
+                database_url: None,
             }),
         };
         let code = crate::cli::run_with(cli).await;

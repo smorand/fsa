@@ -20,6 +20,9 @@ pub mod profile;
 mod profile_store;
 pub mod registry;
 pub mod secrets;
+pub mod server_settings;
+pub mod server_settings_boot;
+mod server_settings_store;
 pub mod store;
 
 #[cfg(test)]
@@ -32,6 +35,10 @@ mod profile_e2e;
 mod profile_pg_e2e;
 #[cfg(all(test, feature = "rag"))]
 mod search_e2e;
+#[cfg(test)]
+mod server_settings_e2e;
+#[cfg(all(test, feature = "postgres"))]
+mod server_settings_pg_e2e;
 #[cfg(all(test, feature = "rag"))]
 pub(crate) mod vectors_e2e;
 
@@ -44,4 +51,5 @@ pub use profile::{ConfiguredModel, ProfileChange};
 pub use profile_store::ProfileRow;
 pub use registry::{Registry, RegistryTargets};
 pub use secrets::SecretText;
+pub use server_settings::ServerSettings;
 pub use store::SettingsStore;

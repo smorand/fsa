@@ -30,6 +30,10 @@
 //!   is read from it, satisfying FR-NEW-012's "drop rows found in the legacy
 //!   format" without any legacy-detection logic of its own.
 //!
+//! * **Server settings** (`server_setting`, SPEC-0114) ARE copied row for row, a stored
+//!   secret included as ciphertext; the other registry tables of the admin store (providers,
+//!   models, converters, the record of changes) are not, which predates SPEC-0114.
+//!
 //! # This is offline
 //!
 //! Run it with the server stopped. It takes no locks against a live writer, so a
@@ -212,7 +216,9 @@ pub async fn migrate(from: &ServerConfig, to: &ServerConfig) -> Result<Migration
 
     // `project` before `project_member`: the member rows carry a foreign key onto
     // the project, so the other order fails on an engine that enforces it.
-    for table in ["project", "project_member"] {
+    // `server_setting` (SPEC-0114) travels as it is, ciphertext and all: the
+    // destination reads its secrets only under the same `FSA_TOKEN_KEY`.
+    for table in ["project", "project_member", "server_setting"] {
         let cols = columns_of(&admin_schema, table)?;
         let n = copy_table(&*src_admin_db, &*dst_admin_db, table, &cols, None).await?;
         report.record(table, n);

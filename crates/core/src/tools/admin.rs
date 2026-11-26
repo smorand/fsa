@@ -396,6 +396,7 @@ pub(crate) fn register_with(reg: &mut ToolRegistry, git: Option<Arc<GitRepoStore
     // SPEC-0106: the converter tools are admin tools too.
     super::converters::register(reg);
     super::profile::register(reg);
+    super::settings::register(reg);
     super::recalc::register(reg);
 }
 
@@ -974,7 +975,7 @@ mod tests {
         r
     }
 
-    const ALL_ADMIN_TOOLS: [&str; 44] = [
+    const ALL_ADMIN_TOOLS: [&str; 47] = [
         "admin.create_project",
         "admin.delete_project",
         "admin.list_projects",
@@ -1019,12 +1020,15 @@ mod tests {
         "admin.recalculate_start",
         "admin.recalculate_status",
         "admin.recalculate_cancel",
+        "admin.list_settings",
+        "admin.get_setting",
+        "admin.set_setting",
     ];
 
     #[test]
     fn every_admin_tool_is_registered() {
         let r = registry();
-        assert_eq!(r.len(), 44);
+        assert_eq!(r.len(), 47);
         for name in ALL_ADMIN_TOOLS {
             assert!(r.resolve(name).is_some(), "{name} is missing");
         }

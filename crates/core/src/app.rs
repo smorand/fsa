@@ -99,7 +99,14 @@ pub(crate) async fn build_with_env(
     let relational = Arc::new(crate::storage::RelationalRegistry::new());
     let admin = crate::storage::build_admin_store(&config, &relational).await?;
     admin.connect().await?;
-    admin.set_master_key(boot_master_key(env)?);
+    let master_key = boot_master_key(env)?;
+    admin.set_master_key(master_key);
+    // The stored settings replace their sections, and a YAML start seeds what
+    // is not stored yet (SPEC-0114); everything below reads the result.
+    let config = Arc::new(
+        crate::settings::server_settings_boot::apply((*config).clone(), admin.as_ref(), master_key)
+            .await?,
+    );
 
     let stores = Arc::new(StoreManager::new(config.clone(), relational.clone()));
     let safety = Arc::new(SafetyManager::new(config.safety.clone()));
@@ -193,6 +200,7 @@ pub(crate) async fn build_with_env(
         .with_state(state.clone())
         .merge(crate::deleted_projects_screen::router(state.clone()))
         .merge(crate::models_screen::router(state.clone()))
+        .merge(crate::settings_screen::router(state.clone()))
         .merge(crate::file_metadata_screen::router(state.clone()))
         .merge(crate::converters_screen::router(state.clone()))
         .merge(crate::trash_screen::router(state.clone()))

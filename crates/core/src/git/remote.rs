@@ -153,6 +153,14 @@ fn validate_host_key(host: &str) -> Result<()> {
 /// the map for [`resolve_host`]. A partial map is never published: an operator
 /// never gets a boot that silently accepted half of what they wrote.
 pub fn validate_hosts(cfg: &GitConfig) -> Result<()> {
+    let resolved = check_hosts(cfg)?;
+    *store().write().expect("git host map lock poisoned") = resolved;
+    Ok(())
+}
+
+/// The checks of [`validate_hosts`] with no publication: a settings change is
+/// checked without touching the map the running server resolves hosts with.
+pub fn check_hosts(cfg: &GitConfig) -> Result<HashMap<String, Provider>> {
     let mut resolved: HashMap<String, Provider> = HashMap::new();
     for (host, provider_raw) in &cfg.hosts.0 {
         validate_host_key(host)?;
@@ -170,8 +178,7 @@ pub fn validate_hosts(cfg: &GitConfig) -> Result<()> {
         }
         resolved.insert(host.clone(), provider);
     }
-    *store().write().expect("git host map lock poisoned") = resolved;
-    Ok(())
+    Ok(resolved)
 }
 
 /// Resolve a bare hostname to its declared credential policy. `O(1)`: a single

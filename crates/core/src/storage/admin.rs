@@ -187,6 +187,20 @@ pub fn schema() -> SchemaSet {
                 ],
                 vec!["name_key"],
             ),
+            // SPEC-0114 DEC-001: one row per server setting section; `value` is the
+            // JSON of the section without its secrets, `secret_enc` one encrypted
+            // JSON object of the secrets (null when the section holds none).
+            Table::new(
+                "server_setting",
+                vec![
+                    Column::required("section", ColumnType::Text),
+                    Column::required("value", ColumnType::Text),
+                    Column::new("secret_enc", ColumnType::Blob),
+                    Column::required("updated_at", ColumnType::Text),
+                    Column::required("updated_by", ColumnType::Text),
+                ],
+                vec!["section"],
+            ),
             // SPEC-0106 DEC-003: the platform default converter, one row at most
             // (`slot` is always `default`).
             Table::new(

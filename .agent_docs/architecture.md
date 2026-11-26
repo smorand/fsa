@@ -575,3 +575,7 @@ Code: `settings/profile.rs` (rules, `impl Registry`), `settings/profile_store.rs
   `vectors` rows failed and `resume_vectors` (called by `app.rs`) starts their scopes again.
 * **Images.** `SearchBackend::index_images_checked`, only for engines that report mode `rag`; a converted document's
   pictures are read from the artifact set and sent as `data:image/<format>;base64,...`.
+
+## Server settings store (SPEC-0114, 2026-11-26)
+
+One row per section in `server_setting`, JSON of the serde struct, secrets split out and encrypted (`server_settings.rs::split_secrets`, `join_secrets`). Why JSON per section and not a row per key: lists (`doc_service.extensions`, `cli.command`) and nested blocks round trip exactly and the real `ServerConfig::check()` is the one validator (DEC-001). Why restart only: the consumers (`SafetyManager`, the search backend, the doc service) capture their section at build (DEC-004). Why `check()` and not `validate()`: `validate()` publishes the git host map (a process global); a settings change must not touch it. Why the `from_yaml_file` flag and not "no row": a programmatic configuration (tests, embedders) must never be seeded.
