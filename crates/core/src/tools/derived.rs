@@ -22,7 +22,7 @@ const LIST_DESCRIPTION: &str = "List the rebuild jobs of derived data (search en
 
 /// Must equal the `#[tool]` description in `mcp::server`, a literal there.
 #[cfg(test)]
-const RECALCULATE_DESCRIPTION: &str = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks').";
+const RECALCULATE_DESCRIPTION: &str = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index'), one chunk set (kind 'chunks') or its conversion to Markdown (kind 'conversion').";
 
 /// Jobs per answer (FR-NEW-010).
 const PAGE: usize = 100;
@@ -55,7 +55,7 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
             .req_str("path", "Absolute POSIX path of the file to rebuild.")
             .req_str(
                 "kind",
-                "What to rebuild: 'search_index' (the search entries) or 'chunks' (one chunk set).",
+                "What to rebuild: 'search_index' (the search entries), 'chunks' (one chunk set) or 'conversion' (the Markdown companion, images and tables of a converted document).",
             )
             .opt_str(
                 "set_id",
@@ -248,11 +248,28 @@ pub(crate) async fn recalculate(
     match kind {
         JobKind::SearchIndex => recalculate_search_index(state, mount_id, &path, set_id).await,
         JobKind::Chunks => recalculate_chunks(state, &client, mount_id, &path, set_id).await,
+        JobKind::Conversion => recalculate_conversion(state, mount_id, &path, set_id).await,
         // Never parsed from the argument: `admin.recalculate_start` owns this kind.
-        JobKind::Vectors => {
-            Err(ToolError::invalid_argument("kind must be 'search_index' or 'chunks'"))
-        }
+        JobKind::Vectors => Err(ToolError::invalid_argument(crate::search::derived::KIND_REFUSAL)),
     }
+}
+
+/// The kind `conversion` (SPEC-0113 FR-NEW-010): the same refusals as
+/// `search_index` that apply (a `set_id`, search off), no index mode needed: a
+/// project that indexes nothing still keeps its companion fresh.
+async fn recalculate_conversion(
+    state: &AppState,
+    mount_id: &str,
+    path: &str,
+    set_id: &str,
+) -> Result<Value> {
+    if !set_id.is_empty() {
+        return Err(ToolError::invalid_argument("set_id applies to kind 'chunks' only"));
+    }
+    let scheduler = state.search.as_ref().and_then(|s| s.scheduler()).ok_or_else(|| {
+        ToolError::not_supported("search is not enabled; set search.enabled: true in config")
+    })?;
+    Ok(scheduler.recalculate_conversion(mount_id, path).await)
 }
 
 async fn recalculate_search_index(

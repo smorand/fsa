@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS "doc_tables" ("volume_id" TEXT NOT NULL, "set_id" TEX
 
 CREATE TABLE IF NOT EXISTS "doc_headings" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "seq" BIGINT NOT NULL, "level" BIGINT NOT NULL, "title" TEXT NOT NULL, "page" BIGINT, PRIMARY KEY ("volume_id", "set_id", "seq"))
 
+CREATE TABLE IF NOT EXISTS "companion_origin" ("volume_id" TEXT NOT NULL, "md_path" TEXT NOT NULL, "source_path" TEXT NOT NULL, "source_sha" TEXT NOT NULL, "md_sha" TEXT NOT NULL, "created_at" BIGINT NOT NULL, PRIMARY KEY ("volume_id", "md_path"))
+
 CREATE TABLE IF NOT EXISTS "chunk_sets" ("volume_id" TEXT NOT NULL, "path" TEXT NOT NULL, "request_key" TEXT NOT NULL, "set_id" TEXT NOT NULL, "strategy" TEXT NOT NULL, "settings" TEXT NOT NULL, "requested_strategy" TEXT NOT NULL, "requested_settings" TEXT NOT NULL, "is_default" BIGINT NOT NULL DEFAULT 0, "fallback_from" TEXT, "chunk_count" BIGINT NOT NULL, "token_count" BIGINT NOT NULL, "source_sha" TEXT NOT NULL, "built_at" TEXT NOT NULL, PRIMARY KEY ("volume_id", "path", "request_key"))
 
 CREATE TABLE IF NOT EXISTS "chunks" ("volume_id" TEXT NOT NULL, "set_id" TEXT NOT NULL, "number" BIGINT NOT NULL, "unit" BIGINT NOT NULL, "text" TEXT NOT NULL, "heading_path" TEXT NOT NULL, "page_start" BIGINT, "page_end" BIGINT, "token_count" BIGINT NOT NULL, "figures" TEXT NOT NULL, "document_title" TEXT NOT NULL, PRIMARY KEY ("volume_id", "set_id", "number"))

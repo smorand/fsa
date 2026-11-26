@@ -5,6 +5,7 @@
 //! A job row lives in the admin store (`derived_job`, DEC-004) so it is global
 //! to the deployment and goes away with its project through the cascade.
 
+pub mod conversion;
 pub mod scheduler;
 pub mod store;
 
@@ -25,6 +26,9 @@ pub enum JobKind {
     /// The recalculation of the vectors of a project or of one file
     /// (SPEC-0108); its path is `/` for the whole project.
     Vectors,
+    /// The conversion of a source document again, which replaces its companion
+    /// Markdown, images and tables (SPEC-0113); its path is the source.
+    Conversion,
 }
 
 impl JobKind {
@@ -33,6 +37,7 @@ impl JobKind {
             Self::SearchIndex => "search_index",
             Self::Chunks => "chunks",
             Self::Vectors => "vectors",
+            Self::Conversion => "conversion",
         }
     }
 
@@ -41,10 +46,14 @@ impl JobKind {
     pub fn from_stored(s: &str) -> Result<Self> {
         match s {
             "vectors" => Ok(Self::Vectors),
+            "conversion" => Ok(Self::Conversion),
             other => Self::from_str(other),
         }
     }
 }
+
+/// The refusal of `fs.recalculate` for a kind it does not rebuild.
+pub const KIND_REFUSAL: &str = "kind must be 'search_index', 'chunks' or 'conversion'";
 
 impl FromStr for JobKind {
     type Err = ToolError;
@@ -52,7 +61,8 @@ impl FromStr for JobKind {
         match s {
             "search_index" => Ok(Self::SearchIndex),
             "chunks" => Ok(Self::Chunks),
-            _ => Err(ToolError::invalid_argument("kind must be 'search_index' or 'chunks'")),
+            "conversion" => Ok(Self::Conversion),
+            _ => Err(ToolError::invalid_argument(KIND_REFUSAL)),
         }
     }
 }
@@ -303,6 +313,9 @@ mod tests {
     #[test]
     fn an_unknown_kind_is_refused_with_the_contract_text() {
         let e = JobKind::from_str("thumbnail").unwrap_err();
-        assert_eq!(e.to_string(), "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+        assert_eq!(
+            e.to_string(),
+            "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'"
+        );
     }
 }

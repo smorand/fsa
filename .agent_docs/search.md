@@ -526,3 +526,31 @@ Before this, a file written by a git operation or an extraction was indexed only
 - Tests: `cargo test -p fsa-core --lib -- e2e_0112_` (17, paused clock on `search::derived_e2e::Env`; 018
   PostgreSQL needs `MCPFS_TEST_PG_DSN`). Git tests put volume files with raw writes and align the index by
   hand (`G::align`), so a test reads only what the operation did.
+
+## Converted documents follow their source (SPEC-0113, BL-0176, 2026-11-26)
+
+Before this, replacing `/a.pdf` left its companion `/a.md`, images and tables as the old bytes made them.
+- Origin: `write_companion` (every conversion: `fs.documentize`, the upload flag, the background job) records in
+  the volume table `companion_origin(volume_id, md_path, source_path, source_sha, md_sha, created_at)` after the
+  landing. `fs_ops::converted_origin(client, md)` returns it only while the companion still holds `md_sha`;
+  no row, no file or a different sha is manual. Shas are the node form (`fs_ops::node_sha`, empty for an empty
+  file). A database from before has no rows: the table is created at open, every companion is manual (AUTO-030).
+  Two sources of one companion path: the last conversion owns the row, so only it triggers a rebuild.
+- Trigger: `indexer::follow_source` (from `after_write`, `after_write_reread`, `after_git_changes`, so archive
+  extraction too) reads the origin of `companion_md_path(path)` once per write (only with a scheduler, whatever
+  the index mode). Origin names this source and a different source sha: `Scheduler::schedule_conversion`;
+  same sha: `cancel_waiting_conversion`. `after_companion` cancels the waiting job of the source of the
+  companion it just indexed (`fs.documentize`). Delete forgets the job, move drops it (SPEC-0105: no rebuild).
+- Run: `JobKind::Conversion` (key = source) goes through the same slot, delay, stale flag and recovery as the
+  other kinds; `Scheduler::rebuild_conversion` calls the `ConversionHost` (`search/derived/conversion.rs`,
+  `attach(&state)` in `app.rs` before `recover()`, a `Weak<AppState>` to avoid a cycle), which resolves the project
+  converter (SPEC-0106) and calls `fs_ops::rebuild_companion`: file gone or companion of another source
+  (cause change) is `Superseded`; a manual or absent companion is a `failed` job with a reason; cause `change`
+  with an unchanged source sha is `Unchanged`; the conversion runs under `system:conversion` through
+  `write_companion_guarded` (admission lock, artifact commit, origin), the guard being read after the converter
+  answered; the session charge is refunded; then `indexer::index_companion` indexes the new text.
+- Images and tables of a changed source are unreadable between the change and the rebuild (SPEC-0019: a
+  changed document loses its artifacts); a failed rebuild leaves them so, only the companion stays.
+- Landing window: `land_conversion` checks the companion still holds the recorded sha (`MdCheck`, under the admission lock every ordinary write also takes: an edit made while the converter ran is kept, the job fails with the note) and writes the origin row inside the same locked window; `follow_source` reads origin and companion under that lock (only after a cheap unlocked read finds a row). A cancel (`cancel_conversion`) also stales a running job.
+- Tests: `cargo test -p fsa-core --lib -- e2e_0113_` (26, `search/conversion_e2e.rs`, a scripted converter on the
+  SPEC-0100 `Env`, paused clock; 021 and 023 PostgreSQL need `MCPFS_TEST_PG_DSN`, 021 on the real clock).

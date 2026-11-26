@@ -727,6 +727,122 @@ pub async fn documentize(
     }))
 }
 
+/// How a background rebuild of a companion ended (SPEC-0113).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Rebuilt {
+    /// The companion, images and tables were replaced.
+    Done { md_path: String },
+    /// The source holds the bytes the companion was made from: nothing to do.
+    Unchanged,
+    /// The source changed or went away meanwhile: nothing was written.
+    Superseded,
+}
+
+/// The identity a background conversion is charged to (SPEC-0113 DEC-004).
+pub(crate) const CONVERSION_PERSON: &str = "system:conversion";
+
+/// Convert the stored `norm` again and replace its companion (SPEC-0113).
+///
+/// The companion is replaced only when a conversion made it and it still holds
+/// what that conversion wrote (FR-NEW-005): a hand written or hand edited file
+/// is refused, never overwritten. With the cause `change`, a source holding the
+/// bytes the companion was made from is not converted again (FR-NEW-004), and a
+/// companion that another source has taken over is left to it. The charge is the
+/// one of an upload (the volume admission lock); its session part belongs to
+/// [`CONVERSION_PERSON`] and is refunded at once, a server job has no budget.
+/// `guard` is read after the converter answered: false drops the result.
+pub(crate) async fn rebuild_companion(
+    client: &VolumeClient,
+    safety: &SafetyManager,
+    service: Option<&dyn DocService>,
+    mount_id: &str,
+    norm: &str,
+    cause: crate::search::derived::JobCause,
+    guard: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<Rebuilt> {
+    use crate::search::derived::JobCause;
+    let Some(node) = client.meta.get(norm).await?.filter(|n| n.is_file()) else {
+        return Ok(Rebuilt::Superseded);
+    };
+    let md = crate::docs::companion_md_path(norm);
+    let origin = converted_origin(client, &md).await?;
+    match (&origin, client.exists(&md).await?) {
+        (Some(o), _) if o.source_path != norm && cause == JobCause::Change => {
+            return Ok(Rebuilt::Superseded);
+        }
+        (Some(_), _) => {}
+        (None, true) => {
+            return Err(ToolError::no_clobber(format!(
+                "'{md}' was not made by conversion or was edited since, left untouched"
+            )));
+        }
+        (None, false) if cause == JobCause::Change => {
+            return Err(ToolError::not_found(format!("'{md}' is gone, not recreated")));
+        }
+        (None, false) => {}
+    }
+    let service = ensure_documentable(service, norm)?;
+    if cause == JobCause::Change
+        && origin.as_ref().is_some_and(|o| o.source_sha == node.sha256.clone().unwrap_or_default())
+    {
+        return Ok(Rebuilt::Unchanged);
+    }
+    let data = client.read_bytes(norm).await?;
+    ensure_input_size(service, norm, data.len())?;
+    service.preflight()?;
+    ensure_well_formed(norm, &data)?;
+    let md_check = match &origin {
+        Some(o) => MdCheck::Holds(o.md_sha.as_str()),
+        None => MdCheck::Absent,
+    };
+    let landed = write_companion_guarded(
+        client,
+        safety,
+        service,
+        CONVERSION_PERSON,
+        mount_id,
+        norm,
+        &data,
+        true,
+        Some(guard),
+        md_check,
+    )
+    .await;
+    match landed {
+        Ok(Some(done)) => {
+            safety.refund_write(CONVERSION_PERSON, mount_id, done.charged);
+            Ok(Rebuilt::Done { md_path: done.md_path })
+        }
+        Ok(None) => Ok(Rebuilt::Superseded),
+        // A change that landed after the guard was read is refused by the node
+        // revision check: the result is dropped, the change has its own job.
+        Err(e) if e.message.starts_with(crate::storage::meta::CHANGED_DURING_CONVERSION) => {
+            if guard() { Err(e) } else { Ok(Rebuilt::Superseded) }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The hex sha256 a node stores for `bytes`: empty for an empty file, which
+/// has no blob (SPEC-0113 keeps the origin shas in the node's own form).
+pub(crate) fn node_sha(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    if bytes.is_empty() { String::new() } else { hex::encode(Sha256::digest(bytes)) }
+}
+
+/// The origin of the companion `md` when it was made by a conversion and still
+/// holds the bytes that conversion wrote (SPEC-0113 FR-NEW-002); `None` for a
+/// manual companion (no record, no file, or edited since).
+pub(crate) async fn converted_origin(
+    client: &VolumeClient,
+    md: &str,
+) -> Result<Option<crate::storage::meta::CompanionOrigin>> {
+    let Some(store) = client.trash.as_deref() else { return Ok(None) };
+    let Some(origin) = store.companion_origin(md).await? else { return Ok(None) };
+    let current = client.meta.get(md).await?.filter(|n| n.is_file()).map(|n| n.sha256);
+    Ok(current.is_some_and(|sha| sha.unwrap_or_default() == origin.md_sha).then_some(origin))
+}
+
 /// Refuse an OOXML document whose parts disagree with its directory before
 /// the converter sees it (SPEC-0041 FR-NEW-005). Keyed on the seven OOXML
 /// extensions, never on `doc_service.extensions`, so an operator widening the
@@ -780,6 +896,8 @@ struct Companion {
     overwritten: bool,
     /// The conversion report (SPEC-0019 FR-NEW-030).
     report: String,
+    /// What the conversion charged the session (refunded by a background run).
+    charged: i64,
 }
 
 /// Convert `data` and store the Markdown beside its source, keeping the
@@ -808,6 +926,30 @@ async fn write_companion(
     data: &[u8],
     overwrite: bool,
 ) -> Result<Companion> {
+    let skip = MdCheck::Skip;
+    write_companion_guarded(
+        client, safety, service, person, mount_id, norm, data, overwrite, None, skip,
+    )
+    .await?
+    .ok_or_else(|| ToolError::internal("a conversion without a guard was discarded"))
+}
+
+/// [`write_companion`] with a guard read once the converter answered and before
+/// anything is charged or written: false returns `None`, nothing changed
+/// (SPEC-0113 FR-NEW-007).
+#[allow(clippy::too_many_arguments)]
+async fn write_companion_guarded(
+    client: &VolumeClient,
+    safety: &SafetyManager,
+    service: &dyn DocService,
+    person: &str,
+    mount_id: &str,
+    norm: &str,
+    data: &[u8],
+    overwrite: bool,
+    guard: Option<&(dyn Fn() -> bool + Send + Sync)>,
+    md_check: MdCheck<'_>,
+) -> Result<Option<Companion>> {
     let md = crate::docs::companion_md_path(norm);
     let overwritten = client.exists(&md).await?;
     if overwritten && !overwrite {
@@ -821,6 +963,9 @@ async fn write_companion(
     };
     let file_name = norm.rsplit('/').next().unwrap_or(norm);
     let conversion = service.convert(data, file_name).await?;
+    if guard.is_some_and(|g| !g()) {
+        return Ok(None);
+    }
     let markdown = conversion.markdown.as_str();
     let set = crate::docs::artifacts::capture::PendingSet::converter(&conversion, norm);
     let kept = store.zip(rev.as_deref());
@@ -832,6 +977,13 @@ async fn write_companion(
     };
     let landing = kept.map(|(store, rev)| (store, rev, &set));
     let charge = markdown.len() as i64 + set_bytes;
+    // The origin (SPEC-0113 FR-NEW-001), written by the landing itself.
+    let origin = crate::storage::meta::CompanionOrigin {
+        md_path: md.clone(),
+        source_path: norm.to_string(),
+        source_sha: node_sha(data),
+        md_sha: node_sha(markdown.as_bytes()),
+    };
     land_conversion(
         client,
         safety,
@@ -842,17 +994,58 @@ async fn write_companion(
         Some(&md),
         markdown.len() as i64,
         charge,
+        md_check,
+        Some(&origin),
         write,
     )
     .await?;
     safety.record_audit(person, mount_id, "doc_service", &md, "");
     // A fresh companion counts as read, so a follow-up edit passes the guard.
     safety.record_read(person, mount_id, &md);
-    Ok(Companion { md_path: md, bytes_written: markdown.len(), overwritten, report: set.report() })
+    Ok(Some(Companion {
+        md_path: md,
+        bytes_written: markdown.len(),
+        overwritten,
+        report: set.report(),
+        charged: charge,
+    }))
+}
+
+/// What the companion must be at the instant a conversion lands (SPEC-0113
+/// FR-NEW-005), checked under the admission lock every ordinary write to it also
+/// takes, so a hand edit cannot slip in between the check and the write.
+#[derive(Clone, Copy)]
+enum MdCheck<'a> {
+    /// A first conversion or an upload: whatever is there is replaced.
+    Skip,
+    /// A background rebuild of a companion that did not exist.
+    Absent,
+    /// A background rebuild: the companion still holds the bytes of this sha256.
+    Holds(&'a str),
+}
+
+impl MdCheck<'_> {
+    async fn verify(self, client: &VolumeClient, md: Option<&str>) -> Result<()> {
+        let (Some(md), true) = (md, !matches!(self, MdCheck::Skip)) else { return Ok(()) };
+        let current = client.meta.get(md).await?.filter(|n| n.is_file());
+        let fits = match (self, current) {
+            (MdCheck::Absent, None) => true,
+            (MdCheck::Holds(sha), Some(n)) => n.sha256.unwrap_or_default() == sha,
+            _ => false,
+        };
+        if fits {
+            return Ok(());
+        }
+        Err(ToolError::no_clobber(format!(
+            "'{md}' was not made by conversion or was edited since, left untouched"
+        )))
+    }
 }
 
 /// The tail every conversion shares: charge, write the sibling, commit the
-/// set (DEC-005, DEC-008, FR-NEW-035).
+/// set (DEC-005, DEC-008, FR-NEW-035). The origin of the companion is recorded
+/// inside the same locked window as its bytes, so a write hook never sees new
+/// bytes with the old origin (SPEC-0113 DEC-007).
 ///
 /// With a set to keep, everything runs under the document's artifact lock, so
 /// of overlapping conversions the one committing last also wrote the sibling
@@ -876,11 +1069,17 @@ async fn land_conversion(
     md: Option<&str>,
     md_len: i64,
     charge: i64,
+    md_check: MdCheck<'_>,
+    origin: Option<&crate::storage::meta::CompanionOrigin>,
     write_sibling: impl std::future::Future<Output = Result<()>>,
 ) -> Result<()> {
     let Some((store, rev, set)) = landing else {
         let _project_admission =
             quota::admit_sibling(client, safety, person, mount_id, md, md_len, charge).await?;
+        if let Err(e) = md_check.verify(client, md).await {
+            safety.refund_write(person, mount_id, charge);
+            return Err(e);
+        }
         return write_sibling.await;
     };
     // Lock order (avoids deadlock, SPEC-0020 US-0017): the artifact lock is
@@ -905,6 +1104,7 @@ async fn land_conversion(
     let _project_admission =
         quota::admit_sibling(client, safety, person, mount_id, md, md_len, charge).await?;
     let landed = async {
+        md_check.verify(client, md).await?;
         write_sibling.await?;
         set.commit(client, store, norm, rev).await
     }
@@ -915,6 +1115,13 @@ async fn land_conversion(
         }
         safety.refund_write(person, mount_id, charge);
         return Err(e);
+    }
+    // Best effort: a missing record only makes the companion read as manual,
+    // which is never overwritten.
+    if let Some(origin) = origin
+        && let Err(e) = store.set_companion_origin(origin).await
+    {
+        tracing::warn!(path = norm, error = %e.message, "cannot record the origin of a companion");
     }
     Ok(())
 }
@@ -1861,6 +2068,8 @@ pub async fn extract_document(
         fresh.md_path(),
         sibling,
         total,
+        MdCheck::Skip,
+        None,
         fresh.write_sibling(client),
     )
     .await?;

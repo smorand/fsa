@@ -1262,7 +1262,7 @@ pub struct RecalculateArgs {
     pub mount_id: String,
     /// Absolute POSIX path of the file to rebuild.
     pub path: String,
-    /// What to rebuild: 'search_index' (the search entries) or 'chunks' (one chunk set).
+    /// What to rebuild: 'search_index' (the search entries), 'chunks' (one chunk set) or 'conversion' (the Markdown companion, images and tables of a converted document).
     pub kind: String,
     /// For kind 'chunks': the set to rebuild; empty means the default set.
     #[serde(default)]
@@ -2804,7 +2804,7 @@ impl McpServer {
 
     #[tool(
         name = "fs.recalculate",
-        description = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks')."
+        description = "Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index'), one chunk set (kind 'chunks') or its conversion to Markdown (kind 'conversion')."
     )]
     pub(crate) async fn fs_recalculate(
         &self,

@@ -293,7 +293,7 @@ admin table `derived_job`; a rebuild starts when the file has been quiet for
 `search.settle_delay_seconds` and stores its result only if the file did not change
 meanwhile (guarded update). `fs.recalculate` asks a rebuild now, `fs.list_derived_jobs`
 lists the jobs; both MCP only (DEC-012). `fs.recalculate` of kind `chunks` (SPEC-0101 US-0282)
-cuts one chunk set at once through a job of that kind in the same scheduler (own key, own slot). Details: `.agent_docs/search.md`, "Rebuild scheduler".
+cuts one chunk set at once through a job of that kind in the same scheduler (own key, own slot); kind `conversion` (SPEC-0113) converts a source again and replaces its companion, images and tables. Details: `.agent_docs/search.md`, "Rebuild scheduler".
 
 Since SPEC-0101 (US-0280, 2026-11-22) a rebuild first cuts every chunk set of the file (meta
 store `chunk_sets`/`chunks`, volume scoped), indexes the default set's chunks, then writes the

@@ -49,6 +49,8 @@ pub(crate) struct Options {
     /// `MCPFS_TEST_PG_DSN` (SPEC-0112 E2E-018); the test checks the variable
     /// first and calls [`Env::drop_schema`] at its end.
     pub pg: bool,
+    /// The configured document converter (SPEC-0113), `None` for no converter.
+    pub doc: Option<Arc<dyn crate::docs::DocService>>,
 }
 
 impl Default for Options {
@@ -60,6 +62,7 @@ impl Default for Options {
             embedding: false,
             config: |_| {},
             pg: false,
+            doc: None,
         }
     }
 }
@@ -320,9 +323,10 @@ impl Env {
             safety,
             identity: Arc::new(crate::identity::IdentityResolver::new(&config.auth)),
             editors: Arc::new(crate::tools::editor::EditorRegistry::new()),
-            doc_service: None,
+            doc_service: opts.doc.clone(),
             search,
         });
+        crate::search::derived::conversion::attach(&state);
         state.stores.provision_volume(PROJ).await.unwrap();
         state.stores.provision_volume(OTHER).await.unwrap();
         if opts.search {
@@ -361,23 +365,26 @@ impl Env {
         );
         let scheduler = backend.scheduler().expect("a scheduler");
         self.stub().watch(&scheduler);
-        scheduler.recover().await.expect("recovery succeeds");
         // The hook of the stopped scheduler is replaced.
         self.state.admin.set_project_gone_hook(backend.scheduler().unwrap().project_hook());
         let s = &self.state;
         s.admin.set_project_deleted_hook(crate::chunking::ChunkStore::project_deleted_hook(
             stores.clone(),
         ));
-        self.state = Arc::new(AppState {
+        let next = Arc::new(AppState {
             config,
             admin: s.admin.clone(),
             stores,
             safety: s.safety.clone(),
             identity: s.identity.clone(),
             editors: s.editors.clone(),
-            doc_service: None,
+            doc_service: s.doc_service.clone(),
             search: Some(Arc::new(backend) as Arc<dyn SearchBackend>),
         });
+        // The host first, then the recovery, as `app.rs` does (SPEC-0113).
+        crate::search::derived::conversion::attach(&next);
+        scheduler.recover().await.expect("recovery succeeds");
+        self.state = next;
     }
 
     /// Drops the PostgreSQL schema of a `pg` environment.
@@ -1930,15 +1937,18 @@ async fn e2e_0100_012_a_non_member_cannot_rebuild() {
     env.assert_nothing_started(&before).await;
 }
 
-/// SPEC-0100/E2E-013 and E2E-015: an unknown kind and a kind of a later
-/// increment are refused alike.
+/// SPEC-0100/E2E-013 and E2E-015: an unknown kind is refused (the kind of a
+/// later increment, `conversion`, is accepted since SPEC-0113).
 #[tokio::test(start_paused = true)]
 async fn e2e_0100_013_015_unknown_kinds() {
-    for kind in ["concepts", "conversion"] {
+    for kind in ["concepts", "thumbnails"] {
         let env = Env::new(with_delay(30)).await;
         env.seed("/notes.md", "alpha").await;
         let r = env.recalc(ALICE, PROJ, "/notes.md", kind).await;
-        assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+        assert_refused(
+            r,
+            "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'",
+        );
         env.assert_nothing_started(&[]).await;
     }
 }
@@ -2127,7 +2137,10 @@ async fn e2e_0100_us0273_refusal_order() {
     assert_refused(r, "ERR_FORBIDDEN: 'dave@example.com' is not a member of 'proj'");
     // A bad kind wins over a missing file.
     let r = env.recalc(ALICE, PROJ, "/nope.md", "concepts").await;
-    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+    assert_refused(
+        r,
+        "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'",
+    );
     // A missing file wins over indexing off.
     env.state.admin.create_project("plain", ALICE).await.unwrap();
     env.state.stores.provision_volume("plain").await.unwrap();
@@ -2136,7 +2149,10 @@ async fn e2e_0100_us0273_refusal_order() {
     // SPEC-0101/FR-MOD-003: a bad kind and a missing file win over search off.
     let off = Env::new(Options { search: false, ..Options::default() }).await;
     let r = off.recalc(ALICE, PROJ, "/nope.md", "concepts").await;
-    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+    assert_refused(
+        r,
+        "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'",
+    );
     let r = off.recalc(ALICE, PROJ, "/nope.md", "search_index").await;
     assert_refused(r, "ERR_NOT_FOUND: file not found: /nope.md");
 }

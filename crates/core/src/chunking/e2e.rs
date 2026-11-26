@@ -2757,7 +2757,10 @@ async fn e2e_0101_115_an_unknown_kind() {
     let env = env().await;
     env.seed("/guide.md", "# Guide\n\nwords\n").await;
     let r = recalc(&env, ALICE, PROJ, "/guide.md", "concepts", "").await;
-    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+    assert_refused(
+        r,
+        "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'",
+    );
     assert!(env.jobs.load_unfinished(None).await.unwrap().is_empty());
 }
 
@@ -2891,7 +2894,10 @@ async fn e2e_0101_us0282_refusal_order() {
     assert_refused(r, &format!("ERR_NOT_FOUND: chunk set not found: {other}"));
     // Kind before path, path before the rest.
     let r = recalc(&env, ALICE, PROJ, "/ghost.md", "concepts", "").await;
-    assert_refused(r, "ERR_INVALID_ARGUMENT: kind must be 'search_index' or 'chunks'");
+    assert_refused(
+        r,
+        "ERR_INVALID_ARGUMENT: kind must be 'search_index', 'chunks' or 'conversion'",
+    );
     let r = recalc(&env, ALICE, PROJ, "/ghost.md", "chunks", "").await;
     assert_refused(r, "ERR_NOT_FOUND: file not found: /ghost.md");
     no_chunks_job(&env).await;

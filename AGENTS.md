@@ -58,12 +58,17 @@ Search entries are rebuilt after the file settles (SPEC-0100): the write hooks h
 quiet for `search.settle_delay_seconds` (default 30, `0` keeps the immediate timing), discards a
 result whose file changed meanwhile, and records every job in the admin table `derived_job`.
 `fs.list_derived_jobs` lists the jobs, `fs.recalculate` rebuilds one file now (kind `search_index`) or
-one chunk set (kind `chunks`, optional `set_id`, SPEC-0101); engine
+one chunk set (kind `chunks`, optional `set_id`, SPEC-0101) or the conversion of a source (kind `conversion`, SPEC-0113); engine
 `tools/derived.rs`, MCP only. Details in `.agent_docs/search.md`, "Rebuild scheduler".
 Git operations and `fs.extract_archive` follow the index too (SPEC-0112): `merge::apply_changes_atomically` records each path it
 really wrote or deleted in `GitRepoEntry::applied`, the `tool_*` git wrappers (`followed` in `tools/git.rs`) drain it after the operation and call
 `indexer::after_git_changes`; the extraction collects the files it wrote and calls the same function after its run, on error too. No second
 indexing path. Tests: `cargo test -p fsa-core --lib -- e2e_0112_` (`tools/git_index_e2e.rs`, `tools/archive_index_e2e.rs`). Details in `.agent_docs/search.md`, "Git and archive follow the index".
+A converted document follows its source (SPEC-0113): every conversion (`write_companion` in `core/fs_ops.rs`) records the origin of its companion in the volume table `companion_origin` (inside the landing window, under the admission lock)
+(source path and sha256, companion sha256; a companion with no row or edited since is manual, `fs_ops::converted_origin`, and never overwritten); `indexer::follow_source` (called by
+`after_write`, `after_write_reread`, `after_git_changes`) schedules a `conversion` job (`JobKind::Conversion`, key = the source) when a converted source changes, `Scheduler::rebuild_conversion` runs it through the
+`ConversionHost` the state attaches (`search/derived/conversion.rs`, `app.rs` attaches it before the recovery), which calls `fs_ops::rebuild_companion` (same engine and admission lock as `fs.documentize`, identity `system:conversion`, session charge refunded).
+`fs.recalculate` kind `conversion` asks it by hand. Tests: `cargo test -p fsa-core --lib -- e2e_0113_` (`search/conversion_e2e.rs`). Details in `.agent_docs/search.md`, "Converted documents follow their source".
 
 Indexing profile per project (SPEC-0107, `settings/profile*.rs`, `tools/profile.rs`): five nullable columns of the `project` row (chunk strategy and settings, text model, image model, `vectors_stale_at`), `admin.get_indexing_profile` (member or admin) and `admin.set_indexing_profile` (owner or admin), a read only section on `/app/models`, a model a profile names cannot be deleted. Changing a model sets `vectors_stale_at`; the models are consumed by the vector engines (SPEC-0108), the chunk fields not yet. `migrate.rs::columns_of` now copies the `ColumnMigration` columns too. Tests: `cargo test -p fsa-core --lib -- e2e_0107_`. Details in `.agent_docs/architecture.md`, "Indexing profile".
 

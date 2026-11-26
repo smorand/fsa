@@ -439,7 +439,7 @@ fs.read_section
   required: ['mount_id', 'path', 'anchor_line']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.recalculate
-  desc: Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index') or one chunk set (kind 'chunks').
+  desc: Rebuild derived data of one file now, without waiting for the settle delay: its search entries (kind 'search_index'), one chunk set (kind 'chunks') or its conversion to Markdown (kind 'conversion').
   params: mount_id:string, path:string, kind:string, set_id:string=""
   required: ['mount_id', 'path', 'kind']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=false, openWorldHint=false
@@ -929,7 +929,7 @@ fs.get_chunk: {"chunks": [{"number": 5, "unit": 4, "heading_path": ["Guide", "Us
 fs.create_chunk_set: {"set_id": "set-5e6f7a8b", "strategy": "fixed", "settings": {"overlap_tokens": 200, "size_tokens": 1000}, "default": false, "chunk_count": 4, "token_count": 3600, "state": "current", "built_at": "2026-11-20T10:05:00Z"}
 fs.delete_chunk_set: {"deleted": true}
 fs.list_derived_jobs: {"jobs": [{"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "waiting", "cause": "change", "created_at": "2026-11-20T10:01:10Z", "seconds_left": 12}, {"job_id": "<uuid>", "path": "/a.md", "kind": "search_index", "state": "failed", "cause": "change", "created_at": "2026-11-20T10:00:00Z", "ended_at": "2026-11-20T10:00:31Z", "reason": "embedding service unreachable"}]}
-fs.recalculate: {"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "running", "cause": "manual", "created_at": "2026-11-20T10:01:10Z"} (kind "chunks" adds "set_id": "set-1a2b3c4d")
+fs.recalculate: {"job_id": "<uuid>", "path": "/notes.md", "kind": "search_index", "state": "running", "cause": "manual", "created_at": "2026-11-20T10:01:10Z"} (kind "chunks" adds "set_id": "set-1a2b3c4d"; kind "conversion" rebuilds the companion Markdown, images and tables of a converted document, its path is the source)
 fs.audit_log: {"entries": [{"timestamp": "<volatile>", "op": "edit", "path": "/a.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "write", "path": "/dup.txt", "detail": "11 bytes"}, {"timestamp": "<volatile>", "op": "edit", "path": "/dup.txt", "detail": ""}, {"timestamp": "<volatile>", "op": "append", "path
 admin.list_projects: {"projects": [{"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none", "is_owner": true}]}
 admin.list_all_projects: {"projects": [{"project_id": "docling-scripts", "owner": "seb.morand@gmail.com", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "fsa", "owner": "user", "created_at": "<volatile>", "index_mode": "none"}, {"project_id": "parity-probe", "owner": "admin@example.com", "created_at": "<volatile>", "index_mode": "none"}]}

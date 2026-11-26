@@ -527,7 +527,27 @@ Two MCP tools follow the work: `fs.list_derived_jobs` lists each file's waiting,
 last finished job (state, cause `change` or `manual`, seconds left, failure reason), and
 `fs.recalculate` rebuilds one thing of one file now: kind `search_index` the search entries
 (replacing the waiting rebuild), kind `chunks` one chunk set, with the optional `set_id` (empty
-is the default set). Details: `.agent_docs/search.md`, "Rebuild scheduler" (SPEC-0100).
+is the default set), kind `conversion` the converted version of a source document. Details:
+`.agent_docs/search.md`, "Rebuild scheduler" (SPEC-0100).
+
+#### A converted document follows its source (SPEC-0113)
+
+`fs.documentize` and an upload with the conversion flag leave a Markdown companion (`/a.pdf` gives
+`/a.md`), its images, its tables and its headings. Each conversion now records its **origin** on the
+companion (which source, the sha256 of the source and of the companion written). When the source is
+written again, a `conversion` job is queued like any rebuild and runs after the settle delay: the
+document is converted again by the project converter and the companion, images and tables are
+replaced. A companion written by hand, or edited since its conversion, or from before this version
+(no record) is **manual** and is never overwritten: a recalculation ends `failed` with the reason
+`'/a.md' was not made by conversion or was edited since, left untouched`. `/a.pdf` and `/a.docx`
+share `/a.md`: only the source that converted last triggers a rebuild. The conversion is charged as an
+upload is (project quota under the same admission lock; a refusal writes nothing and fails the job
+with the quota message); a failing converter fails the job and keeps the old companion; a source that
+changes while the conversion runs discards its result. `fs.documentize` or an upload with the flag
+during the delay cancels the waiting job; a source with the same bytes as the companion was made from
+never calls the converter; a moved or trashed source gets no new rebuild. Ask it by hand with
+`fs.recalculate` kind `conversion` (it always converts). It needs search enabled (the scheduler), not
+an active index mode. Details: `.agent_docs/search.md`, "Converted documents follow their source".
 
 ### Chunk sets (SPEC-0101)
 

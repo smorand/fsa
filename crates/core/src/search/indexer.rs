@@ -283,6 +283,7 @@ async fn active_backend<'s>(
 /// With a scheduler the text is not kept: the rebuild reads the file when it
 /// starts, so it indexes the last save (DEC-021).
 pub async fn after_write(state: &AppState, volume_id: &str, path: &str, text: &str) {
+    follow_source(state, volume_id, path).await;
     if let Some(backend) = active_backend(state, volume_id).await {
         match backend.scheduler() {
             Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
@@ -315,8 +316,54 @@ pub async fn after_write_reread(
     path: &str,
     client: &VolumeClient,
 ) {
+    follow_source(state, volume_id, path).await;
     if let Some(backend) = active_backend(state, volume_id).await {
         reread_with(backend, state, volume_id, path, client).await;
+    }
+}
+
+/// SPEC-0113 FR-NEW-003: a file was written. When it is the source of a
+/// converted companion, its conversion is scheduled, or a waiting one is
+/// cancelled when the companion already holds this very content (the upload
+/// flag converted inside the request). Independent of the index mode, it needs
+/// the rebuild scheduler only. Cost: without a scheduler nothing; else one read
+/// of the origin of the companion path, two more when it exists.
+async fn follow_source(state: &AppState, volume_id: &str, path: &str) {
+    let Some(scheduler) = state.search.as_ref().and_then(|b| b.scheduler()) else { return };
+    let md = crate::docs::companion_md_path(path);
+    if md == path {
+        return;
+    }
+    let Ok(client) = state.stores.client(volume_id).await else { return };
+    // Cheap first read: most files have no companion record at all.
+    let Some(store) = client.trash.as_deref() else { return };
+    match store.companion_origin(&md).await {
+        Ok(Some(o)) if o.source_path == path => {}
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(volume_id, path, error = %e.message, "cannot read the origin of a companion");
+            return;
+        }
+    }
+    // Under the admission lock a landing conversion holds while it writes the
+    // companion and its origin, so this reads both or neither (SPEC-0113 DEC-007).
+    let _window = client.admission.clone().lock_owned().await;
+    let origin = match fs_ops::converted_origin(&client, &md).await {
+        Ok(Some(o)) if o.source_path == path => o,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(volume_id, path, error = %e.message, "cannot read the origin of a companion");
+            return;
+        }
+    };
+    let sha = match client.meta.get(path).await {
+        Ok(Some(node)) => node.sha256.unwrap_or_default(),
+        _ => return,
+    };
+    if sha == origin.source_sha {
+        scheduler.cancel_conversion(volume_id, path).await;
+    } else {
+        scheduler.schedule_conversion(volume_id, path, JobCause::Change).await;
     }
 }
 
@@ -346,9 +393,12 @@ pub async fn after_git_changes(
     applied: &crate::git::repo::AppliedPaths,
     client: &VolumeClient,
 ) {
-    let Some(backend) = active_backend(state, volume_id).await else { return };
     let trash_dir = &state.safety.config().trash_dir;
     let live = |p: &&String| !is_trash_path(p, trash_dir);
+    for path in applied.written.iter().filter(live) {
+        follow_source(state, volume_id, path).await;
+    }
+    let Some(backend) = active_backend(state, volume_id).await else { return };
     for path in applied.deleted.iter().filter(live) {
         delete_with(backend, state, volume_id, path).await;
     }
@@ -392,14 +442,40 @@ pub async fn after_companion(
         _ => payload,
     };
     let Some(md_path) = report["md_path"].as_str() else { return };
-    // Indexed at once, never scheduled: SPEC-0100 leaves the companion out
-    // (DEC-015). Its sets are cut again first, its default set included
-    // (SPEC-0101 FR-NEW-021).
+    // A conversion just landed this companion: the waiting rebuild of its source
+    // has nothing left to do (SPEC-0113 FR-NEW-009).
+    cancel_waiting_for(state, volume_id, md_path, client).await;
+    index_companion(state, volume_id, md_path, client).await;
+}
+
+/// Indexes the Markdown companion at `md_path` at once, never scheduled:
+/// SPEC-0100 leaves the companion out (DEC-015). Its sets are cut again first,
+/// its default set included (SPEC-0101 FR-NEW-021).
+pub async fn index_companion(
+    state: &AppState,
+    volume_id: &str,
+    md_path: &str,
+    client: &VolumeClient,
+) {
     if let Some(backend) = active_backend(state, volume_id).await
         && let Some(text) = read_utf8(client, md_path).await
     {
         let indexer = ProjectIndexer::new(backend, state.config.search.chunking());
         drop(indexer.spawn_index(volume_id, md_path, &text, client.meta.clone(), true));
+    }
+}
+
+/// Drops the waiting conversion of the source that made the companion `md_path`.
+async fn cancel_waiting_for(
+    state: &AppState,
+    volume_id: &str,
+    md_path: &str,
+    client: &VolumeClient,
+) {
+    let Some(scheduler) = state.search.as_ref().and_then(|b| b.scheduler()) else { return };
+    let Some(store) = client.trash.as_deref() else { return };
+    if let Ok(Some(origin)) = store.companion_origin(md_path).await {
+        scheduler.cancel_conversion(volume_id, &origin.source_path).await;
     }
 }
 

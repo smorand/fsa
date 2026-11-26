@@ -337,3 +337,6 @@
 | US-0335 | SPEC-0112 | git operations follow the index | main | 1 | landed | | |
 | US-0336 | SPEC-0112 | archive extraction follows the index | US-0335 | 1 | landed | | |
 | US-0337 | SPEC-0112 | PostgreSQL, docs and contract | US-0336 | 1 | landed | | |
+| US-0338 | SPEC-0113 | the origin of a companion | main | 1 | landed | | |
+| US-0339 | SPEC-0113 | the conversion job after a source change | US-0338 | 1 | landed | | |
+| US-0340 | SPEC-0113 | fs.recalculate conversion, PostgreSQL, docs and contract | US-0339 | 1 | landed | | |

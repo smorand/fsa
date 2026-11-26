@@ -91,7 +91,7 @@ pub(crate) struct FolderItems {
 
 /// Refusal when the document changed between reading it and committing its
 /// artifacts (SPEC-0019 FR-NEW-035).
-const CHANGED_DURING_CONVERSION: &str = "Document changed during conversion";
+pub(crate) const CHANGED_DURING_CONVERSION: &str = "Document changed during conversion";
 
 const SELECT_COLS: &str = "path, parent, name, kind, size, mode, mtime, ctime, atime, sha256";
 
@@ -317,6 +317,21 @@ pub fn schema() -> SchemaSet {
             // key is in the primary key so two equal requests cannot coexist on
             // either engine; `state` is not stored, it is computed from
             // `source_sha` against the node's `sha256`.
+            // SPEC-0113 DEC-001: what made a companion `.md`, keyed by the
+            // companion path. Rows are checked against the companion's current
+            // sha256, so a stale or missing row only ever reads as manual.
+            Table::new(
+                "companion_origin",
+                vec![
+                    Column::required("volume_id", ColumnType::Text),
+                    Column::required("md_path", ColumnType::Text),
+                    Column::required("source_path", ColumnType::Text),
+                    Column::required("source_sha", ColumnType::Text),
+                    Column::required("md_sha", ColumnType::Text),
+                    Column::required("created_at", ColumnType::BigInt),
+                ],
+                vec!["volume_id", "md_path"],
+            ),
             Table::new(
                 "chunk_sets",
                 vec![
@@ -576,6 +591,77 @@ impl PathLocks {
     fn contenders(&self, path: &str) -> usize {
         let map = self.map.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.get(path).map_or(0, |l| Arc::strong_count(l) - 1)
+    }
+}
+
+/// What made a companion `.md`: the conversion of `source_path` (SPEC-0113).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompanionOrigin {
+    pub md_path: String,
+    pub source_path: String,
+    /// Hex sha256 of the source bytes converted, empty for an empty file.
+    pub source_sha: String,
+    /// Hex sha256 of the companion bytes written, empty for an empty file.
+    pub md_sha: String,
+}
+
+impl RelationalMetaStore {
+    /// Records `origin`, replacing the record of the same companion path
+    /// (FR-NEW-001): the last conversion to write a companion owns it.
+    pub(crate) async fn set_companion_origin(&self, origin: &CompanionOrigin) -> Result<()> {
+        let (volume, o) = (self.volume_id.clone(), origin.clone());
+        run_retrying(&*self.db, move |tx| {
+            let (volume, o) = (volume.clone(), o.clone());
+            Box::pin(async move {
+                tx.execute(
+                    &Query::new("DELETE FROM companion_origin WHERE volume_id=?1 AND md_path=?2")
+                        .bind(&volume)
+                        .bind(&o.md_path),
+                )
+                .await?;
+                tx.execute(
+                    &Query::new(
+                        "INSERT INTO companion_origin \
+                         (volume_id, md_path, source_path, source_sha, md_sha, created_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    )
+                    .bind(&volume)
+                    .bind(&o.md_path)
+                    .bind(&o.source_path)
+                    .bind(&o.source_sha)
+                    .bind(&o.md_sha)
+                    .bind(now_unix() as i64),
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    /// The record of the companion `md_path`, whatever its file holds now
+    /// (the caller compares `md_sha`, see `fs_ops::converted_origin`).
+    pub(crate) async fn companion_origin(&self, md_path: &str) -> Result<Option<CompanionOrigin>> {
+        let row = self
+            .db
+            .query_opt(
+                &Query::new(
+                    "SELECT source_path, source_sha, md_sha FROM companion_origin \
+                     WHERE volume_id=?1 AND md_path=?2",
+                )
+                .bind(&self.volume_id)
+                .bind(md_path),
+            )
+            .await?;
+        row.map(|r| {
+            Ok(CompanionOrigin {
+                md_path: md_path.to_string(),
+                source_path: r.text(0)?,
+                source_sha: r.text(1)?,
+                md_sha: r.text(2)?,
+            })
+        })
+        .transpose()
     }
 }
 
@@ -3024,6 +3110,7 @@ mod tests {
                 "doc_images",
                 "doc_tables",
                 "doc_headings",
+                "companion_origin",
                 "chunk_sets",
                 "chunks",
             ]

@@ -144,7 +144,7 @@ owner.
 | `fs.trash_list` | list trashed files, paginated | `path_prefix:string=""`, `limit:int=200`, `offset:int=0` | `entries[{trash_path, original_path, size, kind, deleted_at, deleted_by, purge_in_days}]`, `total` | RO,I,!OW | member |
 | `fs.trash_restore` | restore a trashed entry to its original path | `trash_path` | `restored_path`, `trash_path` | !D,!RO,!I,!OW | member |
 | `fs.list_derived_jobs` | rebuild jobs of derived data (SPEC-0100), 100 per page | `path:string=""`, `marker:string=""` | `jobs[{job_id, path, kind, state, cause, created_at, seconds_left?, ended_at?, reason?}]`, `marker?` | RO,I,!OW | member |
-| `fs.recalculate` | rebuild the search entries (`search_index`, SPEC-0100) or one chunk set (`chunks`, SPEC-0101) of one file now; a waiting rebuild of the kind is replaced, a running one ends `superseded` | `path`, `kind` (`search_index` or `chunks`), `set_id:string=""` (kind `chunks` only) | the job: `job_id, path, kind, state, cause, created_at, set_id? (chunks), seconds_left?, ended_at?, reason?` | !D,!RO,!I,!OW | member |
+| `fs.recalculate` | rebuild the search entries (`search_index`, SPEC-0100), one chunk set (`chunks`, SPEC-0101) or the conversion (`conversion`, SPEC-0113: the companion `.md`, images and tables of a converted source, always converting, never over a manual companion) of one file now; a waiting rebuild of the kind is replaced, a running one ends `superseded` | `path`, `kind` (`search_index`, `chunks` or `conversion`), `set_id:string=""` (kind `chunks` only) | the job: `job_id, path, kind, state, cause, created_at, set_id? (chunks), seconds_left?, ended_at?, reason?` | !D,!RO,!I,!OW | member |
 
 `trash=false` needs `safety.allow_hard_delete` on the server, otherwise
 `ERR_NOT_SUPPORTED`. `fs.list_allowed_roots` and `fs.audit_log` still take and
@@ -159,8 +159,8 @@ original path rather than failing (SPEC-0011).
 `fs.recalculate` (2026-11-21, SPEC-0100 FR-NEW-008, FR-NEW-009) is MCP only, like
 `fs.list_derived_jobs` (DEC-012). Refusals, first match wins, nothing changed:
 project absent or deleted `ERR_PROJECT_NOT_FOUND`; non member `ERR_FORBIDDEN`;
-kind other than `search_index` or `chunks` `ERR_INVALID_ARGUMENT: kind must be
-'search_index' or 'chunks'`; `ERR_NOT_FOUND: file not found: <path>`; a folder (the root
+kind other than `search_index`, `chunks` or `conversion` `ERR_INVALID_ARGUMENT: kind must be
+'search_index', 'chunks' or 'conversion'`; `ERR_NOT_FOUND: file not found: <path>`; a folder (the root
 included) `ERR_INVALID_ARGUMENT: path must be a file`; then for `search_index`: `set_id` given
 `ERR_INVALID_ARGUMENT: set_id applies to kind 'chunks' only`, search off `ERR_NOT_SUPPORTED:
 search is not enabled; set search.enabled: true in config`, index mode `none`
@@ -176,7 +176,11 @@ running: that one ends `superseded` and the answer is `waiting` with
 `seconds_left` 0, started when the running one ends. A `chunks` job is one per file and kind
 whatever the set, never touches the waiting `search_index` job, and answers `set_id`. With
 search off no scheduler exists: the cut runs on a task of its own and the job is not
-recorded, so `fs.list_derived_jobs` (empty with search off) never shows it.
+recorded, so `fs.list_derived_jobs` (empty with search off) never shows it. A `conversion` job
+(SPEC-0113 FR-NEW-010) refuses, after the file checks, a `set_id` (`set_id applies to kind 'chunks'
+only`) then search off (`ERR_NOT_SUPPORTED`, no scheduler to run it); it needs no index mode. It is
+one per source and never touches the other kinds; a conversion running when it is asked ends
+`superseded` (its result would be the older one).
 
 ## fs chunks (5)
 

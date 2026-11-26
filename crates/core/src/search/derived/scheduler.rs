@@ -122,6 +122,9 @@ pub struct Scheduler {
     /// The scopes of the recalculations a restart interrupted, started again by
     /// [`Self::resume_vectors`] (FR-NEW-016).
     vector_resume: std::sync::Mutex<Vec<(String, String)>>,
+    /// What a `conversion` job runs (SPEC-0113); set once the application state
+    /// exists, replaceable for a test that builds a new state.
+    conversion: std::sync::Mutex<Option<Arc<dyn super::conversion::ConversionHost>>>,
 }
 
 impl Scheduler {
@@ -147,6 +150,7 @@ impl Scheduler {
             vector_runs: std::sync::Mutex::new(HashMap::new()),
             vector_inflight: std::sync::Mutex::new(HashMap::new()),
             vector_resume: std::sync::Mutex::new(Vec::new()),
+            conversion: std::sync::Mutex::new(None),
         });
         let handle = tokio::spawn(dispatch(Arc::downgrade(&s), s.wake.clone()));
         *s.dispatcher.lock().expect("dispatcher mutex") = Some(handle);
@@ -206,10 +210,18 @@ impl Scheduler {
         }
         let (chunk_running, running): (Vec<Job>, Vec<Job>) =
             running.into_iter().partition(|j| j.kind == JobKind::Chunks);
+        let (conversion_running, running): (Vec<Job>, Vec<Job>) =
+            running.into_iter().partition(|j| j.kind == JobKind::Conversion);
         for job in chunk_rows.into_iter().chain(chunk_running) {
             self.store
                 .finish(&job.job_id, JobState::Failed, &self.now_secs(), Some(RESTART_REASON))
                 .await?;
+        }
+        for job in conversion_running {
+            self.store
+                .finish(&job.job_id, JobState::Failed, &self.now_secs(), Some(RESTART_REASON))
+                .await?;
+            self.schedule_conversion(&job.project_id, &job.path, JobCause::Change).await;
         }
         for job in running {
             self.store
@@ -230,14 +242,24 @@ impl Scheduler {
     }
 
     /// The kinds a file can hold a job of: a delete or a move treats each.
-    const KINDS: [JobKind; 2] = [JobKind::SearchIndex, JobKind::Chunks];
+    const KINDS: [JobKind; 3] = [JobKind::SearchIndex, JobKind::Chunks, JobKind::Conversion];
 
     /// Rule 1: a change creates the waiting job, or pushes its due time back
     /// without a row write; a running job of the key becomes stale. The caller
     /// has checked that the project's index mode is active.
     pub async fn schedule(&self, project: &str, path: &str, cause: JobCause) {
         self.mark_inflight_stale(project, path);
-        let key = (project.to_string(), path.to_string(), JobKind::SearchIndex);
+        self.schedule_kind(project, path, JobKind::SearchIndex, cause).await;
+    }
+
+    /// Rule 1 for the kind `conversion` (SPEC-0113 FR-NEW-003): the source of a
+    /// converted companion changed. The caller has checked the origin.
+    pub async fn schedule_conversion(&self, project: &str, path: &str, cause: JobCause) {
+        self.schedule_kind(project, path, JobKind::Conversion, cause).await;
+    }
+
+    async fn schedule_kind(&self, project: &str, path: &str, kind: JobKind, cause: JobCause) {
+        let key = (project.to_string(), path.to_string(), kind);
         let due = Instant::now() + self.delay;
         let mut slots = self.slots.lock().await;
         let slot = slots.entry(key).or_default();
@@ -246,10 +268,37 @@ impl Scheduler {
         }
         match &mut slot.waiting {
             Some(w) => w.due = due,
-            None => slot.waiting = Some(self.new_waiting(project, path, cause, due).await),
+            None => slot.waiting = Some(self.new_waiting(project, path, kind, cause, due).await),
         }
         drop(slots);
         self.wake.notify_one();
+    }
+
+    /// Drops the waiting conversion of a source without a record: its companion
+    /// is already current (FR-NEW-003, FR-NEW-009). A running one becomes stale
+    /// (it converts bytes the source no longer holds, or that a conversion just
+    /// landed), so it ends `superseded` rather than failing on the revision
+    /// check. Cost: one row delete.
+    pub async fn cancel_conversion(&self, project: &str, path: &str) {
+        let key = (project.to_string(), path.to_string(), JobKind::Conversion);
+        let mut slots = self.slots.lock().await;
+        let Some(slot) = slots.get_mut(&key) else { return };
+        if let Some(r) = &slot.running {
+            r.stale.store(true, Ordering::SeqCst);
+        }
+        if let Some(old) = slot.waiting.take()
+            && let Err(e) = self.store.delete(&old.job.job_id).await
+        {
+            tracing::warn!(job_id = %old.job.job_id, error = %e, "cannot remove a cancelled job");
+        }
+        if slot.is_empty() {
+            slots.remove(&key);
+        }
+    }
+
+    /// Sets what runs a `conversion` job (SPEC-0113).
+    pub fn set_conversion_host(&self, host: Arc<dyn super::conversion::ConversionHost>) {
+        *self.conversion.lock().expect("conversion host mutex") = Some(host);
     }
 
     /// FR-NEW-008: a member asks for a rebuild of `path` now. The waiting job of
@@ -273,6 +322,17 @@ impl Scheduler {
         work: ChunkWork,
     ) -> serde_json::Value {
         self.recalculate_kind(project, path, JobKind::Chunks, Some(work)).await
+    }
+
+    /// SPEC-0113 FR-NEW-010: as [`Self::recalculate`] for the kind `conversion`.
+    /// A running conversion becomes stale (its result would be the older one),
+    /// the waiting job goes without a record. Cost: as `recalculate`.
+    pub async fn recalculate_conversion(
+        self: &Arc<Self>,
+        project: &str,
+        path: &str,
+    ) -> serde_json::Value {
+        self.recalculate_kind(project, path, JobKind::Conversion, None).await
     }
 
     async fn recalculate_kind(
@@ -325,10 +385,11 @@ impl Scheduler {
         &self,
         project: &str,
         path: &str,
+        kind: JobKind,
         cause: JobCause,
         due: Instant,
     ) -> Waiting {
-        let mut job = Job::new_waiting(project, path, JobKind::SearchIndex, cause);
+        let mut job = Job::new_waiting(project, path, kind, cause);
         job.created_at = self.now_secs();
         // A delay of 0 starts at once: no member ever sees it wait (DEC-007).
         job.hidden = self.delay.is_zero();
@@ -440,7 +501,8 @@ impl Scheduler {
         if let Err(e) = self.store.move_path(project, from, to).await {
             tracing::warn!(project, from, to, error = %e, "cannot move the jobs of a file");
         }
-        self.drop_chunks_locked(&mut slots, project, from).await;
+        self.drop_kind_locked(&mut slots, project, from, JobKind::Chunks).await;
+        self.drop_kind_locked(&mut slots, project, from, JobKind::Conversion).await;
         let from_key = (project.to_string(), from.to_string(), JobKind::SearchIndex);
         let Some(mut src) = slots.remove(&from_key) else { return };
         // A rebuild already removed keeps clearing the old path when it ends.
@@ -461,7 +523,10 @@ impl Scheduler {
             dest.running = Some(r);
             if dest.waiting.is_none() {
                 let due = Instant::now() + self.delay;
-                dest.waiting = Some(self.new_waiting(project, to, JobCause::Change, due).await);
+                dest.waiting = Some(
+                    self.new_waiting(project, to, JobKind::SearchIndex, JobCause::Change, due)
+                        .await,
+                );
             }
         }
         // `to` was just forgotten, so only its removed rebuilds can be there.
@@ -475,8 +540,14 @@ impl Scheduler {
     /// A `chunks` job of a file that moved: its text belongs to the old path, so
     /// the waiting one goes and the running one is staled, ending with no record
     /// and no write (its guard refuses). The sets themselves moved with the file.
-    async fn drop_chunks_locked(&self, slots: &mut HashMap<Key, Slot>, project: &str, path: &str) {
-        let key = (project.to_string(), path.to_string(), JobKind::Chunks);
+    async fn drop_kind_locked(
+        &self,
+        slots: &mut HashMap<Key, Slot>,
+        project: &str,
+        path: &str,
+        kind: JobKind,
+    ) {
+        let key = (project.to_string(), path.to_string(), kind);
         let Some(mut slot) = slots.remove(&key) else { return };
         if let Some(w) = slot.waiting.take()
             && let Err(e) = self.store.delete(&w.job.job_id).await
@@ -568,6 +639,9 @@ impl Scheduler {
                 )
                 .await
             }
+            _ if *kind == JobKind::Conversion => {
+                self.rebuild_conversion(project, path, job.cause, &guard).await
+            }
             _ => self.rebuild_file(project, path, &guard).await,
         };
         let (state, reason) = match outcome {
@@ -629,6 +703,22 @@ impl Scheduler {
         }
         // A waiting job blocked behind this one may now be due.
         self.wake.notify_one();
+    }
+
+    /// SPEC-0113: the conversion of a source again, by the host the application
+    /// gave. `Ok(None)` is a result discarded, `Ok(Some(n))` a finished one.
+    async fn rebuild_conversion(
+        &self,
+        project: &str,
+        path: &str,
+        cause: JobCause,
+        guard: &(dyn Fn() -> bool + Send + Sync),
+    ) -> crate::errors::Result<Option<usize>> {
+        let host = self.conversion.lock().expect("conversion host mutex").clone();
+        match host {
+            Some(host) => host.rebuild(project, path, cause, guard).await,
+            None => Err(ToolError::internal("the document conversion is not available")),
+        }
     }
 
     /// SPEC-0101 design 3.2: every set of the file is cut again from its

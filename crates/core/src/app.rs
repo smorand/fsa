@@ -154,9 +154,6 @@ pub(crate) async fn build_with_env(
     // queued again (SPEC-0100 DEC-020); a failure stops the boot.
     if let Some(scheduler) = search.as_ref().and_then(|s| s.scheduler()) {
         admin.set_project_gone_hook(scheduler.project_hook());
-        scheduler.recover().await.map_err(|e| anyhow::anyhow!("rebuild recovery failed: {e}"))?;
-        // A recalculation the restart cut short starts again (SPEC-0108 FR-NEW-016).
-        scheduler.resume_vectors().await;
     }
 
     // The sets of a soft deleted project go whatever the index mode and even
@@ -175,6 +172,15 @@ pub(crate) async fn build_with_env(
         doc_service,
         search,
     });
+
+    // The conversion host first, then the recovery: a recovered job that is due
+    // at once finds its host (SPEC-0113 AUTO-035). A failure stops the boot.
+    crate::search::derived::conversion::attach(&state);
+    if let Some(scheduler) = state.search.as_ref().and_then(|s| s.scheduler()) {
+        scheduler.recover().await.map_err(|e| anyhow::anyhow!("rebuild recovery failed: {e}"))?;
+        // A recalculation the restart cut short starts again (SPEC-0108 FR-NEW-016).
+        scheduler.resume_vectors().await;
+    }
 
     let mcp_service = build_mcp_service(state.clone());
     let mcp_router = Router::new()

@@ -451,19 +451,19 @@ mod tests {
     /// see no difference (BR-005). One deliberate change since: SPEC-0094 added the
     /// nullable `doc_artifact_sets.note` column (table and column migration), which
     /// moved the two `storage::meta` fingerprints only. SPEC-0101 adds `chunk_sets` and `chunks`,
-    /// which moved them again. SPEC-0102 adds the registry tables to `storage::admin` (US-0285: `default_model`). SPEC-0103 adds `doc_headings`, the nullable `doc_images.ocr_text` and the nullable `doc_tables.csv_text` and `page` to `storage::meta`. SPEC-0106 adds the `converter` table to `storage::admin` (US-0309). SPEC-0107 adds five nullable profile columns to `project` in `storage::admin` (US-0322).
+    /// which moved them again. SPEC-0102 adds the registry tables to `storage::admin` (US-0285: `default_model`). SPEC-0103 adds `doc_headings`, the nullable `doc_images.ocr_text` and the nullable `doc_tables.csv_text` and `page` to `storage::meta`. SPEC-0106 adds the `converter` table to `storage::admin` (US-0309). SPEC-0107 adds five nullable profile columns to `project` in `storage::admin` (US-0322). SPEC-0113 adds `companion_origin` to `storage::meta` (US-0338).
     #[test]
     fn production_ddl_is_unchanged_on_every_engine() {
         let expected = [
             (
                 "storage::meta",
                 Dialect::Sqlite,
-                "896e117de90f1c139128a12b8fdb0945ea52bd89e507e548d81c896467e2a314",
+                "e4c11194f33ea713d558a2ffd52683ad8153350723182dcec3bf43778885d177",
             ),
             (
                 "storage::meta",
                 Dialect::Postgres,
-                "146ec7b4d56acc45cdc08b4f81d163556268f2d68bba909293f61723b1457366",
+                "8b1ea5eb40adbbce42dbaccc9f0e3855fc45d3f60ed1e86cfeb18b5b4ed49a06",
             ),
             (
                 "storage::admin",

@@ -17,6 +17,8 @@ use std::sync::Arc;
 #[cfg(feature = "postgres")]
 pub mod bm25_pg;
 pub mod bm25_sqlite;
+#[cfg(test)]
+mod conversion_e2e;
 pub mod derived;
 #[cfg(test)]
 pub(crate) mod derived_e2e;
