@@ -783,6 +783,7 @@ the `#[tool]` handlers and the test registry. Details in [`search.md`](search.md
 | `search.index` | build or refresh the default chunk set of each text file, then index its chunks | `path`, `recursive:bool=false` | `indexed` (chunks), `skipped`, `path` |
 | `search.query` | ranked entries | `query`, `mode=null`, `top_k:int=10`, `rerank:bool=true` | `results[{path, score, chunk, rank, chunk_number, heading_path}]`, `mode_used`, `warning` |
 | `search.chunks` | the chunks closest to texts and images, with context | `inputs:[{text|image}]` (1 to 10), `top_k:int=10`, `context_before:int=0`, `context_after:int=0` | `mode_used`, `inputs[{label, kind, query_text?, lines[{document, chunk, text, heading_path, similarity, context?[]}]}]` |
+| `search.documents` | the documents closest to texts and images, scored by reconciliation | `inputs:[{text|image}]` (1 to 10), `top_k:int=10`, `floor:number=0.5`, `boost:number=0.5`, `weights?:number[]` | `mode_used`, `floor`, `boost`, `weights`, `warning?`, `documents[{document, score, inputs[{label, score, counted, best{chunk, text, heading_path, similarity}|null}]}]` |
 | `search.images` | the stored images closest to pictures or texts | `inputs:[{text|image}]` (1 to 10), `top_k:int=10` | `inputs[{label, kind, lines[{document, image, text, similarity}]}]` |
 | `search.delete` | drop the entries of a path | `path`, `recursive:bool=false` | `deleted` |
 | `search.status` | index statistics | | `bm25_docs`, `vector_chunks`, `mode`, `bm25_warm` |
@@ -802,7 +803,7 @@ before any handler runs.
 |---|---|
 | default | 98 (54 `fs.*`, 44 `admin.*`) |
 | git flag on | 152 |
-| git and search flags on | 156 |
+| git and search flags on | 159 |
 | every flag, pandoc on `PATH` | 177 (175 without pandoc: `doc.*` registers nothing) |
 | one optional family alone | 92 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 

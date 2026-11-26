@@ -9,7 +9,8 @@
 //! rank then stable chunk id, one line per chunk (`search::fusion::fuse_units`).
 
 use crate::errors::{Result, ToolError};
-use crate::search::fusion::fuse_units;
+use crate::search::fusion::{Fused, fuse_units};
+use crate::search::reconcile;
 use crate::search::{SearchBackend, VectorKind};
 use crate::state::AppState;
 use crate::storage::VolumeClient;
@@ -247,10 +248,12 @@ pub(crate) async fn chunks(
     })
     .await?;
     let keyword = p.mode == IndexMode::Both && p.backend.supported_modes().contains(&"bm25");
+    let mut failed = false;
     let mut out = Vec::with_capacity(p.groups.len());
     for group in &p.groups {
         let text = text_of(state, mount, group).await?;
-        let lines = chunk_lines(&p, mount, &text, keyword, top, before, after).await?;
+        let (lines, down) = chunk_lines(&p, mount, &text, keyword, top, before, after).await?;
+        failed |= down;
         let mut g = json!({
             "label": group.label,
             "kind": if matches!(group.input, Prepared::Text(_)) { "text" } else { "image" },
@@ -261,29 +264,45 @@ pub(crate) async fn chunks(
         }
         out.push(g);
     }
-    Ok(json!({ "mode_used": if keyword { "both" } else { "rag" }, "inputs": out }))
+    let mut answer = json!({ "inputs": out });
+    mode_of(&mut answer, keyword, failed);
+    Ok(answer)
 }
 
-async fn chunk_lines(
-    p: &Prepare<'_>,
-    mount: &str,
-    text: &str,
-    keyword: bool,
-    top: usize,
-    before: u32,
-    after: u32,
-) -> Result<Vec<Value>> {
+/// FR-MOD-010: `mode_used` says what ran, and a keyword list that failed is
+/// said in a `warning` instead of only in the log.
+fn mode_of(answer: &mut Value, keyword: bool, failed: bool) {
+    answer["mode_used"] = json!(if keyword && !failed { "both" } else { "rag" });
+    if failed {
+        answer["warning"] = json!("the keyword list failed, the answer holds the vector list only");
+    }
+}
+
+/// The candidates of one input (FR-NEW-002 of SPEC-0109): its vector, the fused
+/// list of at most 100 chunks, the text each list stored, and whether the
+/// keyword list failed. Shared by `search.chunks` and `search.documents`.
+struct Pool {
+    vector: Vec<f32>,
+    fused: Vec<Fused>,
+    stored: HashMap<(String, u32), String>,
+    keyword_failed: bool,
+}
+
+async fn pool(p: &Prepare<'_>, mount: &str, text: &str, keyword: bool) -> Result<Pool> {
     let backend = p.backend;
     let vector = backend.embed_input(mount, VectorKind::Text, text).await?;
     let dense = backend.nearest(mount, VectorKind::Text, &vector, CANDIDATES).await?;
+    let mut keyword_failed = false;
     let kw_hits = if keyword {
         let q = keyword_query(text);
         if q.is_empty() {
             Vec::new()
         } else {
-            // A failing keyword list never fails the call, as `search.query` in `both`.
+            // A failing keyword list never fails the call, as `search.query` in `both`,
+            // but the answer says so (FR-MOD-010).
             backend.query_bm25(mount, &q, CANDIDATES).await.unwrap_or_else(|e| {
-                tracing::warn!(project = mount, error = %e, "search.chunks keyword list failed");
+                tracing::warn!(project = mount, error = %e, "keyword list failed");
+                keyword_failed = true;
                 Vec::new()
             })
         }
@@ -301,52 +320,82 @@ async fn chunk_lines(
     let dense_ids: Vec<(String, u32)> = dense.iter().map(|n| (n.path.clone(), n.number)).collect();
     let kw_ids: Vec<(String, u32)> =
         kw_hits.iter().map(|r| (r.path.clone(), r.chunk_idx)).collect();
-    let fused: Vec<_> = fuse_units(&dense_ids, &kw_ids).into_iter().take(top).collect();
+    Ok(Pool { vector, fused: fuse_units(&dense_ids, &kw_ids), stored, keyword_failed })
+}
+
+/// One chunk and, up to `before` and `after`, its neighbours of the default set
+/// not already `claimed`. A chunk with no default set shows its stored text.
+async fn window(
+    p: &Prepare<'_>,
+    f: &Fused,
+    before: u32,
+    after: u32,
+    stored: &HashMap<(String, u32), String>,
+    claimed: &mut HashSet<(String, u32)>,
+) -> Result<(Shown, Vec<(&'static str, Shown)>)> {
+    let store = p.client.meta.chunk_store();
+    let set_id = match &store {
+        Some(s) => s.default_set(&f.path).await?.map(|set| set.set_id),
+        None => None,
+    };
+    let stored_text = || stored.get(&(f.path.clone(), f.number)).cloned().unwrap_or_default();
+    let (Some(store), Some(set_id)) = (&store, set_id) else {
+        let own = Shown {
+            path: f.path.clone(),
+            number: f.number,
+            text: stored_text(),
+            heading_path: Vec::new(),
+        };
+        return Ok((own, Vec::new()));
+    };
+    let from = f.number.saturating_sub(before).max(1);
+    let window = store.get_chunk_window(&set_id, from, f.number.saturating_add(after)).await?;
+    let shown = |c: &crate::chunking::Chunk| Shown {
+        path: f.path.clone(),
+        number: c.number,
+        text: c.text.clone(),
+        heading_path: c.heading_path.clone(),
+    };
+    let own = match window.iter().find(|c| c.number == f.number) {
+        Some(c) => shown(c),
+        None => Shown {
+            path: f.path.clone(),
+            number: f.number,
+            text: stored_text(),
+            heading_path: Vec::new(),
+        },
+    };
+    let mut around = Vec::new();
+    for c in &window {
+        if c.number == f.number || !claimed.insert((f.path.clone(), c.number)) {
+            continue;
+        }
+        let position = if c.number < f.number { "before" } else { "after" };
+        around.push((position, shown(c)));
+    }
+    Ok((own, around))
+}
+
+async fn chunk_lines(
+    p: &Prepare<'_>,
+    mount: &str,
+    text: &str,
+    keyword: bool,
+    top: usize,
+    before: u32,
+    after: u32,
+) -> Result<(Vec<Value>, bool)> {
+    let backend = p.backend;
+    let pool = pool(p, mount, text, keyword).await?;
+    let vector = pool.vector;
+    let fused: Vec<_> = pool.fused.into_iter().take(top).collect();
 
     // Every chunk of a line's window, once: lines first, then context in line order.
     let mut claimed: HashSet<(String, u32)> =
         fused.iter().map(|f| (f.path.clone(), f.number)).collect();
-    let store = p.client.meta.chunk_store();
     let mut windows: Vec<(Shown, Vec<(&'static str, Shown)>)> = Vec::new();
     for f in &fused {
-        let set_id = match &store {
-            Some(s) => s.default_set(&f.path).await?.map(|set| set.set_id),
-            None => None,
-        };
-        let (Some(store), Some(set_id)) = (&store, set_id) else {
-            let text = stored.get(&(f.path.clone(), f.number)).cloned().unwrap_or_default();
-            windows.push((
-                Shown { path: f.path.clone(), number: f.number, text, heading_path: Vec::new() },
-                Vec::new(),
-            ));
-            continue;
-        };
-        let from = f.number.saturating_sub(before).max(1);
-        let window = store.get_chunk_window(&set_id, from, f.number.saturating_add(after)).await?;
-        let shown = |c: &crate::chunking::Chunk| Shown {
-            path: f.path.clone(),
-            number: c.number,
-            text: c.text.clone(),
-            heading_path: c.heading_path.clone(),
-        };
-        let own = match window.iter().find(|c| c.number == f.number) {
-            Some(c) => shown(c),
-            None => Shown {
-                path: f.path.clone(),
-                number: f.number,
-                text: stored.get(&(f.path.clone(), f.number)).cloned().unwrap_or_default(),
-                heading_path: Vec::new(),
-            },
-        };
-        let mut around = Vec::new();
-        for c in &window {
-            if c.number == f.number || !claimed.insert((f.path.clone(), c.number)) {
-                continue;
-            }
-            let position = if c.number < f.number { "before" } else { "after" };
-            around.push((position, shown(c)));
-        }
-        windows.push((own, around));
+        windows.push(window(p, f, before, after, &pool.stored, &mut claimed).await?);
     }
     let asked: Vec<(String, u32)> = windows
         .iter()
@@ -359,7 +408,7 @@ async fn chunk_lines(
     let by_entry: HashMap<&(String, u32), Option<f32>> = asked.iter().zip(sims).collect();
     let sim =
         |s: &Shown| similarity_json(by_entry.get(&(s.path.clone(), s.number)).copied().flatten());
-    Ok(windows
+    let lines = windows
         .iter()
         .map(|(own, around)| {
             let mut line = json!({
@@ -386,7 +435,8 @@ async fn chunk_lines(
             }
             line
         })
-        .collect())
+        .collect();
+    Ok((lines, pool.keyword_failed))
 }
 
 /// The `data:` URI a picture is embedded as (DEC-008 of SPEC-0108).
@@ -438,6 +488,127 @@ pub(crate) async fn images(
         out.push(json!({ "label": group.label, "kind": kind, "lines": lines }));
     }
     Ok(json!({ "inputs": out }))
+}
+
+/// `search.documents` (SPEC-0110): per input the pool of `search.chunks`, per
+/// document the reconciliation score of its chunks (`search::reconcile`), then
+/// the weighted mean over the inputs; best documents first, ties by path, with
+/// the best chunk of each input as proof. Cost per input: that of `search.chunks`
+/// without context, one similarity read of the pool, one window read per answered
+/// best chunk.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn documents(
+    state: &AppState,
+    person: &str,
+    mount: &str,
+    inputs: &[InputArg],
+    top_k: i64,
+    floor: f64,
+    boost: f64,
+    weights: Option<&[f64]>,
+) -> Result<Value> {
+    let mut top = 0;
+    let mut used = Vec::new();
+    let p = prepare(state, person, mount, inputs, || {
+        top = top_k_of(top_k)?;
+        used = reconcile::check_params(floor, boost, weights, inputs.len())?;
+        Ok(())
+    })
+    .await?;
+    let keyword = p.mode == IndexMode::Both && p.backend.supported_modes().contains(&"bm25");
+    let mut failed = false;
+    // Per input: document path to its score and the (chunk number, similarity)
+    // pairs the score was computed from, so `best` names a chunk.
+    type Scored = HashMap<String, (reconcile::InputScore, Vec<(u32, f64)>)>;
+    let mut per_input: Vec<Scored> = Vec::new();
+    let mut stored_all: HashMap<(String, u32), String> = HashMap::new();
+    for group in &p.groups {
+        let text = text_of(state, mount, group).await?;
+        let pool = pool(&p, mount, &text, keyword).await?;
+        failed |= pool.keyword_failed;
+        let asked: Vec<(String, u32)> =
+            pool.fused.iter().map(|f| (f.path.clone(), f.number)).collect();
+        let sims = p.backend.similarities(mount, VectorKind::Text, &pool.vector, &asked).await?;
+        // A chunk with no similarity is not counted (FR-NEW-008); numbers ascending
+        // so a tie for the best keeps the lowest chunk number (FR-NEW-002).
+        let mut by_doc: HashMap<String, Vec<(u32, f64)>> = HashMap::new();
+        for ((path, number), sim) in asked.into_iter().zip(sims) {
+            if let Some(sim) = sim {
+                by_doc.entry(path).or_default().push((number, f64::from(sim)));
+            }
+        }
+        let mut scored = HashMap::new();
+        for (path, mut chunks) in by_doc {
+            chunks.sort_by_key(|(n, _)| *n);
+            let values: Vec<f64> = chunks.iter().map(|(_, s)| *s).collect();
+            let score = reconcile::input_score(&values, floor, boost);
+            scored.insert(path, (score, chunks));
+        }
+        stored_all.extend(pool.stored);
+        per_input.push(scored);
+    }
+    let paths: std::collections::BTreeSet<&String> =
+        per_input.iter().flat_map(|m| m.keys()).collect();
+    let mut ranked: Vec<(i64, &String, f64)> = paths
+        .into_iter()
+        .map(|path| {
+            let scores: Vec<f64> =
+                per_input.iter().map(|m| m.get(path).map_or(0.0, |(s, _)| s.score)).collect();
+            let total = reconcile::document_score(&scores, &used);
+            (round6_key(total), path, total)
+        })
+        .filter(|(key, _, _)| *key > 0)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+    let mut answered = Vec::new();
+    let mut claimed = HashSet::new();
+    for (_, path, total) in ranked.into_iter().take(top) {
+        let mut per = Vec::with_capacity(p.groups.len());
+        for (group, scored) in p.groups.iter().zip(&per_input) {
+            let Some((score, chunks)) = scored.get(path) else {
+                per.push(json!({"label": group.label, "score": 0.0, "counted": 0, "best": null}));
+                continue;
+            };
+            let best = match score.best {
+                Some(i) => {
+                    let (number, similarity) = chunks[i];
+                    let f = Fused { path: path.clone(), number, score: 0.0, best_rank: 0 };
+                    let (own, _) = window(&p, &f, 0, 0, &stored_all, &mut claimed).await?;
+                    json!({
+                        "chunk": own.number,
+                        "text": own.text,
+                        "heading_path": own.heading_path,
+                        "similarity": r6(similarity),
+                    })
+                }
+                None => Value::Null,
+            };
+            per.push(json!({
+                "label": group.label,
+                "score": r6(score.score),
+                "counted": score.counted,
+                "best": best,
+            }));
+        }
+        answered.push(json!({"document": path, "score": r6(total), "inputs": per}));
+    }
+    let mut answer = json!({
+        "floor": floor,
+        "boost": boost,
+        "weights": used,
+        "documents": answered,
+    });
+    mode_of(&mut answer, keyword, failed);
+    Ok(answer)
+}
+
+/// A score as compared and printed: six decimals.
+fn round6_key(score: f64) -> i64 {
+    (score * 1e6).round() as i64
+}
+
+fn r6(x: f64) -> f64 {
+    round6_key(x) as f64 / 1e6
 }
 
 #[cfg(test)]

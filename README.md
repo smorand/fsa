@@ -652,6 +652,19 @@ jpeg, gif, webp or bmp file of the project, at most 10 MiB). Inputs are labeled 
 Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0109_` (the PostgreSQL ones need `MCPFS_TEST_PG_DSN`
 on a pgvector server). Details: `.agent_docs/search.md`, "Search by chunk and by image".
 
+## Search documents
+
+(SPEC-0110.) `search.documents(mount_id, inputs, top_k?, floor?, boost?, weights?)` takes the same inputs as `search.chunks`
+and answers whole documents, best first (`top_k` 1 to 50, default 10), for one question that may be spread over
+several passages, texts and pictures. Per input a document scores `S = m + boost * (1 - m) * (1 - product(1 - s))`:
+`m` is its best chunk similarity, `s` the similarities of its other chunks at or above `floor` (default 0.5, a chunk
+exactly at the floor counts), `boost` (default 0.5, 0 to 1) how much of the gap to 1 they may fill. The document
+score is the weighted mean of its per input scores (`weights`, one per input, default equal); an input a document does not
+match scores 0. Each answered document shows, per input, `score`, `counted` (chunks used) and `best`, the best chunk
+as proof. With `boost` 0 a single input ranks by best passage. A document is judged on the 100 best chunks per input
+(the pool of `search.chunks`). If the keyword list fails, `search.chunks` and `search.documents` answer from the vector
+list, say `mode_used: rag` and add a `warning`. Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile`.
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or

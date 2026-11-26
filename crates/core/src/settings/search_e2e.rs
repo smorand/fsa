@@ -780,3 +780,5 @@ async fn e2e_0109_018_the_tools_on_postgres() {
     let drop = format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
     let _ = sqlx::query(sqlx::AssertSqlSafe(drop)).execute(db.pool()).await;
 }
+
+mod documents_e2e;

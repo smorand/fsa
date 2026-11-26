@@ -329,3 +329,6 @@
 | US-0327 | SPEC-0109 | engine reads by vector, fusion and clamp | main | 1 | landed | | |
 | US-0328 | SPEC-0109 | the search.chunks tool: inputs, legs, context | US-0327 | 1 | landed | | |
 | US-0329 | SPEC-0109 | search.images, the regression, PostgreSQL, docs and contract | US-0328 | 2 | landed | | |
+| US-0330 | SPEC-0110 | the reconciliation formula and an honest keyword mode | main | 1 | landed | | |
+| US-0331 | SPEC-0110 | the search.documents tool | US-0330 | 1 | landed | | |
+| US-0332 | SPEC-0110 | PostgreSQL, docs and contract | US-0331 | 2 | landed | | |

@@ -1938,6 +1938,29 @@ pub struct SearchChunksArgs {
     pub context_after: i64,
 }
 
+fn def_half() -> f64 {
+    0.5
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchDocumentsArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// One to 10 inputs, each with exactly one of text and image; labeled S1, S2 for texts and I1, I2 for images.
+    pub inputs: Vec<SearchInputArg>,
+    /// Documents to answer, 1 to 50.
+    #[serde(default = "def_top_k")]
+    pub top_k: i64,
+    /// Minimum similarity, 0 to 1, for a chunk other than the best of a document to lift its score.
+    #[serde(default = "def_half")]
+    pub floor: f64,
+    /// Share, 0 to 1, of the gap between the best similarity and 1 that the other good chunks may fill; 0 scores a document by its best chunk alone.
+    #[serde(default = "def_half")]
+    pub boost: f64,
+    /// One weight per input, in the order sent, 0 or more and not all 0; default 1 for each.
+    pub weights: Option<Vec<f64>>,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchImagesArgs {
     /// Project/volume id the operation targets.
@@ -4185,6 +4208,33 @@ impl McpServer {
     }
 
     #[tool(
+        name = "search.documents",
+        description = "Find the documents closest to one or several inputs, texts and images (an image is turned into text by the project's converter). Each document is scored per input from its best chunk, lifted by its other chunks above the floor, then by the weighted mean over the inputs; an input a document does not match scores 0. Answers documents best first with the score, and per input its score, the number of chunks counted and the best chunk as proof."
+    )]
+    pub(crate) async fn search_documents(
+        &self,
+        Parameters(a): Parameters<SearchDocumentsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let inputs: Vec<crate::tools::search_chunks::InputArg> = a
+            .inputs
+            .into_iter()
+            .map(|i| crate::tools::search_chunks::InputArg { text: i.text, image: i.image })
+            .collect();
+        let out = crate::tools::search_chunks::documents(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &inputs,
+            a.top_k,
+            a.floor,
+            a.boost,
+            a.weights.as_deref(),
+        )
+        .await;
+        to_call_result("search.documents", out)
+    }
+
+    #[tool(
         name = "search.images",
         description = "Find the stored images closest to one or several inputs, pictures or texts, with the project's image model. Answers, per input labeled S1, S2, I1, lines of document, image number, the caption and OCR text stored beside it and similarity (1 minus cosine distance), best first."
     )]
@@ -5115,12 +5165,12 @@ mod tests {
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
         // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
         // SPEC-0106 US-0309 adds admin.create_converter and admin.list_converters: admin 31, total 142. US-0312 adds admin.update_converter: admin 32, total 143.
-        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156.
+        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156. SPEC-0109 adds search.chunks and search.images (6 search tools, total 158); SPEC-0110 adds search.documents (7, total 159).
         assert_eq!(fs_count, 54, "got: {names:?}");
         assert_eq!(admin_count, 44, "got: {names:?}");
-        assert_eq!(search_count, 6, "got: {names:?}");
+        assert_eq!(search_count, 7, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 158, "got: {names:?}");
+        assert_eq!(names.len(), 159, "got: {names:?}");
     }
 
     #[test]

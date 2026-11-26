@@ -1,7 +1,7 @@
 # Search Tools
 
-The `search.*` family (6 tools: `search.index`, `search.query`, `search.delete`,
-`search.status`, `search.chunks`, `search.images`) adds BM25 full-text search and optional RAG vector search to every
+The `search.*` family (7 tools: `search.index`, `search.query`, `search.delete`,
+`search.status`, `search.chunks`, `search.images`, `search.documents`) adds BM25 full-text search and optional RAG vector search to every
 volume. They are registered only when `search.enabled: true` in the server config.
 
 ## Config keys
@@ -486,3 +486,23 @@ Members only (administrators included), a project mode with vectors (`rag` or `b
   The `search.*` tools are config gated and outside the frozen 152 tool contract (`tool-contract-golden.json` is unchanged).
 * Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0109_` (18, the PostgreSQL ones need `MCPFS_TEST_PG_DSN` with
   pgvector and skip without it), fusion and keyword query unit tests.
+
+## Search documents with reconciliation (SPEC-0110, 2026-11-26)
+
+`search.documents(mount_id, inputs, top_k, floor, boost, weights)` (`tools/search_chunks.rs::documents`, formula in
+`search/reconcile.rs`, MCP only) takes the inputs of `search.chunks` and ranks documents. It reuses the `pool` of
+`search.chunks` (embed, dense list, keyword list, `fuse_units`, at most 100 distinct chunks per input), reads the similarity of
+every pooled chunk once and scores per input and document: `S_q = m + boost (1 - m)(1 - product(1 - s_i))`, `m` the best
+similarity (ties: lowest chunk number), `s_i` every other chunk with similarity `>= floor` (at or above, AUTO-017; defaults
+`floor 0.5`, `boost 0.5`, both 0 to 1). A document with no chunk with a similarity for an input has `S_q = 0` (a chunk with
+null similarity is not counted, AUTO-012; a chunk outside the 100 chunk pool is not seen). The document score is
+`sum(w S) / sum(w)`; `weights` one per input, none negative, not all 0, default 1; relative. Order: score at six decimals
+then path; score 0 documents are not answered. Each input of an answered document shows `score`, `counted` and `best`
+(the chunk text through `window`, the same read `search.chunks` uses for a line).
+* With `boost 0` a single input ranks as the best passage (MaxP); with the default boost `S_q >= m`, so a document with many
+  good chunks may pass one with a slightly better single chunk. One chunk per document is `m` whatever the boost.
+* `mode_used` and `warning` (FR-MOD-010): a failing keyword list leaves the call on the vector list, `mode_used` says `rag` and
+  `warning` is `the keyword list failed, the answer holds the vector list only`, on `search.chunks` too (before, the log only).
+* Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile` (14 end to end, 11 unit; E2E-013 swaps the
+  engine for one whose full text list fails; E2E-014 PostgreSQL). Gotcha: the fake keyed vectors make a doc of four 400 word
+  sections score about 0.5 per section for the four words, which is how the floor tests place chunks either side of 0.45 and 0.55.

@@ -25,6 +25,7 @@ pub mod e2e;
 pub mod embedding;
 pub mod fusion;
 pub mod indexer;
+pub mod reconcile;
 pub mod rerank;
 #[cfg(feature = "rag")]
 pub mod vector_pg;

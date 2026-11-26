@@ -841,7 +841,7 @@ search.chunks
   params: mount_id:string, inputs:array<{text:string=null, image:string=null}>, top_k:integer=10, context_before:integer=0, context_after:integer=0
   required: ['mount_id', 'inputs']
   returns: {"mode_used": "both", "inputs": [{"label": "S1", "kind": "text", "lines": [{"document": "/a.md", "chunk": 3, "text": "<chunk text>", "heading_path": ["Part 2"], "similarity": 0.931204, "context": [{"role": "context", "position": "before", "chunk": 2, "text": "<chunk text>", "heading_path": ["Part 1"], "similarity": 0.52}]}]}, {"label": "I1", "kind": "image", "query_text": "<converter Markdown>", "lines": []}]}
-           context is present only when context_before or context_after is above 0; similarity is null for a chunk with no vector at the width in force
+           context is present only when context_before or context_after is above 0; similarity is null for a chunk with no vector at the width in force; warning (the keyword list failed, the answer holds the vector list only) is present only when the keyword list failed, mode_used is then rag
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 search.delete
   desc: Remove a path from the search index.
@@ -853,6 +853,13 @@ search.images
   params: mount_id:string, inputs:array<{text:string=null, image:string=null}>, top_k:integer=10
   required: ['mount_id', 'inputs']
   returns: {"inputs": [{"label": "I1", "kind": "image", "lines": [{"document": "/doc.pdf", "image": 2, "text": "Gazelle photo", "similarity": 0.998}]}]}
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+search.documents
+  desc: Find the documents closest to one or several inputs, texts and images (an image is turned into text by the project's converter). Each document is scored per input from its best chunk, lifted by its other chunks above the floor, then by the weighted mean over the inputs; an input a document does not match scores 0. Answers documents best first with the score, and per input its score, the number of chunks counted and the best chunk as proof.
+  params: mount_id:string, inputs:array<{text:string=null, image:string=null}>, top_k:integer=10, floor:number=0.5, boost:number=0.5, weights:array<number>=null
+  required: ['mount_id', 'inputs']
+  returns: {"mode_used": "both", "floor": 0.5, "boost": 0.5, "weights": [1.0, 1.0], "documents": [{"document": "/a.md", "score": 0.72, "inputs": [{"label": "S1", "score": 0.94, "counted": 3, "best": {"chunk": 3, "text": "<chunk text>", "heading_path": ["Part 2"], "similarity": 0.9}}, {"label": "I1", "score": 0.0, "counted": 0, "best": null}]}]}
+           per input S = m + boost * (1 - m) * (1 - product(1 - s)), m the best similarity of the document, s the other chunks at or above floor (a chunk exactly at the floor counts); a missed input scores 0; the document score is the weighted mean (weights relative, default 1 each); a chunk with no similarity is not counted; a document with score 0 is not answered; ties by path; warning is present only when the keyword list failed (mode_used is then rag); floor and boost 0 to 1, weights one per input, none negative, not all 0
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 search.index
   desc: Index a file or directory into the search engine for this volume.
