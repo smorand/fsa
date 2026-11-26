@@ -332,3 +332,5 @@
 | US-0330 | SPEC-0110 | the reconciliation formula and an honest keyword mode | main | 1 | landed | | |
 | US-0331 | SPEC-0110 | the search.documents tool | US-0330 | 1 | landed | | |
 | US-0332 | SPEC-0110 | PostgreSQL, docs and contract | US-0331 | 2 | landed | | |
+| US-0333 | SPEC-0111 | the file metadata page | main | 1 | landed | | |
+| US-0334 | SPEC-0111 | the recalculate action and docs | US-0333 | 1 | landed | | |

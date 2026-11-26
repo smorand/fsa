@@ -665,6 +665,21 @@ as proof. With `boost` 0 a single input ranks by best passage. A document is jud
 (the pool of `search.chunks`). If the keyword list fails, `search.chunks` and `search.documents` answer from the vector
 list, say `mode_used: rag` and add a `warning`. Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile`.
 
+## The file metadata screen
+
+`/app/file-metadata` is a browser page (always mounted, session cookie, as `/app/tokens`) where a member follows
+the metadata of one file. Open `/app/file-metadata?mount_id=<project>&path=/<file>`; without `mount_id` the page
+lists your projects. It shows the conversion text (the first 20000 characters), the images with their id, page,
+caption and OCR text, the tables, the headings, every chunk set (strategy, settings, default, counts, state,
+build time), the chunks of the set shown 100 rows at a time, one chunk in full with `Previous` and `Next`
+(`&set_id=<id>&chunk=<n>`), and the jobs of the file. A file with no conversion shows `No conversion yet` for
+each part, a file with no set `No chunk set`. Two buttons recalculate the file (`search_index`, or the chunk
+set shown), call the same function as `fs.recalculate` and answer the job with its state; a file already
+being rebuilt answers the job that waits, never a second one. A person who is not a member gets 403, an
+unknown file 404 (`file not found`), no identity 401. A post made with the cookie needs the one time token the
+page carries (403 otherwise). Every stored value is escaped and the page has no script. Tests:
+`cargo test -p fsa-core --lib -- e2e_0111_`.
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or

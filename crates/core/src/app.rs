@@ -187,6 +187,7 @@ pub(crate) async fn build_with_env(
         .with_state(state.clone())
         .merge(crate::deleted_projects_screen::router(state.clone()))
         .merge(crate::models_screen::router(state.clone()))
+        .merge(crate::file_metadata_screen::router(state.clone()))
         .merge(crate::converters_screen::router(state.clone()))
         .merge(crate::trash_screen::router(state.clone()))
         // Outside the api.enabled gate: a link minted over MCP must stay

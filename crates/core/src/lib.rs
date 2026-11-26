@@ -20,6 +20,7 @@ pub mod docs;
 pub mod env_compat;
 pub mod errors;
 pub mod exports;
+pub mod file_metadata_screen;
 pub mod git;
 pub mod identity;
 pub mod keys;

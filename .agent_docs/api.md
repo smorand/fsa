@@ -247,6 +247,21 @@ A success answers 303 to `/app/models`; a refused action renders the page again 
 `ERR_FORBIDDEN: '<person>' is not a platform admin` and no page. Empty optional fields are fields not given;
 an empty secret on `provider/update` keeps the stored secret, `clear_secret=true` removes it.
 
+## The file metadata screen (SPEC-0111, 2026-11-26)
+
+`GET /app/file-metadata?mount_id=&path=[&set_id=&chunk=&marker=&images_marker=&tables_marker=&headings_marker=]` and
+`POST /app/file-metadata/recalculate` (form `mount_id`, `path`, `kind` `search_index|chunks`, `set_id`,
+`csrf_token`), `file_metadata_screen.rs`, always mounted outside `api.enabled`. Same identity (`resolve_person`) and
+one time token (own `CsrfStore`, required only for a cookie identity, membership checked before the token) as
+`/app/models`. Every datum is read through the typed function of a tool: `artifacts::{document_view (view text),
+list_images, list_tables, document_structure}`, `chunks::{list_chunk_sets, list_chunks, get_chunk}`,
+`derived::{list_derived_jobs, recalculate}`; a `not found` of an artifact read is the empty state `No conversion yet`.
+Status: 200, 401 JSON without identity, 403 not a member or bad token, 404 `file not found`, 400 for a folder or a
+bad `chunk`/marker, the tool status for a refused recalculation. The POST answers the page (200) with the job
+answer (`data-answer-job`), not a redirect. A page issues one token shared by its two forms, so pressing one
+form uses it up and the next press needs a fresh page. The text is cut at 20000 characters, lists at 100 rows;
+a 10000 chunk set is never read whole (`list_chunks` 101 rows, `get_chunk` a window of 3).
+
 ## Converter routes (SPEC-0106)
 
 The five route families of the converters table above call the same functions as the `admin.*converter*`

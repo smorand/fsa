@@ -8,7 +8,7 @@ a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger U
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
 fetch and pull against any declared host (including GitHub Enterprise), a per-host
 token store, a browser token screen at `/app/tokens`, and a browser screen at
-`/app/deleted-projects` listing soft-deleted projects with an undelete action. A browser screen at `/app/models` lets platform administrators manage the model registry (SPEC-0102). Git tags are
+`/app/deleted-projects` listing soft-deleted projects with an undelete action. A browser screen at `/app/models` lets platform administrators manage the model registry (SPEC-0102). A browser screen at `/app/file-metadata` lets a member follow the metadata of one file and recalculate it (SPEC-0111). Git tags are
 supported: create (plain or annotated), delete, publish one tag, receive on fetch, pull and clone,
 each change audited in one line (SPEC-0052); every due tag can be previewed then
 published in one guarded push (`git.remote_push_tags`, SPEC-0054). Ships with `agent`, an
@@ -99,6 +99,7 @@ env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0089_ api::dataplan
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
 cargo test -p fsa-core --lib --features rag -- e2e_0109_   search.chunks and search.images (SPEC-0109, settings/search_e2e.rs; the PostgreSQL ones need MCPFS_TEST_PG_DSN with pgvector)
 cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile   search.documents and the reconciliation formula (SPEC-0110, settings/search_e2e/documents_e2e.rs; E2E-014 needs MCPFS_TEST_PG_DSN with pgvector)
+cargo test -p fsa-core --lib -- e2e_0111_   the file metadata screen tests (SPEC-0111, file_metadata_screen/e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0106_   the document converter registry tests (SPEC-0106, settings/converters_e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0107_   the per project indexing profile tests (SPEC-0107, settings/profile_e2e.rs)
 cargo test -p fsa-core --lib --features rag -- e2e_0108_   the vectors per dimension and recalculation tests (SPEC-0108, settings/vectors_e2e.rs, search/vector_store_e2e.rs; PostgreSQL ones need MCPFS_TEST_PG_DSN)
@@ -249,6 +250,11 @@ features on `fsa-core`. The paths below are all under `crates/core/src/` unless 
   latest 20 changes, eight form posts (`provider|model/{create,update,delete}`, `default/{set,clear}`), calling `tools::models`
   (never a second implementation); reuses `token_screen`'s `CsrfStore` (own instance per router), `resolve_person`,
   `check_csrf`, `escape_html`; no secret rendered, secret inputs never prefilled (SPEC-0102 DEC-014).
+- `file_metadata_screen.rs` : the `/app/file-metadata` browser screen (always mounted, SPEC-0111): text, images (caption, OCR),
+  tables, headings, chunk sets, one chunk with previous and next, 100 chunk rows per page, the jobs of the file, and a
+  recalculate form (`search_index`, `chunks`) posting to `/app/file-metadata/recalculate`; calls the typed functions of
+  `tools::{artifacts, chunks, derived}` (never a second implementation); own `CsrfStore`, `resolve_person`, `check_csrf`,
+  `escape_html` as `models_screen`. Tests: `cargo test -p fsa-core --lib -- e2e_0111_`. Details in `.agent_docs/api.md`, "The file metadata screen".
 - `trash_screen.rs` : the `/app/trash` browser screen (always mounted), the same session-cookie +
   CSRF convention, delegating to `tools::trash::{trash_list, trash_restore}` (SPEC-0011).
 - `git/` : `db.rs` (SQLite index, plus the `git_operations` row that persists a paused
