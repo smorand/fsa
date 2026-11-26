@@ -265,3 +265,150 @@ async fn e2e_0108_018_widths_coexist_on_postgres() {
     assert_eq!(idx, ["idx_search_chunks_384_emb", "idx_search_chunks_emb"]);
     drop_schema(&pool, &schema).await;
 }
+
+// ---- SPEC-0109: reads by vector -------------------------------------------
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    (dot / (na * nb)).clamp(0.0, 1.0)
+}
+
+/// The contract of SPEC-0109 FR-NEW-003 and 009 on any engine: embed an input at
+/// the project width, nearest entries of a kind, similarity of given entries.
+async fn contract_0109(b: &dyn SearchBackend, t: &PerProject, stub: &ModelStub) {
+    use crate::errors::code;
+    stub.set(crate::settings::vectors_e2e::Answer::Keyed);
+    t.set("p", "mk", 8);
+    t.set("q", "mk", 8);
+    let go = || true;
+    b.index_chunks_checked(
+        "p",
+        "/a.md",
+        &chunks(&["ocelot sapphire", "gazelle granite", "ocelot ocelot violet"]),
+        &go,
+    )
+    .await
+    .unwrap();
+    b.index_chunks_checked("p", "/b.md", &chunks(&["meadow harbor"]), &go).await.unwrap();
+    b.index_chunks_checked("q", "/a.md", &chunks(&["ocelot"]), &go).await.unwrap();
+
+    let v = b.embed_input("p", VectorKind::Text, "ocelot").await.unwrap();
+    assert_eq!(v.len(), 8);
+    let near = b.nearest("p", VectorKind::Text, &v, 50).await.unwrap();
+    assert_eq!(near.len(), 4, "only the rows of the project");
+    // Every similarity is the cosine of the stored vector, best first, ties by path then number.
+    let page = b.vectors_of("p", "/a.md", VectorKind::Text, 0, 10).await.unwrap();
+    for hit in near.iter().filter(|h| h.path == "/a.md") {
+        let stored = &page.vectors.iter().find(|s| s.number == hit.number).unwrap().vector;
+        assert!((hit.similarity - cosine(&v, stored)).abs() < 1e-4, "{hit:?}");
+        let stored_text = &page.vectors.iter().find(|s| s.number == hit.number).unwrap().text;
+        assert_eq!(&hit.text, stored_text);
+    }
+    assert!(near.windows(2).all(|w| w[0].similarity >= w[1].similarity), "{near:?}");
+    assert_eq!((near[0].path.as_str(), near[0].number), ("/a.md", 3), "{near:?}");
+    assert!(near.iter().all(|h| (0.0..=1.0).contains(&h.similarity)));
+    let two = b.nearest("p", VectorKind::Text, &v, 2).await.unwrap();
+    assert_eq!(two, near[..2].to_vec());
+
+    // The similarity of given entries, in the order asked, None for an absent one.
+    let asked = [("/a.md".to_string(), 2), ("/zz.md".to_string(), 1), ("/b.md".to_string(), 1)];
+    let sims = b.similarities("p", VectorKind::Text, &v, &asked).await.unwrap();
+    assert_eq!(sims.len(), 3);
+    assert!(sims[0].is_some() && sims[1].is_none() && sims[2].is_some(), "{sims:?}");
+    let by_nearest = near.iter().find(|h| h.path == "/b.md").unwrap().similarity;
+    assert!((sims[2].unwrap() - by_nearest).abs() < 1e-5);
+
+    // A width with no store finds nothing and changes nothing.
+    let other = b.nearest("p", VectorKind::Text, &[1.0, 2.0, 3.0], 50).await.unwrap();
+    assert!(other.is_empty());
+    assert_eq!(b.vectors_of("p", "/a.md", VectorKind::Text, 0, 10).await.unwrap(), page);
+
+    // Images: their model, their store; a text input goes to the image model as is.
+    let e = b.embed_input("p", VectorKind::Image, "ocelot").await.unwrap_err();
+    assert_eq!(e.code, code::NOT_SUPPORTED);
+    assert!(e.to_string().contains("the project has no image model"), "{e}");
+    t.image.lock().unwrap().insert("p".into(), ("mk".into(), 8));
+    let uri = |s: &str| {
+        format!(
+            "data:image/png;base64,{}",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, s)
+        )
+    };
+    let imgs = vec![
+        ImageInput { number: 1, text: "a gazelle".into(), data_uri: uri("gazelle gazelle") },
+        ImageInput { number: 2, text: "an ocelot".into(), data_uri: uri("ocelot") },
+    ];
+    b.index_images_checked("p", "/a.md", &imgs, &go).await.unwrap();
+    let iv = b.embed_input("p", VectorKind::Image, &uri("ocelot")).await.unwrap();
+    let inear = b.nearest("p", VectorKind::Image, &iv, 50).await.unwrap();
+    assert_eq!(
+        (inear[0].path.as_str(), inear[0].number, inear[0].text.as_str()),
+        ("/a.md", 2, "an ocelot")
+    );
+    assert!(inear[0].similarity > 0.99, "{inear:?}");
+    // Text and images never meet: the text store has no image row.
+    assert_eq!(b.nearest("p", VectorKind::Text, &v, 50).await.unwrap().len(), 4);
+
+    // An unusable answer is refused, nothing is written.
+    stub.set(crate::settings::vectors_e2e::Answer::Zero);
+    let e = b.embed_input("p", VectorKind::Text, "ocelot").await.unwrap_err();
+    assert!(e.to_string().contains("embedding is a zero vector"), "{e}");
+    stub.set(crate::settings::vectors_e2e::Answer::Keyed);
+    assert_eq!(b.vectors_of("p", "/a.md", VectorKind::Text, 0, 10).await.unwrap(), page);
+}
+
+async fn world_keyed() -> (Arc<PerProject>, ModelStub) {
+    let stub = ModelStub::start(&[("m3", 3), ("mk", 8)]).await;
+    let t = Arc::new(PerProject {
+        url: format!("{}/v1/embeddings", stub.base),
+        text: Default::default(),
+        image: Default::default(),
+    });
+    (t, stub)
+}
+
+/// E2E-017: the reads by vector on sqlite-vec.
+#[tokio::test]
+async fn e2e_0109_017_reads_by_vector_on_sqlite() {
+    crate::storage::sqlite::register_sqlite_vec();
+    let (t, stub) = world_keyed().await;
+    let dir = tempfile::tempdir().unwrap();
+    let b = crate::search::vector_sqlite::SqliteVecBackend::new(
+        3,
+        dir.path().to_str().unwrap(),
+        Arc::new(reqwest::Client::new()),
+        t.clone(),
+    );
+    contract_0109(&b, &t, &stub).await;
+}
+
+/// E2E-017: the same contract on pgvector.
+#[tokio::test]
+async fn e2e_0109_017_reads_by_vector_on_postgres() {
+    let (t, stub) = world_keyed().await;
+    let schema = unique_schema();
+    let Some((b, pool)) = pg(&schema, t.clone()).await else { return };
+    contract_0109(&b, &t, &stub).await;
+    // A read at a width with no store creates no table (FR-NEW-011).
+    use sqlx::Row;
+    let tables = || async {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = current_schema() ORDER BY table_name",
+        ))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        rows.iter().map(|r| r.get::<String, _>("table_name")).collect::<Vec<_>>()
+    };
+    let before = tables().await;
+    let v = vec![0.5f32; 11];
+    assert!(b.nearest("p", VectorKind::Text, &v, 5).await.unwrap().is_empty());
+    assert!(b.nearest("p", VectorKind::Image, &v, 5).await.unwrap().is_empty());
+    let none = b.similarities("p", VectorKind::Text, &v, &[("/a.md".into(), 1)]).await.unwrap();
+    assert_eq!(none, vec![None]);
+    assert_eq!(tables().await, before, "a read must not create a table");
+    drop_schema(&pool, &schema).await;
+}

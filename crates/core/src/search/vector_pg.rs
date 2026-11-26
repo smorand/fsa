@@ -20,8 +20,8 @@
 
 use crate::errors::{Result, ToolError};
 use crate::search::{
-    ImageInput, IndexStats, IndexedChunk, SearchBackend, SearchResult, StoredVector, VectorKind,
-    VectorPage, embedding,
+    ImageInput, IndexStats, IndexedChunk, Near, SearchBackend, SearchResult, StoredVector,
+    VectorKind, VectorPage, embedding, similarity_of_distance,
 };
 use async_trait::async_trait;
 use sqlx::AssertSqlSafe;
@@ -126,6 +126,16 @@ impl PostgresVectorBackend {
         }
         ready.insert(name.clone());
         Ok(name)
+    }
+
+    /// The table of `kind` at `dimension` when it exists. A read never creates one
+    /// (SPEC-0109 FR-NEW-011): a width with no store has nothing to find.
+    async fn existing(&self, kind: VectorKind, dimension: u32) -> Result<Option<String>> {
+        let name = table_name(kind, dimension, self.dimensions);
+        if self.ready.lock().await.contains(&name) {
+            return Ok(Some(name));
+        }
+        Ok(self.tables(kind).await?.into_iter().find(|(n, _)| *n == name).map(|(n, _)| n))
     }
 
     /// Every existing table of `kind`, with its width (the platform's for the
@@ -403,6 +413,113 @@ impl SearchBackend for PostgresVectorBackend {
             return Ok(VectorPage { dimension: Some(dimension), vectors, next_after });
         }
         Ok(VectorPage { dimension: None, vectors: Vec::new(), next_after: None })
+    }
+
+    async fn embed_input(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        input: &str,
+    ) -> Result<Vec<f32>> {
+        let project = match kind {
+            VectorKind::Text => self.targets.target_for(volume_id).await?,
+            VectorKind::Image => self
+                .targets
+                .image_target_for(volume_id)
+                .await?
+                .ok_or_else(|| ToolError::not_supported("the project has no image model"))?,
+        };
+        let dimension = project.dimension.unwrap_or(self.dimensions);
+        embedding::embed_checked(&self.client, &project.target, input, dimension).await
+    }
+
+    async fn nearest(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Near>> {
+        let dimension = u32::try_from(vector.len()).unwrap_or(0);
+        let Some(table) = self.existing(kind, dimension).await? else {
+            return Ok(Vec::new());
+        };
+        // `<=>` is the cosine distance of pgvector. The SQL order is the distance
+        // alone, which the hnsw index serves; the total order is applied below.
+        let rows = sqlx::query(AssertSqlSafe(format!(
+            "SELECT path, chunk_idx, chunk_text, (embedding <=> $1::vector) AS distance \
+             FROM {table} WHERE volume_id = $2 ORDER BY distance ASC LIMIT $3"
+        )))
+        .bind(vec_to_pg(vector))
+        .bind(volume_id)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ToolError::internal(format!("vector_pg: nearest: {e}")))?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let read =
+                |e: sqlx::Error| ToolError::internal(format!("vector_pg: read nearest: {e}"));
+            let number: i32 = row.try_get("chunk_idx").map_err(read)?;
+            let distance: f64 = row.try_get("distance").map_err(read)?;
+            out.push((
+                distance,
+                Near {
+                    path: row.try_get("path").map_err(read)?,
+                    number: u32::try_from(number).unwrap_or(0),
+                    text: row.try_get("chunk_text").map_err(read)?,
+                    similarity: similarity_of_distance(distance),
+                },
+            ));
+        }
+        out.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.path.cmp(&b.1.path))
+                .then_with(|| a.1.number.cmp(&b.1.number))
+        });
+        Ok(out.into_iter().map(|(_, n)| n).collect())
+    }
+
+    async fn similarities(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        entries: &[(String, u32)],
+    ) -> Result<Vec<Option<f32>>> {
+        let dimension = u32::try_from(vector.len()).unwrap_or(0);
+        let Some(table) = self.existing(kind, dimension).await? else {
+            return Ok(vec![None; entries.len()]);
+        };
+        let paths: Vec<&str> = entries.iter().map(|(p, _)| p.as_str()).collect();
+        let numbers: Vec<i32> =
+            entries.iter().map(|(_, n)| i32::try_from(*n).unwrap_or(i32::MAX)).collect();
+        let rows = sqlx::query(AssertSqlSafe(format!(
+            "SELECT path, chunk_idx, (embedding <=> $1::vector) AS distance FROM {table} \
+             WHERE volume_id = $2 AND (path, chunk_idx) IN \
+               (SELECT * FROM unnest($3::text[], $4::int[]))"
+        )))
+        .bind(vec_to_pg(vector))
+        .bind(volume_id)
+        .bind(&paths)
+        .bind(&numbers)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ToolError::internal(format!("vector_pg: similarities: {e}")))?;
+        let mut found: std::collections::HashMap<(String, u32), f32> = Default::default();
+        for row in &rows {
+            let read =
+                |e: sqlx::Error| ToolError::internal(format!("vector_pg: read similarity: {e}"));
+            let path: String = row.try_get("path").map_err(read)?;
+            let number: i32 = row.try_get("chunk_idx").map_err(read)?;
+            let distance: f64 = row.try_get("distance").map_err(read)?;
+            found.insert(
+                (path, u32::try_from(number).unwrap_or(0)),
+                similarity_of_distance(distance),
+            );
+        }
+        Ok(entries.iter().map(|e| found.get(e).copied()).collect())
     }
 
     async fn delete_path(&self, volume_id: &str, path: &str) -> Result<usize> {

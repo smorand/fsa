@@ -3,7 +3,7 @@
 ## Overview
 A **streamable-HTTP MCP server** exposing a **simulated
 multi-project filesystem** (152 tools: 54 `fs.*`, 44 `admin.*`, 44 `git.*`, 4 `git.auth*`, 6 `git.pr_*`;
-+ 4 `search.*` when search enabled),
++ 6 `search.*` when search enabled),
 a REST data plane at `/api/fs` with OpenAPI at `/api/swagger.json` and Swagger UI at
 `/api/docs`, and an optional Git HTTP smart server at `/git/{mount_id}/` with push,
 fetch and pull against any declared host (including GitHub Enterprise), a per-host
@@ -50,6 +50,8 @@ address a name resolves to (one lookup, the connection pinned to the checked add
 storage charge; both empty keeps the original path. Behind an environment proxy the proxy opens the
 connection (BL-0157). Code in `tools/web_access.rs`, details in `.agent_docs/config.md`.
 
+`search.chunks` and `search.images` (SPEC-0109, `tools/search_chunks.rs`, MCP only, `--features rag`): labeled text and image inputs, an image turned into text by the project converter; chunk lines (document, chunk, text, similarity = 1 minus cosine distance, optional context chunks) from a dense plus keyword fusion (50 candidates each, `1/(60+rank)`, ties by best rank then path and number, one line per chunk, `search/fusion.rs::fuse_units`), image lines from the image vectors. `search.query` is unchanged (pinned byte for byte). Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0109_`. Details in `.agent_docs/search.md`, "Search by chunk and by image".
+
 Search entries are rebuilt after the file settles (SPEC-0100): the write hooks hand the path to
 `search::derived::Scheduler` (`search/derived/`), which runs one rebuild once the file has been
 quiet for `search.settle_delay_seconds` (default 30, `0` keeps the immediate timing), discards a
@@ -94,6 +96,7 @@ cargo test -p fsa-core --lib --features rar -- e2e_0080_  the `.rar` extraction 
 cargo test -p fsa-core --lib --features rar -- e2e_0087_ api::dataplane tool_contract   the truncated RAR tests (SPEC-0087)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0089_ api::dataplane tool_contract --test-threads=1   the PDF and converter bound tests (SPEC-0089)
 env -u MCPFS_TEST_PG_DSN cargo test -p fsa-core --lib -- e2e_0092_ api::dataplane tool_contract --test-threads=1   the nesting tests (SPEC-0092; the exploit cases re run the binary in a child process)
+cargo test -p fsa-core --lib --features rag -- e2e_0109_   search.chunks and search.images (SPEC-0109, settings/search_e2e.rs; the PostgreSQL ones need MCPFS_TEST_PG_DSN with pgvector)
 cargo test -p fsa-core --lib -- e2e_0106_   the document converter registry tests (SPEC-0106, settings/converters_e2e.rs)
 cargo test -p fsa-core --lib -- e2e_0107_   the per project indexing profile tests (SPEC-0107, settings/profile_e2e.rs)
 cargo test -p fsa-core --lib --features rag -- e2e_0108_   the vectors per dimension and recalculation tests (SPEC-0108, settings/vectors_e2e.rs, search/vector_store_e2e.rs; PostgreSQL ones need MCPFS_TEST_PG_DSN)

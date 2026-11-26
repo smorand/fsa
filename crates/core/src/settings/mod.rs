@@ -31,6 +31,8 @@ mod profile_e2e;
 #[cfg(all(test, feature = "postgres"))]
 mod profile_pg_e2e;
 #[cfg(all(test, feature = "rag"))]
+mod search_e2e;
+#[cfg(all(test, feature = "rag"))]
 pub(crate) mod vectors_e2e;
 
 pub use converter::{Converter, ConverterInput};

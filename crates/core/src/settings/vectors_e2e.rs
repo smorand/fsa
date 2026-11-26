@@ -27,6 +27,31 @@ pub(crate) enum Answer {
     /// A value too large for a 32 bit float.
     Huge,
     Down,
+    /// The vector follows the words of the input (SPEC-0109): component `j` is
+    /// 0.01 plus the number of times `KEYED_WORDS[j % 8]` occurs in it; a `data:`
+    /// input is decoded first, so a picture is what its bytes say.
+    Keyed,
+}
+
+/// The vocabulary of [`Answer::Keyed`].
+pub(crate) const KEYED_WORDS: [&str; 8] =
+    ["ocelot", "gazelle", "sapphire", "granite", "violet", "harbor", "lantern", "meadow"];
+
+/// The vector of [`Answer::Keyed`] for `input`, `n` wide.
+pub(crate) fn keyed_vector(input: &str, n: usize) -> Vec<f64> {
+    let text = match input.strip_prefix("data:").and_then(|d| d.split_once("base64,")) {
+        Some((_, b64)) => {
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                .unwrap_or_default();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+        None => input.to_string(),
+    };
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).collect();
+    (0..n)
+        .map(|j| 0.01 + words.iter().filter(|w| **w == KEYED_WORDS[j % 8]).count() as f64)
+        .collect()
 }
 
 /// A fake `POST /v1/embeddings` service: the width of the answer follows the
@@ -55,7 +80,7 @@ impl ModelStub {
         ) -> (axum::http::StatusCode, axum::Json<Value>) {
             let model = body["model"].as_str().unwrap_or("").to_string();
             let input = body["input"][0].as_str().unwrap_or("").to_string();
-            calls.lock().unwrap().push((model.clone(), input));
+            calls.lock().unwrap().push((model.clone(), input.clone()));
             let wait = *delay.lock().unwrap();
             if wait > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
@@ -72,6 +97,7 @@ impl ModelStub {
                 Answer::Short(k) => (0..k).map(|i| (i + 1) as f64).collect(),
                 Answer::Zero => vec![0.0; n],
                 Answer::Huge => vec![1e39; n],
+                Answer::Keyed => keyed_vector(&input, n),
             };
             (
                 axum::http::StatusCode::OK,
@@ -118,11 +144,16 @@ pub(crate) struct World {
 
 impl World {
     pub async fn new(models: &[(&str, &str, usize)]) -> Self {
+        Self::in_mode("rag", models).await
+    }
+
+    /// The same platform running `search.mode` `mode` (SPEC-0109 needs `both`).
+    pub async fn in_mode(mode: &'static str, models: &[(&str, &str, usize)]) -> Self {
         let mut dims: Vec<(&str, usize)> = vec![("yaml-model", 1024)];
         dims.extend(models.iter().map(|(n, _, d)| (*n, *d)));
         let stub = ModelStub::start(&dims).await;
         let fx = Fx::searching(Searching {
-            mode: "rag",
+            mode,
             yaml_url: format!("{}/v1/embeddings", stub.base),
             rerank_url: None,
         })

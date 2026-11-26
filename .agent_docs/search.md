@@ -1,7 +1,7 @@
 # Search Tools
 
-The `search.*` family (4 tools: `search.index`, `search.query`, `search.delete`,
-`search.status`) adds BM25 full-text search and optional RAG vector search to every
+The `search.*` family (6 tools: `search.index`, `search.query`, `search.delete`,
+`search.status`, `search.chunks`, `search.images`) adds BM25 full-text search and optional RAG vector search to every
 volume. They are registered only when `search.enabled: true` in the server config.
 
 ## Config keys
@@ -456,3 +456,33 @@ A project embeds with the text model of its profile (`admin.set_indexing_profile
   the resumed job refills them. A document's image vectors are read into memory as `data:` URIs one document at a time.
 * Decisions (SPEC-0108 design): editing a used model's dimension or name marks its projects out of date, it does not refuse
   (DEC-004); a recalculation never wipes first (DEC-005); resume equals restart (DEC-009).
+
+## Search by chunk and by image (SPEC-0109, 2026-11-26)
+
+`search.chunks` and `search.images` (`tools/search_chunks.rs`, MCP only) take 1 to 10 inputs, each one `text` (1 to 8000
+characters) or `image` (absolute path of a png, jpg, jpeg, gif, webp or bmp file of the project, at most 10 MiB). Labels are
+`S1, S2..` for texts and `I1, I2..` for images, each counted in its kind. `top_k` 1 to 50 is the number of lines per input.
+Members only (administrators included), a project mode with vectors (`rag` or `both`), search on.
+
+* `search.chunks`: an image is read, sent to the converter of the project (`state.doc_service_for`, no eligibility check, its
+  `max_input_bytes` applies) and its Markdown, cut to 8000 characters, is the text of the input (`query_text` of its group).
+  Per input a dense list (50 nearest chunk vectors) and, when the project mode is `both` and the engine serves full text, a
+  keyword list (50 hits for the first 32 distinct words of the input, letters and digits only, lower case, so converted Markdown never reaches the
+  Tantivy parser as syntax). `search::fusion::fuse_units` sums `1/(60 + rank)` over the lists, orders by score, best rank, then
+  path and chunk number, one line per chunk. A line is `document, chunk, text` (chunk text, no header line), `heading_path`,
+  `similarity`; `similarity` is `1 - cosine distance` clamped to 0 to 1 (`search::similarity_of_distance`), null when the chunk
+  has no vector at the width in force (the vectors are out of date). `context_before` and `context_after` (0 to 5) add the
+  neighbour chunks of the default set as `context` objects (`role: "context"`, `position`, own similarity); a chunk is shown once
+  per input, as a line first, else as the context of the first line that reaches it.
+* `search.images`: the image model of the profile embeds the input (a picture as a `data:<mime>;base64,` string, a text as it is,
+  so a model that cannot embed text answers an error that is returned); the 50 nearest image vectors, ordered by similarity then
+  path and number; a line is `document, image, text` (caption and OCR stored beside the vector), `similarity`.
+* Engine reads on `SearchBackend` (default: refuse): `embed_input` (project model at the width in force, `check_vector`),
+  `nearest` (sqlite-vec `vec_distance_cosine`, pgvector `<=>`, exact cosine; a width with no store finds nothing),
+  `similarities` (for given entries). `ScheduledBackend` and `CombinedBackend` delegate them to the vector engine.
+* Gotchas: `search.query` is NOT changed and its scores differ (sqlite-vec `1 - L2 distance`, which can be negative; pgvector
+  `1 - distance / 2`); `search.chunks` similarities are the same on both engines. The project profile chunk strategy and
+  settings are stored but the rebuild still cuts with the server `search.chunking.*` defaults, so neighbours are those chunks.
+  The `search.*` tools are config gated and outside the frozen 152 tool contract (`tool-contract-golden.json` is unchanged).
+* Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0109_` (18, the PostgreSQL ones need `MCPFS_TEST_PG_DSN` with
+  pgvector and skip without it), fusion and keyword query unit tests.

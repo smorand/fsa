@@ -1908,6 +1908,47 @@ fn def_top_k() -> i64 {
     10
 }
 
+/// One input of `search.chunks` or `search.images`: exactly one field is set.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchInputArg {
+    /// A text to search for, 1 to 8000 characters.
+    pub text: Option<String>,
+    /// The absolute path of an image file of the project (png, jpg, jpeg, gif, webp or bmp, at most 10 MiB).
+    pub image: Option<String>,
+}
+
+fn def_context() -> i64 {
+    0
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchChunksArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// One to 10 inputs, each with exactly one of text and image; labeled S1, S2 for texts and I1, I2 for images.
+    pub inputs: Vec<SearchInputArg>,
+    /// Lines per input, 1 to 50.
+    #[serde(default = "def_top_k")]
+    pub top_k: i64,
+    /// Chunks before each line to add as context, 0 to 5.
+    #[serde(default = "def_context")]
+    pub context_before: i64,
+    /// Chunks after each line to add as context, 0 to 5.
+    #[serde(default = "def_context")]
+    pub context_after: i64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchImagesArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// One to 10 inputs, each with exactly one of text and image; labeled S1, S2 for texts and I1, I2 for images.
+    pub inputs: Vec<SearchInputArg>,
+    /// Lines per input, 1 to 50.
+    #[serde(default = "def_top_k")]
+    pub top_k: i64,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchDeleteArgs {
     /// Project/volume id the operation targets.
@@ -4117,6 +4158,56 @@ impl McpServer {
         to_call_result("search.query", out)
     }
 
+    #[tool(
+        name = "search.chunks",
+        description = "Find the chunks closest to one or several inputs, texts and images (an image is turned into text by the project's converter). Answers, per input labeled S1, S2, I1, lines of document, chunk number, text and similarity (1 minus cosine distance), best first, with optional chunks before and after each line marked as context."
+    )]
+    pub(crate) async fn search_chunks(
+        &self,
+        Parameters(a): Parameters<SearchChunksArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let inputs: Vec<crate::tools::search_chunks::InputArg> = a
+            .inputs
+            .into_iter()
+            .map(|i| crate::tools::search_chunks::InputArg { text: i.text, image: i.image })
+            .collect();
+        let out = crate::tools::search_chunks::chunks(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &inputs,
+            a.top_k,
+            a.context_before,
+            a.context_after,
+        )
+        .await;
+        to_call_result("search.chunks", out)
+    }
+
+    #[tool(
+        name = "search.images",
+        description = "Find the stored images closest to one or several inputs, pictures or texts, with the project's image model. Answers, per input labeled S1, S2, I1, lines of document, image number, the caption and OCR text stored beside it and similarity (1 minus cosine distance), best first."
+    )]
+    pub(crate) async fn search_images(
+        &self,
+        Parameters(a): Parameters<SearchImagesArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let inputs: Vec<crate::tools::search_chunks::InputArg> = a
+            .inputs
+            .into_iter()
+            .map(|i| crate::tools::search_chunks::InputArg { text: i.text, image: i.image })
+            .collect();
+        let out = crate::tools::search_chunks::images(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &inputs,
+            a.top_k,
+        )
+        .await;
+        to_call_result("search.images", out)
+    }
+
     #[tool(name = "search.delete", description = "Remove a path from the search index.")]
     async fn search_delete(
         &self,
@@ -5027,9 +5118,9 @@ mod tests {
         // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156.
         assert_eq!(fs_count, 54, "got: {names:?}");
         assert_eq!(admin_count, 44, "got: {names:?}");
-        assert_eq!(search_count, 4, "got: {names:?}");
+        assert_eq!(search_count, 6, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 156, "got: {names:?}");
+        assert_eq!(names.len(), 158, "got: {names:?}");
     }
 
     #[test]

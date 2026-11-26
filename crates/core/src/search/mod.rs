@@ -142,6 +142,22 @@ pub struct StoredVector {
     pub vector: Vec<f32>,
 }
 
+/// One entry found by a vector read (SPEC-0109): where it is, the text stored
+/// beside its vector and its similarity to the input.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Near {
+    pub path: String,
+    pub number: u32,
+    pub text: String,
+    pub similarity: f32,
+}
+
+/// `1 - cosine distance`, clamped to 0 to 1: float noise can push a distance
+/// slightly below 0 and an opposite vector is at 2, which both read as a bound.
+pub fn similarity_of_distance(distance: f64) -> f32 {
+    (1.0 - distance).clamp(0.0, 1.0) as f32
+}
+
 /// A page of the vectors of one file, in number order (FR-NEW-006).
 #[derive(Debug, Clone, PartialEq)]
 pub struct VectorPage {
@@ -150,6 +166,22 @@ pub struct VectorPage {
     pub vectors: Vec<StoredVector>,
     /// The last number of the page when more follow.
     pub next_after: Option<u32>,
+}
+
+#[cfg(test)]
+mod similarity_tests {
+    use super::similarity_of_distance;
+
+    /// SPEC-0109 FR-NEW-003: `1 - cosine distance`, clamped to 0 to 1.
+    #[test]
+    fn similarity_is_one_minus_the_distance_clamped() {
+        assert!((similarity_of_distance(0.25) - 0.75).abs() < 1e-6);
+        assert_eq!(similarity_of_distance(0.0), 1.0);
+        assert_eq!(similarity_of_distance(-1e-7), 1.0, "float noise above one");
+        assert_eq!(similarity_of_distance(1.0), 0.0);
+        assert_eq!(similarity_of_distance(1.7), 0.0, "an opposite vector reads 0");
+        assert_eq!(similarity_of_distance(2.0), 0.0);
+    }
 }
 
 /// Per-volume index statistics, as reported by `search.status`.
@@ -253,6 +285,45 @@ pub trait SearchBackend: Send + Sync {
         Err(ToolError::not_supported("the index mode of the project has no vectors"))
     }
 
+    /// The vector of `input` at the width in force for the project, with the model
+    /// of the kind (SPEC-0109): the text model for [`VectorKind::Text`], the image
+    /// model for [`VectorKind::Image`], where `input` is a text or a `data:` URI.
+    /// An unusable answer is refused as for a stored vector. Engines without
+    /// vectors refuse.
+    async fn embed_input(
+        &self,
+        _volume_id: &str,
+        _kind: VectorKind,
+        _input: &str,
+    ) -> Result<Vec<f32>> {
+        Err(ToolError::not_supported("the index mode of the project has no vectors"))
+    }
+
+    /// The `limit` entries of `kind` closest to `vector` in the store of its width,
+    /// best first, ties by path then number. A width with no store finds nothing
+    /// and creates nothing visible. Never writes a vector.
+    async fn nearest(
+        &self,
+        _volume_id: &str,
+        _kind: VectorKind,
+        _vector: &[f32],
+        _limit: usize,
+    ) -> Result<Vec<Near>> {
+        Err(ToolError::not_supported("the index mode of the project has no vectors"))
+    }
+
+    /// The similarity of `vector` to each `(path, number)` entry asked, in the
+    /// order asked; `None` for an entry with no vector at that width.
+    async fn similarities(
+        &self,
+        _volume_id: &str,
+        _kind: VectorKind,
+        _vector: &[f32],
+        _entries: &[(String, u32)],
+    ) -> Result<Vec<Option<f32>>> {
+        Err(ToolError::not_supported("the index mode of the project has no vectors"))
+    }
+
     /// Which query modes this backend can serve ("bm25", "rag", or both).
     fn supported_modes(&self) -> Vec<&'static str>;
 
@@ -352,6 +423,35 @@ impl SearchBackend for ScheduledBackend {
 
     async fn embeds_images(&self, volume_id: &str) -> Result<bool> {
         self.inner.embeds_images(volume_id).await
+    }
+
+    async fn embed_input(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        input: &str,
+    ) -> Result<Vec<f32>> {
+        self.inner.embed_input(volume_id, kind, input).await
+    }
+
+    async fn nearest(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Near>> {
+        self.inner.nearest(volume_id, kind, vector, limit).await
+    }
+
+    async fn similarities(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        entries: &[(String, u32)],
+    ) -> Result<Vec<Option<f32>>> {
+        self.inner.similarities(volume_id, kind, vector, entries).await
     }
 
     fn supported_modes(&self) -> Vec<&'static str> {
@@ -590,6 +690,35 @@ impl SearchBackend for CombinedBackend {
 
     async fn embeds_images(&self, volume_id: &str) -> Result<bool> {
         self.vector.embeds_images(volume_id).await
+    }
+
+    async fn embed_input(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        input: &str,
+    ) -> Result<Vec<f32>> {
+        self.vector.embed_input(volume_id, kind, input).await
+    }
+
+    async fn nearest(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Near>> {
+        self.vector.nearest(volume_id, kind, vector, limit).await
+    }
+
+    async fn similarities(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        entries: &[(String, u32)],
+    ) -> Result<Vec<Option<f32>>> {
+        self.vector.similarities(volume_id, kind, vector, entries).await
     }
 
     fn supported_modes(&self) -> Vec<&'static str> {

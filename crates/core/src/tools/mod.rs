@@ -119,6 +119,7 @@ pub(crate) mod recalc;
 pub mod registry_support;
 #[cfg(test)]
 pub(crate) mod search;
+pub(crate) mod search_chunks;
 pub(crate) mod search_semantic;
 pub mod sqlite;
 #[cfg(test)]

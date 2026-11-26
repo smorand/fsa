@@ -629,6 +629,29 @@ call; they are built by a file rebuild and by a recalculation.
 Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0108_` (the `rag` feature compiles the vector
 engines and their tests); the PostgreSQL ones need `MCPFS_TEST_PG_DSN` on a pgvector server (`.agent_docs/testing.md`).
 
+## Search by chunk and by image
+
+(SPEC-0109.) Two read tools, MCP only, available when search is on and the project index mode is `rag` or
+`both`, for the members of the project (administrators included only when members). Both take `inputs`, 1 to 10
+objects each holding exactly one of `text` (1 to 8000 characters) or `image` (the absolute path of a png, jpg,
+jpeg, gif, webp or bmp file of the project, at most 10 MiB). Inputs are labeled `S1, S2` (texts) and `I1, I2`
+(images) in order, `top_k` (1 to 50, default 10) is the number of lines per input.
+
+* `search.chunks(mount_id, inputs, top_k?, context_before?, context_after?)`: an image is sent to the converter
+  of the project and its Markdown (caption and OCR) is used as text, shown as `query_text`. Per input a dense
+  list and a keyword list of 50 candidates each are fused by `1/(60 + rank)`; ties go to the best rank, then to
+  the path and the chunk number; one line per chunk. A line is `document`, `chunk`, `text`, `heading_path` and
+  `similarity` (1 minus cosine distance, 0 to 1, `null` when the chunk has no vector at the current width).
+  `context_before` and `context_after` (0 to 5) add the neighbour chunks as `context` objects marked
+  `role: "context"`, each with its own similarity and never repeating a line.
+* `search.images(mount_id, inputs, top_k?)`: the stored images (SPEC-0108) closest to a picture or a text,
+  embedded with the image model of the profile; a line is `document`, `image`, `text` (caption and OCR) and
+  `similarity`. A project with no image model gets `ERR_NOT_SUPPORTED`.
+* `search.query` is unchanged.
+
+Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0109_` (the PostgreSQL ones need `MCPFS_TEST_PG_DSN`
+on a pgvector server). Details: `.agent_docs/search.md`, "Search by chunk and by image".
+
 ## Project quota enforcement
 
 A platform admin caps a project's storage with `admin.set_project_quota` (`max_mb`, or

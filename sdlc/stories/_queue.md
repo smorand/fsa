@@ -326,3 +326,6 @@
 | US-0324 | SPEC-0108 | vectors at the project dimension and fs.get_vectors | main | 1 | landed | spec-0108-vectors-per-dimension | main |
 | US-0325 | SPEC-0108 | a model edit marks its projects out of date, PostgreSQL profile tests | US-0324 | 2 | landed | spec-0108-vectors-per-dimension | main |
 | US-0326 | SPEC-0108 | the recalculation job, its tools, restart, docs and contract | US-0325 | 1 | landed | spec-0108-vectors-per-dimension | main |
+| US-0327 | SPEC-0109 | engine reads by vector, fusion and clamp | main | 1 | landed | | |
+| US-0328 | SPEC-0109 | the search.chunks tool: inputs, legs, context | US-0327 | 1 | landed | | |
+| US-0329 | SPEC-0109 | search.images, the regression, PostgreSQL, docs and contract | US-0328 | 2 | landed | | |

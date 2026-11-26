@@ -782,6 +782,8 @@ the `#[tool]` handlers and the test registry. Details in [`search.md`](search.md
 |---|---|---|---|
 | `search.index` | build or refresh the default chunk set of each text file, then index its chunks | `path`, `recursive:bool=false` | `indexed` (chunks), `skipped`, `path` |
 | `search.query` | ranked entries | `query`, `mode=null`, `top_k:int=10`, `rerank:bool=true` | `results[{path, score, chunk, rank, chunk_number, heading_path}]`, `mode_used`, `warning` |
+| `search.chunks` | the chunks closest to texts and images, with context | `inputs:[{text|image}]` (1 to 10), `top_k:int=10`, `context_before:int=0`, `context_after:int=0` | `mode_used`, `inputs[{label, kind, query_text?, lines[{document, chunk, text, heading_path, similarity, context?[]}]}]` |
+| `search.images` | the stored images closest to pictures or texts | `inputs:[{text|image}]` (1 to 10), `top_k:int=10` | `inputs[{label, kind, lines[{document, image, text, similarity}]}]` |
 | `search.delete` | drop the entries of a path | `path`, `recursive:bool=false` | `deleted` |
 | `search.status` | index statistics | | `bm25_docs`, `vector_chunks`, `mode`, `bm25_warm` |
 

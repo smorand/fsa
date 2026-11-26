@@ -836,11 +836,24 @@ git.token_set
   required: ['host', 'token']
   annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
 
+search.chunks
+  desc: Find the chunks closest to one or several inputs, texts and images (an image is turned into text by the project's converter). Answers, per input labeled S1, S2, I1, lines of document, chunk number, text and similarity (1 minus cosine distance), best first, with optional chunks before and after each line marked as context.
+  params: mount_id:string, inputs:array<{text:string=null, image:string=null}>, top_k:integer=10, context_before:integer=0, context_after:integer=0
+  required: ['mount_id', 'inputs']
+  returns: {"mode_used": "both", "inputs": [{"label": "S1", "kind": "text", "lines": [{"document": "/a.md", "chunk": 3, "text": "<chunk text>", "heading_path": ["Part 2"], "similarity": 0.931204, "context": [{"role": "context", "position": "before", "chunk": 2, "text": "<chunk text>", "heading_path": ["Part 1"], "similarity": 0.52}]}]}, {"label": "I1", "kind": "image", "query_text": "<converter Markdown>", "lines": []}]}
+           context is present only when context_before or context_after is above 0; similarity is null for a chunk with no vector at the width in force
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 search.delete
   desc: Remove a path from the search index.
   params: mount_id:string, path:string, recursive:boolean=false
   required: ['mount_id', 'path']
   annotations: destructiveHint=true, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+search.images
+  desc: Find the stored images closest to one or several inputs, pictures or texts, with the project's image model. Answers, per input labeled S1, S2, I1, lines of document, image number, the caption and OCR text stored beside it and similarity (1 minus cosine distance), best first.
+  params: mount_id:string, inputs:array<{text:string=null, image:string=null}>, top_k:integer=10
+  required: ['mount_id', 'inputs']
+  returns: {"inputs": [{"label": "I1", "kind": "image", "lines": [{"document": "/doc.pdf", "image": 2, "text": "Gazelle photo", "similarity": 0.998}]}]}
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 search.index
   desc: Index a file or directory into the search engine for this volume.
   params: mount_id:string, path:string, recursive:boolean=false

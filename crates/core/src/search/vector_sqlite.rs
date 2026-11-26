@@ -18,8 +18,8 @@
 
 use crate::errors::{Result, ToolError};
 use crate::search::{
-    ImageInput, IndexStats, IndexedChunk, SearchBackend, SearchResult, StoredVector, VectorKind,
-    VectorPage, embedding,
+    ImageInput, IndexStats, IndexedChunk, Near, SearchBackend, SearchResult, StoredVector,
+    VectorKind, VectorPage, embedding, similarity_of_distance,
 };
 use async_trait::async_trait;
 use rusqlite::{Connection, params};
@@ -148,6 +148,25 @@ impl SqliteVecBackend {
             targets,
             volumes: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The target and the width in force for `kind` at a project: the text model
+    /// (platform width as the fallback) or the image model, which has no fallback.
+    async fn target_of(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+    ) -> Result<(embedding::ProjectTarget, u32)> {
+        let project = match kind {
+            VectorKind::Text => self.targets.target_for(volume_id).await?,
+            VectorKind::Image => self
+                .targets
+                .image_target_for(volume_id)
+                .await?
+                .ok_or_else(|| ToolError::not_supported("the project has no image model"))?,
+        };
+        let dimension = project.dimension.unwrap_or(self.dimensions);
+        Ok((project, dimension))
     }
 
     fn get_or_open(&self, volume_id: &str) -> Result<Arc<Mutex<VolumeConn>>> {
@@ -388,6 +407,114 @@ impl SearchBackend for SqliteVecBackend {
             vectors.truncate(limit);
             let next_after = if more { vectors.last().map(|v| v.number) } else { None };
             Ok(VectorPage { dimension: Some(dimension), vectors, next_after })
+        })
+        .await
+        .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
+    }
+
+    async fn embed_input(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        input: &str,
+    ) -> Result<Vec<f32>> {
+        let (project, dimension) = self.target_of(volume_id, kind).await?;
+        embedding::embed_checked(&self.client, &project.target, input, dimension).await
+    }
+
+    async fn nearest(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        limit: usize,
+    ) -> Result<Vec<Near>> {
+        let vc = self.get_or_open(volume_id)?;
+        let vol = volume_id.to_string();
+        let blob = to_bytes(vector);
+        let dimension = u32::try_from(vector.len()).unwrap_or(0);
+        tokio::task::spawn_blocking(move || {
+            let guard =
+                vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
+            // No store of this width: nothing to find, and a read never creates one.
+            if !guard.dims(kind).contains(&dimension) {
+                return Ok(Vec::new());
+            }
+            let (meta, vec) = names(kind, dimension);
+            // `vec_distance_cosine` is the exact cosine distance; the order is total
+            // (distance, path, number), so a tie never depends on the scan order.
+            let mut stmt = guard
+                .conn
+                .prepare(&format!(
+                    "SELECT m.path, m.chunk_idx, m.chunk_text, \
+                            vec_distance_cosine(v.embedding, ?2) AS d \
+                     FROM {vec} v JOIN {meta} m ON m.rowid = v.rowid \
+                     WHERE m.volume_id = ?1 \
+                     ORDER BY d ASC, m.path ASC, m.chunk_idx ASC LIMIT ?3"
+                ))
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: prepare: {e}")))?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        vol,
+                        rusqlite::types::Value::Blob(blob),
+                        i64::try_from(limit).unwrap_or(i64::MAX)
+                    ],
+                    |row| {
+                        Ok(Near {
+                            path: row.get(0)?,
+                            number: u32::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                            text: row.get(2)?,
+                            similarity: similarity_of_distance(row.get::<_, f64>(3)?),
+                        })
+                    },
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: nearest: {e}")))?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: nearest: {e}")))?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
+    }
+
+    async fn similarities(
+        &self,
+        volume_id: &str,
+        kind: VectorKind,
+        vector: &[f32],
+        entries: &[(String, u32)],
+    ) -> Result<Vec<Option<f32>>> {
+        let vc = self.get_or_open(volume_id)?;
+        let vol = volume_id.to_string();
+        let blob = to_bytes(vector);
+        let dimension = u32::try_from(vector.len()).unwrap_or(0);
+        let entries = entries.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let guard =
+                vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
+            if !guard.dims(kind).contains(&dimension) {
+                return Ok(vec![None; entries.len()]);
+            }
+            let (meta, vec) = names(kind, dimension);
+            let mut stmt = guard
+                .conn
+                .prepare(&format!(
+                    "SELECT vec_distance_cosine(v.embedding, ?4) \
+                     FROM {meta} m JOIN {vec} v ON v.rowid = m.rowid \
+                     WHERE m.volume_id = ?1 AND m.path = ?2 AND m.chunk_idx = ?3 AND m.dim = {dimension}"
+                ))
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: prepare: {e}")))?;
+            let mut out = Vec::with_capacity(entries.len());
+            for (path, number) in &entries {
+                let d: Option<f64> = rusqlite::OptionalExtension::optional(stmt.query_row(
+                    params![vol, path, i64::from(*number), rusqlite::types::Value::Blob(blob.clone())],
+                    |r| r.get(0),
+                ))
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: similarity: {e}")))?;
+                out.push(d.map(similarity_of_distance));
+            }
+            Ok(out)
         })
         .await
         .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?

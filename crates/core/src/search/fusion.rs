@@ -66,6 +66,57 @@ pub fn rrf_merge(bm25: &[SearchResult], vector: &[SearchResult]) -> Vec<SearchRe
         .collect()
 }
 
+/// One unit of the fused list of `search.chunks` (SPEC-0109): a chunk, its fused
+/// score and the best rank it had in either list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fused {
+    pub path: String,
+    pub number: u32,
+    pub score: f64,
+    pub best_rank: usize,
+}
+
+/// Fuses a dense and a keyword list of `(path, chunk number)` units, each best
+/// first: the score of a unit is the sum of `1/(60 + rank)` over the lists that
+/// hold it (rank from 1). One entry per unit, a unit repeated in a list counting
+/// once at its best rank. Order: score, then best rank, then the stable id (path,
+/// then number). Pure and deterministic.
+pub fn fuse_units(dense: &[(String, u32)], keyword: &[(String, u32)]) -> Vec<Fused> {
+    let mut by_unit: HashMap<(&str, u32), Fused> = HashMap::new();
+    for list in [dense, keyword] {
+        let mut seen: std::collections::HashSet<(&str, u32)> = std::collections::HashSet::new();
+        for (i, (path, number)) in list.iter().enumerate() {
+            if !seen.insert((path.as_str(), *number)) {
+                continue;
+            }
+            let rank = i + 1;
+            let part = 1.0 / (f64::from(K) + rank as f64);
+            by_unit
+                .entry((path.as_str(), *number))
+                .and_modify(|f| {
+                    f.score += part;
+                    f.best_rank = f.best_rank.min(rank);
+                })
+                .or_insert_with(|| Fused {
+                    path: path.clone(),
+                    number: *number,
+                    score: part,
+                    best_rank: rank,
+                });
+        }
+    }
+    let mut out: Vec<Fused> = by_unit.into_values().collect();
+    out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.best_rank.cmp(&b.best_rank))
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.number.cmp(&b.number))
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +151,59 @@ mod tests {
             shared_pos < only_bm25_pos,
             "a doc in both lists should rank above one in only one list: {paths:?}"
         );
+    }
+
+    fn u(p: &str, n: u32) -> (String, u32) {
+        (p.to_string(), n)
+    }
+
+    /// SPEC-0109 FR-NEW-002: the sum of `1/(60 + rank)` over the lists.
+    #[test]
+    fn fuse_units_sums_reciprocal_ranks() {
+        let dense = [u("/a.md", 1), u("/b.md", 1)];
+        let keyword = [u("/b.md", 1), u("/c.md", 1)];
+        let out = fuse_units(&dense, &keyword);
+        let ids: Vec<_> = out.iter().map(|f| (f.path.as_str(), f.number)).collect();
+        assert_eq!(ids, [("/b.md", 1), ("/a.md", 1), ("/c.md", 1)]);
+        assert!((out[0].score - (1.0 / 62.0 + 1.0 / 61.0)).abs() < 1e-12);
+        assert!((out[1].score - 1.0 / 61.0).abs() < 1e-12);
+        assert!((out[2].score - 1.0 / 62.0).abs() < 1e-12);
+        assert_eq!((out[0].best_rank, out[1].best_rank, out[2].best_rank), (1, 1, 2));
+    }
+
+    /// Ties go to the best rank, then to the path, then to the chunk number.
+    #[test]
+    fn fuse_units_breaks_ties_by_best_rank_then_stable_id() {
+        // z at dense 1 and y at keyword 1: equal score and equal best rank, path decides.
+        let out = fuse_units(&[u("/z.md", 1)], &[u("/y.md", 1)]);
+        assert_eq!(out[0].path, "/y.md");
+        // Same path: the number decides, 2 before 10 (numbers, not text).
+        let out = fuse_units(&[u("/a.md", 10)], &[u("/a.md", 2)]);
+        assert_eq!(out[0].number, 2);
+        // Equal score, different best rank: a at dense 2 + keyword 3 against b at dense 1 + keyword 5
+        // is not a tie; build one: x dense 1 only (1/61), y keyword 1 only (1/61), w dense 2 + keyword 2.
+        let out = fuse_units(&[u("/x.md", 1), u("/w.md", 1)], &[u("/y.md", 1), u("/w.md", 1)]);
+        assert_eq!(out[0].path, "/w.md", "two lists beat one");
+        assert_eq!(out[1].path, "/x.md");
+    }
+
+    /// One line per unit: a unit twice in one list counts once, at its best rank.
+    #[test]
+    fn fuse_units_keeps_one_unit_once() {
+        let out = fuse_units(&[u("/a.md", 1), u("/b.md", 1), u("/a.md", 1)], &[]);
+        assert_eq!(out.len(), 2);
+        assert!((out[0].score - 1.0 / 61.0).abs() < 1e-12);
+        assert_eq!(out[1].best_rank, 2);
+    }
+
+    #[test]
+    fn fuse_units_is_stable_over_repeats() {
+        let dense: Vec<_> = (1..=20).map(|n| u("/a.md", n)).collect();
+        let keyword: Vec<_> = (1..=20).rev().map(|n| u("/a.md", n)).collect();
+        let first = fuse_units(&dense, &keyword);
+        for _ in 0..20 {
+            assert_eq!(fuse_units(&dense, &keyword), first);
+        }
     }
 
     #[test]
