@@ -155,6 +155,35 @@ pub(crate) async fn extract_archive(
     overwrite: bool,
     password: Option<&str>,
 ) -> Result<Value> {
+    let mut written = Vec::new();
+    let answer =
+        extract_run(state, mount_id, person, path, destination, overwrite, password, &mut written)
+            .await;
+    // SPEC-0112: the files really written follow the index, whatever the
+    // answer (an extraction failing halfway keeps what it wrote). Run here,
+    // after the run returned, so no admission lock is held (FR-NEW-005).
+    if !written.is_empty()
+        && let Ok(client) = state.stores.client(mount_id).await
+    {
+        let applied = crate::git::repo::AppliedPaths { written, deleted: Vec::new() };
+        crate::search::indexer::after_git_changes(state, mount_id, &applied, &client).await;
+    }
+    answer
+}
+
+/// The extraction itself; every file it writes is pushed on `written` right
+/// after its write, so a failure halfway reports exactly what landed.
+#[allow(clippy::too_many_arguments)]
+async fn extract_run(
+    state: &AppState,
+    mount_id: &str,
+    person: &str,
+    path: &str,
+    destination: Option<&str>,
+    overwrite: bool,
+    password: Option<&str>,
+    written: &mut Vec<String>,
+) -> Result<Value> {
     let normalized = state.safety.normalize_path(path)?;
 
     let client = state.stores.client(mount_id).await?;
@@ -201,6 +230,7 @@ pub(crate) async fn extract_archive(
             overwrite,
             single,
             suffix_len,
+            written,
         )
         .await;
     }
@@ -304,6 +334,7 @@ pub(crate) async fn extract_archive(
         let entry_dest = join_entry_destination(&dest, &entry.rel_path);
         crate::core::fs_ops::ensure_parents(&client, &entry_dest).await?;
         client.write_bytes_atomic(&entry_dest, &entry.bytes).await?;
+        written.push(entry_dest.clone());
         client.touch_atime_mtime(&entry_dest);
         files_written += 1;
         bytes_written += entry.bytes.len() as u64;

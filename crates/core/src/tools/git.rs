@@ -1333,6 +1333,23 @@ pub(crate) async fn tool_stash_apply_or_pop(
     name: &'static str,
     pop: bool,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(
+        &follow_ctx,
+        &follow_mount,
+        follow_store,
+        tool_stash_apply_or_pop_run(ctx, a, g, name, pop),
+    )
+    .await
+}
+
+async fn tool_stash_apply_or_pop_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitStashIdArgs,
+    g: Option<Arc<GitRepoStore>>,
+    name: &'static str,
+    pop: bool,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let stash_id = a.stash_id.clone();
     let entry = open(&ctx, &mount_id, g).await?;
@@ -1388,6 +1405,15 @@ pub(crate) async fn tool_branch_create(
     a: crate::mcp::server::GitBranchCreateArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_branch_create_run(ctx, a, g)).await
+}
+
+async fn tool_branch_create_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitBranchCreateArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let name = a.name.clone();
     let start_point = Some(a.start_point.clone()).filter(|s| !s.is_empty());
@@ -1405,6 +1431,15 @@ pub(crate) async fn tool_branch_create(
 }
 
 pub(crate) async fn tool_branch_switch(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitBranchSwitchArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_branch_switch_run(ctx, a, g)).await
+}
+
+async fn tool_branch_switch_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitBranchSwitchArgs,
     g: Option<Arc<GitRepoStore>>,
@@ -1445,6 +1480,15 @@ pub(crate) async fn tool_branch_reset(
     a: crate::mcp::server::GitBranchResetArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_branch_reset_run(ctx, a, g)).await
+}
+
+async fn tool_branch_reset_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitBranchResetArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let name = a.name.clone();
     let target_commit = a.target_commit.clone();
@@ -1461,6 +1505,15 @@ pub(crate) async fn tool_branch_reset(
 }
 
 pub(crate) async fn tool_reset(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitResetArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_reset_run(ctx, a, g)).await
+}
+
+async fn tool_reset_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitResetArgs,
     g: Option<Arc<GitRepoStore>>,
@@ -1554,12 +1607,22 @@ pub(crate) async fn tool_checkout_file(
     a: crate::mcp::server::GitCheckoutFileArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_checkout_file_run(ctx, a, g)).await
+}
+
+async fn tool_checkout_file_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitCheckoutFileArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let commit_sha = a.commit_sha.clone();
     let path = a.path.clone();
     let entry = open(&ctx, &mount_id, g).await?;
     let norm = ctx.state.safety.normalize_path(&path)?;
     let client = ctx.state.stores.client(&mount_id).await?;
+    let applied_to = entry.clone();
     let bytes = {
         let (entry, norm, commit_sha) = (entry, norm.clone(), commit_sha.clone());
         on_git_thread(move || async move { read_from_commit(&entry, &commit_sha, &norm).await })
@@ -1578,6 +1641,7 @@ pub(crate) async fn tool_checkout_file(
     )
     .await?;
     client.write_bytes_atomic(&norm, &bytes).await?;
+    applied_to.applied.written(&norm);
     ctx.state.safety.record_audit(
         &ctx.person,
         &mount_id,
@@ -1649,6 +1713,16 @@ pub(crate) async fn tool_remote_clone(
     g: Option<Arc<GitRepoStore>>,
     t: Option<Arc<crate::git::OAuthTokenStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_remote_clone_run(ctx, a, g, t)).await
+}
+
+async fn tool_remote_clone_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitRemoteCloneArgs,
+    g: Option<Arc<GitRepoStore>>,
+    t: Option<Arc<crate::git::OAuthTokenStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let url = a.url.clone();
     let branch = a.branch.clone();
@@ -1710,6 +1784,15 @@ pub(crate) async fn tool_stash_save(
     a: crate::mcp::server::GitStashSaveArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_stash_save_run(ctx, a, g)).await
+}
+
+async fn tool_stash_save_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitStashSaveArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let message = a.message.clone();
     let entry = open(&ctx, &mount_id, g).await?;
@@ -1757,6 +1840,15 @@ pub(crate) async fn tool_merge(
     a: crate::mcp::server::GitMergeArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_merge_run(ctx, a, g)).await
+}
+
+async fn tool_merge_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitMergeArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let source_ref = a.source_ref.clone();
     let squash = a.squash;
@@ -1767,6 +1859,15 @@ pub(crate) async fn tool_merge(
 }
 
 pub(crate) async fn tool_merge_resolve(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitMergeResolveArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_merge_resolve_run(ctx, a, g)).await
+}
+
+async fn tool_merge_resolve_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitMergeResolveArgs,
     g: Option<Arc<GitRepoStore>>,
@@ -1783,12 +1884,30 @@ pub(crate) async fn tool_merge_abort(
     a: crate::mcp::server::MountOnlyArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_merge_abort_run(ctx, a, g)).await
+}
+
+async fn tool_merge_abort_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::MountOnlyArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     merge_abort(&ctx, store, &mount_id).await
 }
 
 pub(crate) async fn tool_rebase(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitRebaseArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_rebase_run(ctx, a, g)).await
+}
+
+async fn tool_rebase_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitRebaseArgs,
     g: Option<Arc<GitRepoStore>>,
@@ -1812,6 +1931,15 @@ pub(crate) async fn tool_rebase_continue(
     a: crate::mcp::server::GitResolutionsArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_rebase_continue_run(ctx, a, g)).await
+}
+
+async fn tool_rebase_continue_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitResolutionsArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     let resolutions_val =
@@ -1826,12 +1954,32 @@ pub(crate) async fn tool_rebase_abort(
     a: crate::mcp::server::MountOnlyArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_rebase_abort_run(ctx, a, g)).await
+}
+
+async fn tool_rebase_abort_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::MountOnlyArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     replay_abort(&ctx, store, &mount_id, &REBASE_FAMILY).await
 }
 
 pub(crate) async fn tool_cherry_pick(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitCherryPickArgs,
+    mainline: u32,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_cherry_pick_run(ctx, a, mainline, g))
+        .await
+}
+
+async fn tool_cherry_pick_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitCherryPickArgs,
     mainline: u32,
@@ -1854,6 +2002,16 @@ pub(crate) async fn tool_cherry_pick_continue(
     a: crate::mcp::server::GitResolutionsArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_cherry_pick_continue_run(ctx, a, g))
+        .await
+}
+
+async fn tool_cherry_pick_continue_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitResolutionsArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     let resolutions_val =
@@ -1868,12 +2026,31 @@ pub(crate) async fn tool_cherry_pick_abort(
     a: crate::mcp::server::MountOnlyArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_cherry_pick_abort_run(ctx, a, g)).await
+}
+
+async fn tool_cherry_pick_abort_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::MountOnlyArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     replay_abort(&ctx, store, &mount_id, &CHERRY_PICK_FAMILY).await
 }
 
 pub(crate) async fn tool_revert(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitRevertArgs,
+    mainline: u32,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_revert_run(ctx, a, mainline, g)).await
+}
+
+async fn tool_revert_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitRevertArgs,
     mainline: u32,
@@ -1896,6 +2073,15 @@ pub(crate) async fn tool_revert_continue(
     a: crate::mcp::server::GitResolutionsArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_revert_continue_run(ctx, a, g)).await
+}
+
+async fn tool_revert_continue_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitResolutionsArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     let resolutions_val =
@@ -1910,12 +2096,31 @@ pub(crate) async fn tool_revert_abort(
     a: crate::mcp::server::MountOnlyArgs,
     g: Option<Arc<GitRepoStore>>,
 ) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_revert_abort_run(ctx, a, g)).await
+}
+
+async fn tool_revert_abort_run(
+    ctx: ToolCtx,
+    a: crate::mcp::server::MountOnlyArgs,
+    g: Option<Arc<GitRepoStore>>,
+) -> Result<Value> {
     let mount_id = a.mount_id.clone();
     let store = authorize(&ctx, &mount_id, g).await?;
     replay_abort(&ctx, store, &mount_id, &REVERT_FAMILY).await
 }
 
 pub(crate) async fn tool_remote_pull(
+    ctx: ToolCtx,
+    a: crate::mcp::server::GitRemotePullArgs,
+    g: Option<Arc<GitRepoStore>>,
+    t: Option<Arc<crate::git::OAuthTokenStore>>,
+) -> Result<Value> {
+    let (follow_ctx, follow_mount, follow_store) = (ctx.clone(), a.mount_id.clone(), g.clone());
+    followed(&follow_ctx, &follow_mount, follow_store, tool_remote_pull_run(ctx, a, g, t)).await
+}
+
+async fn tool_remote_pull_run(
     ctx: ToolCtx,
     a: crate::mcp::server::GitRemotePullArgs,
     g: Option<Arc<GitRepoStore>>,
@@ -1970,6 +2175,40 @@ async fn open_on(store: &GitRepoStore, mount_id: &str) -> Result<Arc<GitRepoEntr
     }
     // Idempotent, and it also revives the entry after a server restart.
     store.get_or_open_repo(mount_id).await
+}
+
+/// Runs one git operation, then hands the volume paths it really wrote or
+/// deleted to the indexer (SPEC-0112), whatever the answer: a refusal after a
+/// partial apply still changed those files. Never under a repository or
+/// admission lock, the operation has returned. A path two concurrent
+/// operations both recorded is scheduled once (one waiting job per file).
+pub(crate) async fn followed<T>(
+    ctx: &ToolCtx,
+    mount_id: &str,
+    injected: Option<Arc<GitRepoStore>>,
+    op: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let out = op.await;
+    let store = injected.unwrap_or_else(|| {
+        GitRepoStore::shared(ctx.state.config.clone(), ctx.state.stores.relational().clone())
+    });
+    follow_applied(ctx, &store, mount_id).await;
+    out
+}
+
+/// Drains the applied log of `mount_id` and follows it in the index.
+async fn follow_applied(ctx: &ToolCtx, store: &GitRepoStore, mount_id: &str) {
+    let Some(entry) = store.open_entry(mount_id).await else { return };
+    let applied = entry.applied.take();
+    if applied.written.is_empty() && applied.deleted.is_empty() {
+        return;
+    }
+    match ctx.state.stores.client(mount_id).await {
+        Ok(client) => {
+            crate::search::indexer::after_git_changes(&ctx.state, mount_id, &applied, &client).await
+        }
+        Err(e) => tracing::warn!(mount_id, error = %e, "cannot follow a git change in the index"),
+    }
 }
 
 /// Run a libgit2 touching future on the blocking pool.
@@ -2543,8 +2782,16 @@ async fn branch_create(
     if let Some(old_tree) = old_tree {
         let new_tree = commit.tree().map_err(|e| git_err("start point tree", e))?;
         let changes = merge::diff_tree_changes(&repo, &old_tree, &new_tree)?;
-        merge::charge_and_apply("git.branch_create", &repo, safety, person, client, &changes)
-            .await?;
+        merge::charge_and_apply(
+            &entry.applied,
+            "git.branch_create",
+            &repo,
+            safety,
+            person,
+            client,
+            &changes,
+        )
+        .await?;
     }
 
     entry.db.set_ref(&branch_ref, &sha, false).await?;
@@ -2660,7 +2907,16 @@ async fn branch_switch(
         .map_err(|e| git_err("branch tree", e))?;
     let changes = merge::diff_tree_changes(&repo, &old_tree, &new_tree)?;
     let files_changed = changes.len();
-    merge::charge_and_apply("git.branch_switch", &repo, safety, person, client, &changes).await?;
+    merge::charge_and_apply(
+        &entry.applied,
+        "git.branch_switch",
+        &repo,
+        safety,
+        person,
+        client,
+        &changes,
+    )
+    .await?;
 
     entry.db.set_ref("HEAD", &branch_ref, true).await?;
     let _ = repo.set_head(&branch_ref);
@@ -2851,8 +3107,16 @@ async fn branch_reset(
         files_changed = changes.len();
         // Quota first, all-or-nothing apply, refund on refusal: the ref moves
         // only once every byte landed.
-        merge::charge_and_apply("git.branch_reset", &repo, safety, person, client, &changes)
-            .await?;
+        merge::charge_and_apply(
+            &entry.applied,
+            "git.branch_reset",
+            &repo,
+            safety,
+            person,
+            client,
+            &changes,
+        )
+        .await?;
     }
 
     set_branch_ref(entry, &repo, &branch_ref, &new_sha, "git.branch_reset").await?;
@@ -3003,7 +3267,16 @@ async fn reset(
         files_changed = changes.len();
         // Quota first, all-or-nothing apply, refund on refusal: the ref moves
         // only once every byte landed.
-        merge::charge_and_apply("git.reset", &repo, safety, person, client, &changes).await?;
+        merge::charge_and_apply(
+            &entry.applied,
+            "git.reset",
+            &repo,
+            safety,
+            person,
+            client,
+            &changes,
+        )
+        .await?;
     }
 
     if new_sha != old_sha {
@@ -3429,7 +3702,10 @@ async fn clone_and_import_inner(
             for (rel, oid) in files {
                 let path = format!("/{rel}");
                 match write_one(&cloned, &client, &path, oid).await {
-                    Ok(()) => imported += 1,
+                    Ok(()) => {
+                        imported += 1;
+                        entry.applied.written(&path);
+                    }
                     Err(e) => skipped.push(format!("{path}: {}", e.message)),
                 }
             }
@@ -4244,7 +4520,16 @@ async fn merge_inner(
             .map_err(|e| git_err("ancestry check", e))?
     {
         let changes = merge::diff_tree_changes(&repo, &tip_tree, &source_tree)?;
-        merge::charge_and_apply("git.merge", &repo, &safety, &person, &client, &changes).await?;
+        merge::charge_and_apply(
+            &entry.applied,
+            "git.merge",
+            &repo,
+            &safety,
+            &person,
+            &client,
+            &changes,
+        )
+        .await?;
         entry.db.set_ref(&branch_ref, &source_sha, false).await?;
         sync_disk_ref(&repo, &branch_ref, source_oid, "git.merge fast-forward");
         return Ok(MergeReport::Applied {
@@ -4300,8 +4585,16 @@ async fn merge_inner(
         merge::MergeOutcome::Clean { tree } => {
             let merged_tree = repo.find_tree(tree).map_err(|e| git_err("find merged tree", e))?;
             let changes = merge::diff_tree_changes(&repo, &tip_tree, &merged_tree)?;
-            merge::charge_and_apply("git.merge", &repo, &safety, &person, &client, &changes)
-                .await?;
+            merge::charge_and_apply(
+                &entry.applied,
+                "git.merge",
+                &repo,
+                &safety,
+                &person,
+                &client,
+                &changes,
+            )
+            .await?;
 
             // Authored and committed by the authenticated person, like
             // `git.commit` and the pull's merge commit.
@@ -4945,7 +5238,7 @@ async fn land_replay(
         .tree()
         .map_err(|e| git_err("replayed tip tree", e))?;
     let changes = merge::diff_tree_changes(repo, &original_tip_tree, &new_tree)?;
-    merge::charge_and_apply(tool, repo, safety, person, client, &changes).await?;
+    merge::charge_and_apply(&entry.applied, tool, repo, safety, person, client, &changes).await?;
 
     entry.objects.import_reachable(repo, &[new_tip]).await?;
     let branch_ref = format!("refs/heads/{branch}");
@@ -5671,8 +5964,16 @@ async fn merge_resolve_inner(
         })
         .collect();
     changes.extend(extra);
-    merge::charge_and_apply("git.merge_resolve", &repo, &safety, &person, &client, &changes)
-        .await?;
+    merge::charge_and_apply(
+        &entry.applied,
+        "git.merge_resolve",
+        &repo,
+        &safety,
+        &person,
+        &client,
+        &changes,
+    )
+    .await?;
 
     // The stash families stop here: the resolved files ARE the result, left as
     // uncommitted work on a branch whose tip never moves (DRIFT 2026-09-22).
@@ -6818,13 +7119,15 @@ pub(crate) mod test_support {
         mount_id: &str,
         url: &str,
     ) -> Result<Value> {
-        clone_and_import(ctx, store, mount_id, url, None, 0, None, "anonymous".into()).await
+        let op =
+            clone_and_import(ctx, store.clone(), mount_id, url, None, 0, None, "anonymous".into());
+        followed(ctx, mount_id, Some(store), op).await
     }
 
     /// Pull `branch` from `url` into `mount_id`, through [`pull_branch`].
     pub(crate) async fn pull_from(
         ctx: &ToolCtx,
-        store: &GitRepoStore,
+        store: &Arc<GitRepoStore>,
         mount_id: &str,
         url: &str,
         branch: &str,
@@ -6837,7 +7140,7 @@ pub(crate) mod test_support {
             .ok_or_else(|| ToolError::not_found(format!("no branch {branch}")))?
             .target;
         let client = ctx.state.stores.client(mount_id).await?;
-        pull_branch(
+        let op = pull_branch(
             entry,
             "origin",
             branch,
@@ -6849,8 +7152,8 @@ pub(crate) mod test_support {
             &ctx.person,
             ctx.state.safety.clone(),
             ctx.state.config.git.remote_timeout_secs,
-        )
-        .await
+        );
+        followed(ctx, mount_id, Some(store.clone()), op).await
     }
 }
 
@@ -7027,6 +7330,7 @@ async fn pull_branch_inner(
                 // being applied, never how.
                 let changes = merge::diff_tree_changes(&repo, &local_tree, &merged_tree)?;
                 merge::charge_and_apply(
+                    &entry_for_thread.applied,
                     "git.remote_pull",
                     &repo,
                     &safety,
@@ -7074,6 +7378,7 @@ async fn pull_branch_inner(
             // without advancing the ref below (DEC-036, unlike clone's whole-tree
             // charge at `clone_and_import`, `tools/git.rs:778-782`).
             merge::charge_and_apply(
+                &entry_for_thread.applied,
                 "git.remote_pull",
                 &repo,
                 &safety,
@@ -7309,8 +7614,16 @@ async fn stash_save(
     entry.db.set_ref(&format!("{STASH_REF_PREFIX}{stash_id}"), &stash_id, false).await?;
     let changes = merge::diff_tree_changes(&repo, &snapshot, &head_tree)?;
     let files_stashed = changes.len();
-    if let Err(e) =
-        merge::charge_and_apply("git.stash_save", &repo, safety, person, client, &changes).await
+    if let Err(e) = merge::charge_and_apply(
+        &entry.applied,
+        "git.stash_save",
+        &repo,
+        safety,
+        person,
+        client,
+        &changes,
+    )
+    .await
     {
         entry.db.delete_ref(&format!("{STASH_REF_PREFIX}{stash_id}")).await?;
         return Err(e);
@@ -7515,7 +7828,8 @@ async fn stash_apply(
             let changes = merge::diff_tree_changes(&repo, &tip_tree, &applied)?;
             // An apply never commits and never moves a ref: it only restores
             // the files, leaving the result as uncommitted work.
-            merge::charge_and_apply(tool, &repo, safety, person, client, &changes).await?;
+            merge::charge_and_apply(&entry.applied, tool, &repo, safety, person, client, &changes)
+                .await?;
 
             // Only here, with every byte landed, may a pop delete the entry.
             if pop {

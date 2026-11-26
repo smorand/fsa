@@ -673,6 +673,7 @@ pub fn diff_tree_changes(
 /// every caller, are outer; the volume's admission lock is inner. No path that
 /// holds the admission lock ever takes a git lock, so the order cannot invert.
 pub async fn charge_and_apply(
+    applied: &crate::git::repo::AppliedLog,
     operation: &str,
     repo: &Repository,
     safety: &SafetyManager,
@@ -684,7 +685,7 @@ pub async fn charge_and_apply(
     let _admission =
         crate::quota::admit_paths(client, safety, person, &client.project_id, charged, &net)
             .await?;
-    match apply_changes_atomically(operation, client, repo, changes).await {
+    match apply_changes_atomically(applied, operation, client, repo, changes).await {
         Ok(()) => Ok(()),
         Err(e) => {
             safety.refund_write(person, &client.project_id, charged);
@@ -727,6 +728,7 @@ fn quota_basis(repo: &Repository, changes: &[TreeChange]) -> (i64, Vec<(String, 
 /// does anything actually mutate (pass 2), and only after that does the caller
 /// advance the ref.
 pub async fn apply_changes_atomically(
+    applied: &crate::git::repo::AppliedLog,
     operation: &str,
     client: &VolumeClient,
     repo: &Repository,
@@ -754,6 +756,7 @@ pub async fn apply_changes_atomically(
     for change in changes {
         if let TreeChange::Delete { path } = change {
             client.delete_file(path).await?;
+            applied.deleted(path);
         }
     }
     for change in changes {
@@ -766,6 +769,7 @@ pub async fn apply_changes_atomically(
                 client.makedirs(&parent, true).await?;
             }
             client.write_bytes_atomic(path, blob.content()).await?;
+            applied.written(path);
         }
     }
     Ok(())

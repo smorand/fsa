@@ -60,6 +60,10 @@ result whose file changed meanwhile, and records every job in the admin table `d
 `fs.list_derived_jobs` lists the jobs, `fs.recalculate` rebuilds one file now (kind `search_index`) or
 one chunk set (kind `chunks`, optional `set_id`, SPEC-0101); engine
 `tools/derived.rs`, MCP only. Details in `.agent_docs/search.md`, "Rebuild scheduler".
+Git operations and `fs.extract_archive` follow the index too (SPEC-0112): `merge::apply_changes_atomically` records each path it
+really wrote or deleted in `GitRepoEntry::applied`, the `tool_*` git wrappers (`followed` in `tools/git.rs`) drain it after the operation and call
+`indexer::after_git_changes`; the extraction collects the files it wrote and calls the same function after its run, on error too. No second
+indexing path. Tests: `cargo test -p fsa-core --lib -- e2e_0112_` (`tools/git_index_e2e.rs`, `tools/archive_index_e2e.rs`). Details in `.agent_docs/search.md`, "Git and archive follow the index".
 
 Indexing profile per project (SPEC-0107, `settings/profile*.rs`, `tools/profile.rs`): five nullable columns of the `project` row (chunk strategy and settings, text model, image model, `vectors_stale_at`), `admin.get_indexing_profile` (member or admin) and `admin.set_indexing_profile` (owner or admin), a read only section on `/app/models`, a model a profile names cannot be deleted. Changing a model sets `vectors_stale_at`; the models are consumed by the vector engines (SPEC-0108), the chunk fields not yet. `migrate.rs::columns_of` now copies the `ColumnMigration` columns too. Tests: `cargo test -p fsa-core --lib -- e2e_0107_`. Details in `.agent_docs/architecture.md`, "Indexing profile".
 

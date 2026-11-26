@@ -1610,6 +1610,7 @@ mod tests {
             objects: real.objects.clone(),
             blobs: real.blobs.clone(),
             write_lock: tokio::sync::Mutex::new(()),
+            applied: Default::default(),
         };
         (d, entry, rel)
     }

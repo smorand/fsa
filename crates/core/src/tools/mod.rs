@@ -33,6 +33,8 @@ pub(crate) mod archive;
 mod archive_declared_e2e;
 #[cfg(test)]
 mod archive_destination_e2e;
+#[cfg(test)]
+mod archive_index_e2e;
 #[cfg(feature = "rar")]
 pub(crate) mod archive_rar;
 #[cfg(feature = "rar")]
@@ -81,6 +83,8 @@ pub(crate) mod export;
 mod folder_usage_e2e;
 pub mod git;
 pub mod git_auth;
+#[cfg(test)]
+mod git_index_e2e;
 pub mod git_pr;
 pub mod git_tags;
 #[cfg(test)]

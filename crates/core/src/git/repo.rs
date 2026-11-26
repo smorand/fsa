@@ -42,6 +42,45 @@ pub struct GitRepoEntry {
     /// Held for the whole of a push, so two concurrent `git-receive-pack` calls
     /// cannot interleave ref updates. Port of the C# `SemaphoreSlim(1, 1)`.
     pub write_lock: Mutex<()>,
+    /// The volume paths the operations really wrote or deleted since the last
+    /// drain, so the tool wrappers can hand them to the indexer once the
+    /// operation returned (SPEC-0112).
+    pub applied: AppliedLog,
+}
+
+/// The paths a git operation changed in the volume, recorded by the one apply
+/// (`merge::apply_changes_atomically`) as each change lands, so a partial
+/// apply reports exactly what it touched.
+#[derive(Default)]
+pub struct AppliedLog(std::sync::Mutex<AppliedPaths>);
+
+/// What [`AppliedLog::take`] returns: each path once, a path both deleted and
+/// written (a type change) only as written.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct AppliedPaths {
+    pub written: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
+impl AppliedLog {
+    pub fn written(&self, path: &str) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).written.push(path.to_string());
+    }
+
+    pub fn deleted(&self, path: &str) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).deleted.push(path.to_string());
+    }
+
+    /// Empties the log. Cost O(n log n) for n recorded paths.
+    pub fn take(&self) -> AppliedPaths {
+        let mut all = std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()));
+        all.written.sort();
+        all.written.dedup();
+        all.deleted.sort();
+        all.deleted.dedup();
+        all.deleted.retain(|p| all.written.binary_search(p).is_err());
+        all
+    }
 }
 
 pub struct GitRepoStore {
@@ -115,6 +154,12 @@ impl GitRepoStore {
         let entry = self.create_entry(project_id, false).await?;
         guard.insert(project_id.to_string(), entry.clone());
         Ok(entry)
+    }
+
+    /// The entry already open for `project_id`, without opening one: the
+    /// wrappers drain its applied log after an operation (SPEC-0112).
+    pub async fn open_entry(&self, project_id: &str) -> Option<Arc<GitRepoEntry>> {
+        self.entries.lock().await.get(project_id).cloned()
     }
 
     /// True when the project has git state, whether or not it is open in process.
@@ -221,6 +266,7 @@ impl GitRepoStore {
             objects,
             blobs,
             write_lock: Mutex::new(()),
+            applied: AppliedLog::default(),
         }))
     }
 }

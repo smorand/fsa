@@ -514,6 +514,15 @@ search:
   settle_delay_seconds: 30
 ```
 
+Git operations and archive extraction follow the same rule (SPEC-0112): every file that
+`git.remote_pull`, `git.remote_clone`, `git.merge`, `git.merge_resolve`, `git.branch_switch`,
+`git.branch_create`, `git.branch_reset`, `git.reset`, `git.rebase`, `git.cherry_pick`, `git.revert`,
+`git.stash_save`, `git.stash_apply`, `git.stash_pop` or `git.checkout_file` really writes is scheduled
+like a saved file, and a file one of them deletes leaves the index (a rename is a delete plus a create).
+`fs.extract_archive` (every format, the single file ones too) schedules each file it wrote, also when it
+fails halfway. A conflict, a quota refusal, a project whose index mode is `none` or a server with search
+off schedule nothing; audit lines and answers are unchanged.
+
 Two MCP tools follow the work: `fs.list_derived_jobs` lists each file's waiting, running and
 last finished job (state, cause `change` or `manual`, seconds left, failure reason), and
 `fs.recalculate` rebuilds one thing of one file now: kind `search_index` the search entries

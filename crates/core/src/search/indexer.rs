@@ -316,12 +316,44 @@ pub async fn after_write_reread(
     client: &VolumeClient,
 ) {
     if let Some(backend) = active_backend(state, volume_id).await {
-        match backend.scheduler() {
-            Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
-            None => {
-                index_now(backend, volume_id, path, client, state.config.search.chunking()).await
-            }
-        }
+        reread_with(backend, state, volume_id, path, client).await;
+    }
+}
+
+/// [`after_write_reread`] once the mode is known active, so a batch checks it once.
+async fn reread_with(
+    backend: &Arc<dyn SearchBackend>,
+    state: &AppState,
+    volume_id: &str,
+    path: &str,
+    client: &VolumeClient,
+) {
+    match backend.scheduler() {
+        Some(s) => s.schedule(volume_id, path, JobCause::Change).await,
+        None => index_now(backend, volume_id, path, client, state.config.search.chunking()).await,
+    }
+}
+
+/// Follow a git operation (SPEC-0112): every path it really wrote is scheduled
+/// like a write, every path it deleted leaves the index like a deleted file
+/// (jobs forgotten first, DEC-010). The index mode is read once for the batch;
+/// nothing is read from the volume here, the rebuild reads each file. A path
+/// under the trash folder is left alone, as an arrival does. Cost: one mode
+/// read, then O(paths) scheduler calls.
+pub async fn after_git_changes(
+    state: &AppState,
+    volume_id: &str,
+    applied: &crate::git::repo::AppliedPaths,
+    client: &VolumeClient,
+) {
+    let Some(backend) = active_backend(state, volume_id).await else { return };
+    let trash_dir = &state.safety.config().trash_dir;
+    let live = |p: &&String| !is_trash_path(p, trash_dir);
+    for path in applied.deleted.iter().filter(live) {
+        delete_with(backend, state, volume_id, path).await;
+    }
+    for path in applied.written.iter().filter(live) {
+        reread_with(backend, state, volume_id, path, client).await;
     }
 }
 
@@ -397,13 +429,22 @@ pub async fn after_patch(state: &AppState, volume_id: &str, report: &Value, clie
 /// scheduler flags a running rebuild before the entries go (DEC-010).
 pub async fn after_delete(state: &AppState, volume_id: &str, path: &str) {
     if let Some(backend) = active_backend(state, volume_id).await {
-        if let Some(s) = backend.scheduler() {
-            s.forget_path(volume_id, path).await;
-        }
-        drop(
-            ProjectIndexer::new(backend, state.config.search.chunking()).on_delete(volume_id, path),
-        );
+        delete_with(backend, state, volume_id, path).await;
     }
+}
+
+/// [`after_delete`] once the mode is known active: the scheduler forgets the
+/// jobs of the path before its entries go.
+async fn delete_with(
+    backend: &Arc<dyn SearchBackend>,
+    state: &AppState,
+    volume_id: &str,
+    path: &str,
+) {
+    if let Some(s) = backend.scheduler() {
+        s.forget_path(volume_id, path).await;
+    }
+    drop(ProjectIndexer::new(backend, state.config.search.chunking()).on_delete(volume_id, path));
 }
 
 /// Auto remove several paths from the index, for a recursive delete.

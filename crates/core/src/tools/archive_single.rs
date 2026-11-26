@@ -267,6 +267,7 @@ pub(crate) async fn extract_single(
     overwrite: bool,
     format: SingleFormat,
     suffix_len: usize,
+    written: &mut Vec<String>,
 ) -> Result<Value> {
     let (parent, file_name) = normalized.rsplit_once('/').unwrap_or(("", normalized));
     let name = output_name(file_name, suffix_len)?.to_string();
@@ -315,6 +316,7 @@ pub(crate) async fn extract_single(
     client.makedirs(&dest, true).await?;
     crate::core::fs_ops::ensure_parents(client, &out).await?;
     client.write_bytes_atomic(&out, &decoded.bytes).await?;
+    written.push(out.clone());
     client.touch_atime_mtime(&out);
 
     finish_extraction(

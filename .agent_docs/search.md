@@ -506,3 +506,23 @@ then path; score 0 documents are not answered. Each input of an answered documen
 * Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile` (14 end to end, 11 unit; E2E-013 swaps the
   engine for one whose full text list fails; E2E-014 PostgreSQL). Gotcha: the fake keyed vectors make a doc of four 400 word
   sections score about 0.5 per section for the four words, which is how the floor tests place chunks either side of 0.45 and 0.55.
+
+## Git and archive follow the index (SPEC-0112, BL-0177, 2026-11-26)
+
+Before this, a file written by a git operation or an extraction was indexed only when saved again.
+- Git: `git::merge::apply_changes_atomically` (the one place git writes the volume) pushes each path
+  on `GitRepoEntry::applied` (`AppliedLog`) right after the write or delete, so a partial apply reports
+  what it touched; `checkout_file` and the clone import record their writes too. `tools/git.rs::followed`
+  wraps each `tool_*` of the 3.1 list: it runs the operation, then drains the log (whatever the answer)
+  and calls `search::indexer::after_git_changes`, which sends deleted paths to the `after_delete` rule
+  (jobs forgotten, entries removed) and written paths to `after_write_reread` (one mode read per batch).
+  A path both deleted and written is only written; the trash folder is never scheduled.
+- Extraction: `tools/archive.rs::extract_archive` runs `extract_run`, which pushes each file after its
+  write (single file formats too, `archive_single::extract_single`), then calls `after_git_changes`
+  with those paths, after the run returned, so no admission lock is held.
+- A conflict, a refusal before the apply and a quota refusal touch nothing and schedule nothing; the
+  quota refusal of an extraction comes from `check_declared` before any write. Two operations racing may
+  drain each other's paths: harmless, scheduling is idempotent (one waiting job per file).
+- Tests: `cargo test -p fsa-core --lib -- e2e_0112_` (17, paused clock on `search::derived_e2e::Env`; 018
+  PostgreSQL needs `MCPFS_TEST_PG_DSN`). Git tests put volume files with raw writes and align the index by
+  hand (`G::align`), so a test reads only what the operation did.

@@ -334,3 +334,6 @@
 | US-0332 | SPEC-0110 | PostgreSQL, docs and contract | US-0331 | 2 | landed | | |
 | US-0333 | SPEC-0111 | the file metadata page | main | 1 | landed | | |
 | US-0334 | SPEC-0111 | the recalculate action and docs | US-0333 | 1 | landed | | |
+| US-0335 | SPEC-0112 | git operations follow the index | main | 1 | landed | | |
+| US-0336 | SPEC-0112 | archive extraction follows the index | US-0335 | 1 | landed | | |
+| US-0337 | SPEC-0112 | PostgreSQL, docs and contract | US-0336 | 1 | landed | | |

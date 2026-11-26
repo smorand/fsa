@@ -45,11 +45,22 @@ pub(crate) struct Options {
     pub embedding: bool,
     /// Any other change to the server configuration, applied last.
     pub config: fn(&mut ServerConfig),
+    /// Admin store and volume metadata on a fresh PostgreSQL schema of
+    /// `MCPFS_TEST_PG_DSN` (SPEC-0112 E2E-018); the test checks the variable
+    /// first and calls [`Env::drop_schema`] at its end.
+    pub pg: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { search: true, scheduled: true, delay: 30, embedding: false, config: |_| {} }
+        Self {
+            search: true,
+            scheduled: true,
+            delay: 30,
+            embedding: false,
+            config: |_| {},
+            pg: false,
+        }
     }
 }
 
@@ -196,6 +207,25 @@ impl SearchBackend for Stub {
     }
 }
 
+#[cfg(feature = "postgres")]
+async fn pg_admin(schema: &str) -> Arc<crate::storage::admin::RelationalAdminStore> {
+    use crate::storage::rel::{PoolSettings, PostgresRelationalDb};
+    let dsn = std::env::var("MCPFS_TEST_PG_DSN").unwrap();
+    let db = Arc::new(
+        PostgresRelationalDb::connect(&dsn, schema, PoolSettings::default())
+            .await
+            .expect("MCPFS_TEST_PG_DSN is set but connection failed"),
+    );
+    let admin = Arc::new(crate::storage::admin::RelationalAdminStore::new(db));
+    admin.connect().await.unwrap();
+    admin
+}
+
+#[cfg(not(feature = "postgres"))]
+async fn pg_admin(_schema: &str) -> Arc<crate::storage::admin::RelationalAdminStore> {
+    panic!("a pg Env needs the postgres feature");
+}
+
 /// One server: `proj` owned by Alice, `other` owned by Dave.
 pub(crate) struct Env {
     _dir: tempfile::TempDir,
@@ -207,6 +237,8 @@ pub(crate) struct Env {
     pub stub: Option<Arc<Stub>>,
     /// Time 0 of the test, the reference of [`Env::at`].
     pub t0: tokio::time::Instant,
+    /// The PostgreSQL schema of a `pg` environment.
+    pub pg_schema: Option<String>,
 }
 
 impl Env {
@@ -230,11 +262,24 @@ impl Env {
             config.search.enabled = false;
             None
         };
+        let mut pg_schema = None;
+        if opts.pg {
+            let dsn = std::env::var("MCPFS_TEST_PG_DSN").expect("a pg Env needs MCPFS_TEST_PG_DSN");
+            let id = uuid::Uuid::new_v4().to_string().replace('-', "");
+            let schema = format!("fsa_p112_{}", &id[..12]);
+            config.infra.meta.backend = crate::config::backend::POSTGRES.into();
+            config.infra.meta.dsn = crate::config::Dsn::new(dsn.clone());
+            config.infra.meta.schema = schema.clone();
+            pg_schema = Some(schema);
+        }
         (opts.config)(&mut config);
         let config = Arc::new(config);
 
-        let admin =
-            Arc::new(crate::storage::admin::RelationalAdminStore::in_memory().await.unwrap());
+        let admin = if opts.pg {
+            pg_admin(pg_schema.as_deref().unwrap()).await
+        } else {
+            Arc::new(crate::storage::admin::RelationalAdminStore::in_memory().await.unwrap())
+        };
         admin.create_project(PROJ, ALICE).await.unwrap();
         admin.create_project(OTHER, DAVE).await.unwrap();
         let jobs = admin.derived_jobs().expect("the relational admin store holds the jobs");
@@ -284,7 +329,7 @@ impl Env {
             state.admin.set_index_mode(PROJ, IndexMode::Bm25).await.unwrap();
         }
         let t0 = tokio::time::Instant::now();
-        Self { _dir: dir, state, jobs, stub, t0 }
+        Self { _dir: dir, state, jobs, stub, t0, pg_schema }
     }
 
     /// Simulates a server restart: stops the first scheduler (its dispatcher and
@@ -333,6 +378,18 @@ impl Env {
             doc_service: None,
             search: Some(Arc::new(backend) as Arc<dyn SearchBackend>),
         });
+    }
+
+    /// Drops the PostgreSQL schema of a `pg` environment.
+    #[cfg(feature = "postgres")]
+    pub async fn drop_schema(&self) {
+        use crate::storage::rel::{PoolSettings, PostgresRelationalDb, Query, RelationalDb as _};
+        let Some(schema) = &self.pg_schema else { return };
+        let dsn = std::env::var("MCPFS_TEST_PG_DSN").unwrap();
+        let db =
+            PostgresRelationalDb::connect(&dsn, "public", PoolSettings::default()).await.unwrap();
+        let sql = format!("DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
+        db.execute(&Query::new(sql)).await.unwrap();
     }
 
     pub fn stub(&self) -> &Stub {
