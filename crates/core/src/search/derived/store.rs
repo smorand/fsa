@@ -9,11 +9,11 @@ use crate::storage::rel::{Query, RelationalDb, RowValues};
 use std::str::FromStr;
 use std::sync::Arc;
 
-const COLS: &str =
-    "job_id, project_id, path, kind, state, cause, hidden, created_at, ended_at, reason, set_id";
+const COLS: &str = "job_id, project_id, path, kind, state, cause, hidden, created_at, ended_at, \
+     reason, set_id, progress_done, progress_total";
 
 /// The states a finished row can hold, inlined as literals (never user text).
-const FINISHED: &str = "('done', 'failed', 'superseded')";
+const FINISHED: &str = "('done', 'failed', 'superseded', 'cancelled')";
 
 #[derive(Clone)]
 pub struct JobStore {
@@ -31,7 +31,7 @@ impl JobStore {
             job_id: r.text(0)?,
             project_id: r.text(1)?,
             path: r.text(2)?,
-            kind: JobKind::from_str(&r.text(3)?)?,
+            kind: JobKind::from_stored(&r.text(3)?)?,
             state: JobState::from_str(&r.text(4)?)?,
             cause: JobCause::from_str(&r.text(5)?)?,
             hidden: r.i64(6)? != 0,
@@ -39,6 +39,8 @@ impl JobStore {
             ended_at: r.opt_text(8)?,
             reason: r.opt_text(9)?,
             set_id: r.opt_text(10)?,
+            done: r.opt_i64(11)?,
+            total: r.opt_i64(12)?,
         })
     }
 
@@ -46,7 +48,7 @@ impl JobStore {
         self.db
             .execute(
                 &Query::new(format!(
-                    "INSERT INTO derived_job ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+                    "INSERT INTO derived_job ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
                 ))
                 .bind(&job.job_id)
                 .bind(&job.project_id)
@@ -58,10 +60,69 @@ impl JobStore {
                 .bind(&job.created_at)
                 .bind(job.ended_at.clone())
                 .bind(job.reason.clone())
-                .bind(job.set_id.clone()),
+                .bind(job.set_id.clone())
+                .bind(job.done)
+                .bind(job.total),
             )
             .await?;
         Ok(())
+    }
+
+    /// The progress of a `vectors` job: files done, files to do.
+    pub async fn set_progress(&self, job_id: &str, done: i64, total: i64) -> Result<()> {
+        self.db
+            .execute(
+                &Query::new(
+                    "UPDATE derived_job SET progress_done=?1, progress_total=?2 WHERE job_id=?3",
+                )
+                .bind(done)
+                .bind(total)
+                .bind(job_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The newest `vectors` job of a project, a running one before a finished
+    /// one that started the same second (FR-NEW-011).
+    pub async fn latest_vectors(&self, project_id: &str) -> Result<Option<Job>> {
+        let q = Query::new(format!(
+            "SELECT {COLS} FROM derived_job WHERE project_id=?1 AND kind='vectors' \
+             ORDER BY created_at DESC, CASE WHEN state='running' THEN 0 ELSE 1 END LIMIT 1"
+        ))
+        .bind(project_id);
+        self.db.query_opt(&q).await?.as_ref().map(Self::read).transpose()
+    }
+
+    /// The marker of a project's vectors (`project.vectors_stale_at`), the same
+    /// admin database as the jobs.
+    pub async fn project_stale_at(&self, project_id: &str) -> Result<Option<String>> {
+        let q = Query::new("SELECT vectors_stale_at FROM project WHERE id=?1").bind(project_id);
+        match self.db.query_opt(&q).await? {
+            Some(r) => r.opt_text(0),
+            None => Ok(None),
+        }
+    }
+
+    /// Clears the marker when it still holds `seen`: a model change since the
+    /// job started keeps it (FR-NEW-009, DEC-006). True when it was cleared.
+    pub async fn clear_stale_if(&self, project_id: &str, seen: &str) -> Result<bool> {
+        let q = Query::new(
+            "UPDATE project SET vectors_stale_at=NULL WHERE id=?1 AND vectors_stale_at=?2",
+        )
+        .bind(project_id)
+        .bind(seen);
+        Ok(self.db.execute(&q).await? > 0)
+    }
+
+    /// True when the project is live and indexes vectors (mode `rag` or `both`).
+    pub async fn wants_vectors(&self, project_id: &str) -> Result<bool> {
+        let q = Query::new(
+            "SELECT 1 FROM project WHERE id=?1 AND deleted_at IS NULL \
+             AND index_mode IN ('rag', 'both')",
+        )
+        .bind(project_id);
+        Ok(self.db.query_opt(&q).await?.is_some())
     }
 
     pub async fn set_state(&self, job_id: &str, state: JobState) -> Result<()> {

@@ -71,7 +71,7 @@ pub(crate) fn register(reg: &mut ToolRegistry) {
     );
 }
 
-fn registry(state: &AppState) -> Result<Registry> {
+pub(crate) fn registry(state: &AppState) -> Result<Registry> {
     Registry::of(state.admin.as_ref(), state.config.search.embedding.dimensions)
 }
 
@@ -83,7 +83,7 @@ pub(crate) fn configured_model(state: &AppState) -> Option<ConfiguredModel> {
 }
 
 /// Member or platform administrator; the project must exist.
-async fn require_reader(state: &AppState, person: &str, project_id: &str) -> Result<()> {
+pub(crate) async fn require_reader(state: &AppState, person: &str, project_id: &str) -> Result<()> {
     if state.is_admin(person) {
         if state.admin.get_project(project_id).await?.is_none() {
             return Err(ToolError::project_not_found(project_id));

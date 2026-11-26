@@ -4,7 +4,7 @@
 //! and its record in one transaction, one retry on a lost race.
 
 use super::profile_store::ProfileRow;
-use super::registry::{Registry, Target, now};
+use super::registry::{Registry, Target, marker_now, now};
 use super::store::SettingsStore;
 use crate::chunking::ChunkDefaults;
 use crate::chunking::service::Requested;
@@ -188,7 +188,7 @@ impl Registry {
         }
         let at = now();
         if fields.iter().any(|f| f == "text_model_id" || f == "image_model_id") {
-            next.vectors_stale_at = Some(at.clone());
+            next.vectors_stale_at = Some(marker_now());
         }
         SettingsStore::write_profile_row(&mut tx, project_id, &next, &fields).await?;
         let target = Target::of("project_profile", project_id, project_id);

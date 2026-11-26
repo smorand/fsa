@@ -22,6 +22,9 @@ use std::str::FromStr;
 pub enum JobKind {
     SearchIndex,
     Chunks,
+    /// The recalculation of the vectors of a project or of one file
+    /// (SPEC-0108); its path is `/` for the whole project.
+    Vectors,
 }
 
 impl JobKind {
@@ -29,6 +32,16 @@ impl JobKind {
         match self {
             Self::SearchIndex => "search_index",
             Self::Chunks => "chunks",
+            Self::Vectors => "vectors",
+        }
+    }
+
+    /// The kind of a stored row, `vectors` included. The filter of
+    /// `fs.recalculate` keeps its own two kinds ([`FromStr`]).
+    pub fn from_stored(s: &str) -> Result<Self> {
+        match s {
+            "vectors" => Ok(Self::Vectors),
+            other => Self::from_str(other),
         }
     }
 }
@@ -44,7 +57,7 @@ impl FromStr for JobKind {
     }
 }
 
-/// Where a job is in its life. `Done`, `Failed` and `Superseded` are finished.
+/// Where a job is in its life. `Done`, `Failed`, `Superseded` and `Cancelled` are finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobState {
     Waiting,
@@ -52,6 +65,8 @@ pub enum JobState {
     Done,
     Failed,
     Superseded,
+    /// Stopped by `admin.recalculate_cancel` (SPEC-0108).
+    Cancelled,
 }
 
 impl JobState {
@@ -62,11 +77,12 @@ impl JobState {
             Self::Done => "done",
             Self::Failed => "failed",
             Self::Superseded => "superseded",
+            Self::Cancelled => "cancelled",
         }
     }
 
     pub fn is_finished(self) -> bool {
-        matches!(self, Self::Done | Self::Failed | Self::Superseded)
+        matches!(self, Self::Done | Self::Failed | Self::Superseded | Self::Cancelled)
     }
 }
 
@@ -79,6 +95,7 @@ impl FromStr for JobState {
             "done" => Self::Done,
             "failed" => Self::Failed,
             "superseded" => Self::Superseded,
+            "cancelled" => Self::Cancelled,
             other => return Err(ToolError::internal(format!("unknown job state '{other}'"))),
         })
     }
@@ -128,6 +145,10 @@ pub struct Job {
     pub reason: Option<String>,
     /// The chunk set a `chunks` job rebuilds; `None` for every other kind.
     pub set_id: Option<String>,
+    /// Files done and files to do of a `vectors` job (`total` once the job has
+    /// listed its files); `None` for every other kind.
+    pub done: Option<i64>,
+    pub total: Option<i64>,
 }
 
 impl Job {
@@ -145,6 +166,8 @@ impl Job {
             ended_at: None,
             reason: None,
             set_id: None,
+            done: None,
+            total: None,
         }
     }
 
@@ -162,6 +185,12 @@ impl Job {
         let obj = v.as_object_mut().expect("a json object");
         if let Some(set_id) = &self.set_id {
             obj.insert("set_id".into(), json!(set_id));
+        }
+        if self.kind == JobKind::Vectors {
+            obj.insert(
+                "progress".into(),
+                json!({"done": self.done.unwrap_or(0), "total": self.total}),
+            );
         }
         if self.state == JobState::Waiting {
             obj.insert("seconds_left".into(), json!(seconds_left.unwrap_or(0)));

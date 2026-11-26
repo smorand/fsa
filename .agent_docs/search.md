@@ -432,3 +432,27 @@ Sets follow the node rows in the same storage transaction (`storage/meta.rs`): a
 
 (2026-11-22, SPEC-0102 US-0289) The registry is edited on the `/app/models` screen as well as by the `admin.*` tools and
 the REST routes; every route applies at the next index or query call, as described above.
+
+## Vectors per project (SPEC-0108, 2026-11-26)
+
+A project embeds with the text model of its profile (`admin.set_indexing_profile`), else the server default model, else the
+`search.embedding` block; the width of its vectors is the model's `dimension`, else `search.embedding.dimensions`.
+
+| Engine | Text vectors | Image vectors |
+|---|---|---|
+| pgvector | `search_chunks` at the platform width, `search_chunks_<dim>` for any other width | `search_images_<dim>` |
+| sqlite-vec | `search_vec_<dim>` joined to `search_vec_meta` (column `dim`), per volume, in memory | `search_img_<dim>` and `search_img_meta` |
+
+* A write of a file replaces its vectors in every table of the kind, so a model change leaves none at the old width. A query
+  reads the table of the width in force: vectors of another width are invisible to it until the file is written or the
+  project recalculated, and a query never deletes them.
+* `search.status` `vector_chunks` counts the text vectors of every width.
+* `fs.get_vectors` reads them; `admin.recalculate_start/status/cancel` rebuild them (job kind `vectors`). A whole project job
+  ends `done` only if every file rebuilt; the first error (embedding service down, an unusable vector) ends it `failed`, the
+  files already rebuilt keep their new vectors and the marker stays.
+* Gotchas: an embedding answer of another length than the model declares is refused (`embedding has <n> values, the model
+  declares <d>`): editing a model's dimension in the registry without recalculating makes every later write fail until the
+  endpoint answers the new width or the dimension is set back. SQLite vectors are in memory and vanish at a restart, as before;
+  the resumed job refills them. A document's image vectors are read into memory as `data:` URIs one document at a time.
+* Decisions (SPEC-0108 design): editing a used model's dimension or name marks its projects out of date, it does not refuse
+  (DEC-004); a recalculation never wipes first (DEC-005); resume equals restart (DEC-009).

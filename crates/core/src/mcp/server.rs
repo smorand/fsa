@@ -1269,6 +1269,30 @@ pub struct RecalculateArgs {
     pub set_id: String,
 }
 
+fn def_text() -> String {
+    "text".to_string()
+}
+fn def_vectors_limit() -> i64 {
+    20
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GetVectorsArgs {
+    /// Project/volume id the operation targets.
+    pub mount_id: String,
+    /// Absolute POSIX path of the file.
+    pub path: String,
+    /// What the vectors stand for: 'text' (chunks of the default set, the default) or 'image'.
+    #[serde(default = "def_text")]
+    pub kind: String,
+    /// Number of the last entry of the previous page; 0 reads from the start.
+    #[serde(default)]
+    pub after: i64,
+    /// Entries per page, 1 to 100.
+    #[serde(default = "def_vectors_limit")]
+    pub limit: i64,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListChunkSetsArgs {
     /// Project/volume id the operation targets.
@@ -1708,6 +1732,15 @@ pub struct ListConvertersArgs {
 pub struct SetDefaultConverterArgs {
     /// Id of the converter.
     pub converter_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecalculateStartArgs {
+    /// Id of the project.
+    pub project_id: String,
+    /// Absolute POSIX path of one file to recalculate; empty recalculates every file of the project.
+    #[serde(default)]
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2762,6 +2795,27 @@ impl McpServer {
     }
 
     #[tool(
+        name = "fs.get_vectors",
+        description = "Read the vectors stored for a file, with the text each was computed from: its chunks (kind 'text') or the images of a converted document (kind 'image'), in number order, 20 per page by default."
+    )]
+    pub(crate) async fn fs_get_vectors(
+        &self,
+        Parameters(a): Parameters<GetVectorsArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::vectors::get_vectors(
+            &self.state,
+            &self.person,
+            &a.mount_id,
+            &a.path,
+            &a.kind,
+            a.after,
+            a.limit,
+        )
+        .await;
+        to_call_result("fs.get_vectors", out)
+    }
+
+    #[tool(
         name = "fs.get_chunk",
         description = "Read one chunk of a chunk set of a file in full, with up to 20 chunks before and after it, in order of number."
     )]
@@ -3813,6 +3867,52 @@ impl McpServer {
         )
         .await;
         to_call_result("admin.set_indexing_profile", out)
+    }
+
+    #[tool(
+        name = "admin.recalculate_start",
+        description = "Start the recalculation of the vectors of a project, or of one file when a path is given, with the models of its profile; one runs per project at a time; answers the job (owner or platform admin)."
+    )]
+    pub(crate) async fn admin_recalculate_start(
+        &self,
+        Parameters(a): Parameters<RecalculateStartArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out = crate::tools::recalc::recalculate_start(
+            &self.state,
+            &self.person,
+            &a.project_id,
+            &a.path,
+        )
+        .await;
+        to_call_result("admin.recalculate_start", out)
+    }
+
+    #[tool(
+        name = "admin.recalculate_status",
+        description = "Read the running recalculation of a project, else the last finished one, with its progress in files, and whether the vectors are out of date (member or platform admin)."
+    )]
+    pub(crate) async fn admin_recalculate_status(
+        &self,
+        Parameters(a): Parameters<ProjectIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::recalc::recalculate_status(&self.state, &self.person, &a.project_id)
+                .await;
+        to_call_result("admin.recalculate_status", out)
+    }
+
+    #[tool(
+        name = "admin.recalculate_cancel",
+        description = "Stop the running recalculation of a project after its current file; answers whether one was running (owner or platform admin)."
+    )]
+    pub(crate) async fn admin_recalculate_cancel(
+        &self,
+        Parameters(a): Parameters<ProjectIdArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let out =
+            crate::tools::recalc::recalculate_cancel(&self.state, &self.person, &a.project_id)
+                .await;
+        to_call_result("admin.recalculate_cancel", out)
     }
 
     #[tool(
@@ -4893,8 +4993,8 @@ mod tests {
         // then fs.list_images and fs.get_image, 43, then fs.get_document_view, 44;
         // SPEC-0045 adds fs.diff_files, 45; SPEC-0100 adds fs.list_derived_jobs, 46,
         // and fs.recalculate, 47; SPEC-0101 adds fs.list_chunk_sets, fs.list_chunks and
-        // fs.get_chunk, 50; fs.create_chunk_set and fs.delete_chunk_set, 52; SPEC-0104 adds fs.get_document_structure, 53.
-        assert_eq!(names.len(), 53, "got: {names:?}");
+        // fs.get_chunk, 50; fs.create_chunk_set and fs.delete_chunk_set, 52; SPEC-0104 adds fs.get_document_structure, 53; SPEC-0108 adds fs.get_vectors, 54.
+        assert_eq!(names.len(), 54, "got: {names:?}");
     }
 
     #[test]
@@ -4924,12 +5024,12 @@ mod tests {
         // SPEC-0102 adds five admin registry tools: admin 22, total 132; US-0284 adds
         // four model tools: admin 26, total 136; US-0285 adds three default tools: admin 29, total 139. SPEC-0104 adds fs.get_document_structure: fs 53, total 140.
         // SPEC-0106 US-0309 adds admin.create_converter and admin.list_converters: admin 31, total 142. US-0312 adds admin.update_converter: admin 32, total 143.
-        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152.
-        assert_eq!(fs_count, 53, "got: {names:?}");
-        assert_eq!(admin_count, 41, "got: {names:?}");
+        // US-0313 adds six default/project converter tools: admin 38, total 149. US-0314 adds admin.delete_converter: admin 39, total 150. SPEC-0107 adds admin.get_indexing_profile and admin.set_indexing_profile: admin 41, total 152. SPEC-0108 adds fs.get_vectors: fs 54, and three admin.recalculate_* tools: admin 44, total 156.
+        assert_eq!(fs_count, 54, "got: {names:?}");
+        assert_eq!(admin_count, 44, "got: {names:?}");
         assert_eq!(search_count, 4, "got: {names:?}");
         assert_eq!(git_count, 54, "got: {names:?}");
-        assert_eq!(names.len(), 152, "got: {names:?}");
+        assert_eq!(names.len(), 156, "got: {names:?}");
     }
 
     #[test]
@@ -5266,7 +5366,7 @@ mod tests {
             let gold = normalize_schema(&entry["inputSchema"], &empty);
             assert_eq!(mine, gold, "schema structurally drifted on {}", tool.name);
         }
-        assert_eq!(checked, 148, "the frozen contract covers 148 non-search tools");
+        assert_eq!(checked, 152, "the frozen contract covers 152 non-search tools");
     }
 
     /// US-0007/DT-007: `tools/list` (the router's own `list_all`) returns exactly
@@ -5287,8 +5387,8 @@ mod tests {
         let expected: std::collections::BTreeSet<String> =
             frozen.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
 
-        assert_eq!(names.len(), 148, "got: {names:?}");
-        assert_eq!(expected.len(), 148, "the golden contract itself must hold 148 names");
+        assert_eq!(names.len(), 152, "got: {names:?}");
+        assert_eq!(expected.len(), 152, "the golden contract itself must hold 152 names");
         let missing: Vec<&String> = expected.difference(&names).collect();
         let extra: Vec<&String> = names.difference(&expected).collect();
         assert!(

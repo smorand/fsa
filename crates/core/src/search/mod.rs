@@ -30,6 +30,8 @@ pub mod rerank;
 pub mod vector_pg;
 #[cfg(feature = "rag")]
 pub mod vector_sqlite;
+#[cfg(all(test, feature = "rag"))]
+mod vector_store_e2e;
 
 /// One ranked result chunk returned by a search query.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -105,6 +107,51 @@ pub(crate) async fn index_text<B: SearchBackend + ?Sized>(
     Ok(b.index_chunks_checked(volume_id, path, &chunks, &|| true).await?.unwrap_or(0))
 }
 
+/// What a stored vector was computed from (SPEC-0108): a chunk of the default
+/// set, or an image kept from a converted document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorKind {
+    Text,
+    Image,
+}
+
+impl VectorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+        }
+    }
+}
+
+/// One image to embed: its number (`image-<n>`), the text stored beside the
+/// vector (caption and OCR) and the picture as a `data:` URI, the `input` of the
+/// image model's `/embeddings` call (SPEC-0108 DEC-008).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageInput {
+    pub number: u32,
+    pub text: String,
+    pub data_uri: String,
+}
+
+/// One stored vector with the text it was computed from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredVector {
+    pub number: u32,
+    pub text: String,
+    pub vector: Vec<f32>,
+}
+
+/// A page of the vectors of one file, in number order (FR-NEW-006).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorPage {
+    /// The width of the store that holds them; `None` when the file has none.
+    pub dimension: Option<u32>,
+    pub vectors: Vec<StoredVector>,
+    /// The last number of the page when more follow.
+    pub next_after: Option<u32>,
+}
+
 /// Per-volume index statistics, as reported by `search.status`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexStats {
@@ -172,6 +219,39 @@ pub trait SearchBackend: Send + Sync {
 
     /// Return index statistics for the volume.
     async fn stats(&self, volume_id: &str) -> Result<IndexStats>;
+
+    /// Replaces the image vectors of `(volume_id, path)` by one per image, with
+    /// the project's image model; same guard contract as
+    /// [`Self::index_chunks_checked`]. An empty list clears them. Engines without
+    /// vectors refuse.
+    async fn index_images_checked(
+        &self,
+        _volume_id: &str,
+        _path: &str,
+        _images: &[ImageInput],
+        _still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        Err(ToolError::not_supported("the index mode of the project has no vectors"))
+    }
+
+    /// True when the project's profile names an image model, so a file's images
+    /// are worth reading to embed.
+    async fn embeds_images(&self, _volume_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// One page of the vectors of a file (SPEC-0108 FR-NEW-006): at most `limit`
+    /// entries numbered after `after`. Engines without vectors refuse.
+    async fn vectors_of(
+        &self,
+        _volume_id: &str,
+        _path: &str,
+        _kind: VectorKind,
+        _after: u32,
+        _limit: usize,
+    ) -> Result<VectorPage> {
+        Err(ToolError::not_supported("the index mode of the project has no vectors"))
+    }
 
     /// Which query modes this backend can serve ("bm25", "rag", or both).
     fn supported_modes(&self) -> Vec<&'static str>;
@@ -247,6 +327,31 @@ impl SearchBackend for ScheduledBackend {
 
     async fn stats(&self, volume_id: &str) -> Result<IndexStats> {
         self.inner.stats(volume_id).await
+    }
+
+    async fn index_images_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        images: &[ImageInput],
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        self.inner.index_images_checked(volume_id, path, images, still_current).await
+    }
+
+    async fn vectors_of(
+        &self,
+        volume_id: &str,
+        path: &str,
+        kind: VectorKind,
+        after: u32,
+        limit: usize,
+    ) -> Result<VectorPage> {
+        self.inner.vectors_of(volume_id, path, kind, after, limit).await
+    }
+
+    async fn embeds_images(&self, volume_id: &str) -> Result<bool> {
+        self.inner.embeds_images(volume_id).await
     }
 
     fn supported_modes(&self) -> Vec<&'static str> {
@@ -460,6 +565,31 @@ impl SearchBackend for CombinedBackend {
             bm25_warm: s1.bm25_warm,
             mode: self.mode.clone(),
         })
+    }
+
+    async fn index_images_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        images: &[ImageInput],
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        self.vector.index_images_checked(volume_id, path, images, still_current).await
+    }
+
+    async fn vectors_of(
+        &self,
+        volume_id: &str,
+        path: &str,
+        kind: VectorKind,
+        after: u32,
+        limit: usize,
+    ) -> Result<VectorPage> {
+        self.vector.vectors_of(volume_id, path, kind, after, limit).await
+    }
+
+    async fn embeds_images(&self, volume_id: &str) -> Result<bool> {
+        self.vector.embeds_images(volume_id).await
     }
 
     fn supported_modes(&self) -> Vec<&'static str> {

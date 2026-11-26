@@ -323,3 +323,6 @@
 | US-0321 | SPEC-0106 | the journey, the upgrade and the docs | US-0320 | 2 | landed | | |
 | US-0322 | SPEC-0107 | profile storage, rules and the two tools | main | 1 | landed | spec-0107-indexing-profile | main |
 | US-0323 | SPEC-0107 | delete guard, models screen, contract and docs | US-0322 | 2 | landed | spec-0107-indexing-profile | main |
+| US-0324 | SPEC-0108 | vectors at the project dimension and fs.get_vectors | main | 1 | landed | spec-0108-vectors-per-dimension | main |
+| US-0325 | SPEC-0108 | a model edit marks its projects out of date, PostgreSQL profile tests | US-0324 | 2 | landed | spec-0108-vectors-per-dimension | main |
+| US-0326 | SPEC-0108 | the recalculation job, its tools, restart, docs and contract | US-0325 | 1 | landed | spec-0108-vectors-per-dimension | main |

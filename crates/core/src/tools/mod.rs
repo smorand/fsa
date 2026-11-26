@@ -115,6 +115,7 @@ mod quota_e2e;
 pub(crate) mod read;
 #[cfg(test)]
 mod read_metadata_e2e;
+pub(crate) mod recalc;
 pub mod registry_support;
 #[cfg(test)]
 pub(crate) mod search;
@@ -127,6 +128,7 @@ mod tool_surface_e2e;
 pub(crate) mod trash;
 #[cfg(test)]
 mod trash_search_e2e;
+pub(crate) mod vectors;
 pub mod web;
 pub(crate) mod web_access;
 #[cfg(test)]
@@ -168,6 +170,7 @@ pub(crate) fn register_fs(reg: &mut crate::tools::registry_support::ToolRegistry
     artifacts::register(reg);
     derived::register(reg);
     chunks::register(reg);
+    vectors::register(reg);
 }
 
 /// Read `mount_id`, enforce project membership, open the volume.
@@ -491,6 +494,7 @@ mod tests {
         "fs.get_chunk",
         "fs.create_chunk_set",
         "fs.delete_chunk_set",
+        "fs.get_vectors",
     ];
 
     #[test]
@@ -501,8 +505,8 @@ mod tests {
         // SPEC-0045 fs.diff_files, 46 with SPEC-0100 fs.list_derived_jobs, 47 with
         // SPEC-0100 fs.recalculate, 50 with SPEC-0101 fs.list_chunk_sets,
         // fs.list_chunks and fs.get_chunk, 52 with fs.create_chunk_set and
-        // fs.delete_chunk_set, 53 with SPEC-0104 fs.get_document_structure.
-        assert_eq!(reg.len(), 53);
+        // fs.delete_chunk_set, 53 with SPEC-0104 fs.get_document_structure, 54 with SPEC-0108 fs.get_vectors.
+        assert_eq!(reg.len(), 54);
         assert_eq!(reg.names(), FS_TOOLS);
     }
 
@@ -582,7 +586,7 @@ mod tests {
             // 46 with SPEC-0100 fs.list_derived_jobs; 47 with fs.recalculate;
             // 50 with SPEC-0101 fs.list_chunk_sets, fs.list_chunks, fs.get_chunk;
             // 52 with fs.create_chunk_set and fs.delete_chunk_set; 53 with SPEC-0104 fs.get_document_structure.
-            53,
+            54,
             "fs.* tools",
         );
     }

@@ -1,7 +1,7 @@
 # fsa: File System Agentic (Rust)
 
 A **streamable-HTTP MCP server** exposing a **simulated multi-project filesystem**:
-148 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
+152 `fs.*` / `admin.*` / `git.*` tools, a parallel REST data plane at `/api/fs` with
 OpenAPI docs, and an optional Git HTTP smart server. Runs from a single binary with
 **no external service by default**.
 
@@ -593,9 +593,41 @@ with one from another; changing only the chunk fields does not. A project with n
 server default text model (`source: server_default`), else the `search.embedding` model
 (`source: configuration`); the image model has no fallback. A model a profile names cannot be deleted
 (`model '<name>' is used by <n> project(s)`). The profile is shown, read only, on `/app/models`, is kept
-by `fsa migrate`, and every change is recorded (field names only). This part stores and shows the
-profile; building vectors, search and the default chunk set will use it in the following parts.
+by `fsa migrate`, and every change is recorded (field names only). The text and image models are read
+by the vector engines (next section); search and the default chunk set will use the chunk fields in the
+following parts.
 Tests: `cargo test -p fsa-core --lib -- e2e_0107_`.
+
+## Vectors at the project dimension and their recalculation
+
+(SPEC-0108.) The vectors of a project are computed with the models of its profile and stored at the width
+(dimension) of those models, in PostgreSQL (pgvector, one table per kind and dimension, created on first use;
+the table `search_chunks` keeps the width of `search.embedding.dimensions`) and in SQLite (sqlite-vec, one
+table per width in the project's in memory store). Two projects with different models and widths work side by
+side. A project with no text model embeds with the server default model, else `search.embedding`. An embedding
+that has the wrong length, is a zero vector or holds a value that is not finite is refused and nothing is stored
+for the file. Image vectors are computed with the image model of the profile for the pictures kept from a
+converted document, the picture sent as a `data:` URI in the `input` of the same OpenAI compatible `/embeddings`
+call; they are built by a file rebuild and by a recalculation.
+
+* `fs.get_vectors(mount_id, path, kind?, after?, limit?)` (member): the vectors of a file with the text each
+  was computed from, `kind` `text` (default) or `image`, 20 per page (1 to 100), `next_after` when more follow.
+* `admin.recalculate_start(project_id, path?)` (owner or administrator): a `vectors` job over every file of the
+  project, or over one file; one runs per project (the same scope again answers the running job with
+  `already_running`, another scope is refused). `admin.recalculate_status(project_id)` (member or
+  administrator) reads the running job, else the last finished one, with `progress {done, total}` in files and
+  `vectors_out_of_date`. `admin.recalculate_cancel(project_id)` stops it after its current file.
+* The marker `vectors_out_of_date` is set by a change of the text or image model of a profile and by
+  `admin.update_model` changing the dimension or the name of a model a profile names (only those projects). It
+  is cleared only when a recalculation of the whole project ends `done` and no model changed meanwhile; a
+  document recalculation, a failed or cancelled job leaves it. A recalculation never wipes first: a cancel
+  leaves old and new vectors, never none. A file edited while the job reads it is indexed from its new
+  content. After a restart the interrupted job ends `failed` (`interrupted by a server restart`) and starts again.
+* The index mode must be `rag` or `both`; with `bm25` or `none` the three admin tools and `fs.get_vectors`
+  answer `ERR_NOT_SUPPORTED`.
+
+Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0108_` (the `rag` feature compiles the vector
+engines and their tests); the PostgreSQL ones need `MCPFS_TEST_PG_DSN` on a pgvector server (`.agent_docs/testing.md`).
 
 ## Project quota enforcement
 
@@ -698,7 +730,7 @@ store behaves identically on both. See
 
 ## Interactive CLI agent
 
-`crates/agent` builds an `agent` binary that drives the 148 tools through an LLM. It is a
+`crates/agent` builds an `agent` binary that drives the 152 tools through an LLM. It is a
 **client**, so it exercises the real MCP wire protocol the way any other client would.
 
 ```bash

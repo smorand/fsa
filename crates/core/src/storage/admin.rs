@@ -89,6 +89,8 @@ pub fn schema() -> SchemaSet {
                     Column::new("ended_at", ColumnType::Text),
                     Column::new("reason", ColumnType::Text),
                     Column::new("set_id", ColumnType::Text),
+                    Column::new("progress_done", ColumnType::BigInt),
+                    Column::new("progress_total", ColumnType::BigInt),
                 ],
                 vec!["job_id"],
             )
@@ -231,6 +233,21 @@ pub fn schema() -> SchemaSet {
         table: "derived_job",
         column: "set_id",
         ty: ColumnType::Text,
+        not_null: false,
+        default: "NULL",
+    })
+    // SPEC-0108: files done and files to do of a `vectors` job.
+    .column_migration(ColumnMigration {
+        table: "derived_job",
+        column: "progress_done",
+        ty: ColumnType::BigInt,
+        not_null: false,
+        default: "NULL",
+    })
+    .column_migration(ColumnMigration {
+        table: "derived_job",
+        column: "progress_total",
+        ty: ColumnType::BigInt,
         not_null: false,
         default: "NULL",
     })

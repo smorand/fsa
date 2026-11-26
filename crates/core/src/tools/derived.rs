@@ -248,6 +248,10 @@ pub(crate) async fn recalculate(
     match kind {
         JobKind::SearchIndex => recalculate_search_index(state, mount_id, &path, set_id).await,
         JobKind::Chunks => recalculate_chunks(state, &client, mount_id, &path, set_id).await,
+        // Never parsed from the argument: `admin.recalculate_start` owns this kind.
+        JobKind::Vectors => {
+            Err(ToolError::invalid_argument("kind must be 'search_index' or 'chunks'"))
+        }
     }
 }
 

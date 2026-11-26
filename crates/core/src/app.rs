@@ -155,6 +155,8 @@ pub(crate) async fn build_with_env(
     if let Some(scheduler) = search.as_ref().and_then(|s| s.scheduler()) {
         admin.set_project_gone_hook(scheduler.project_hook());
         scheduler.recover().await.map_err(|e| anyhow::anyhow!("rebuild recovery failed: {e}"))?;
+        // A recalculation the restart cut short starts again (SPEC-0108 FR-NEW-016).
+        scheduler.resume_vectors().await;
     }
 
     // The sets of a soft deleted project go whatever the index mode and even

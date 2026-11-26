@@ -27,11 +27,33 @@ pub struct EmbedTarget {
     pub bearer: Option<SecretText>,
 }
 
+/// Where one project embeds and at which width (SPEC-0108 FR-NEW-001).
+#[derive(Debug, Clone)]
+pub struct ProjectTarget {
+    pub target: EmbedTarget,
+    /// The width the model declares; `None` is the platform setting
+    /// (`search.embedding.dimensions`), which the backend knows.
+    pub dimension: Option<u32>,
+}
+
 /// The source of the embedding target, asked once per index or query call so a
 /// registry change applies at once (DEC-007: no cache).
 #[async_trait::async_trait]
 pub trait EmbedTargets: Send + Sync {
     async fn target(&self) -> Result<EmbedTarget>;
+
+    /// The text target of one project: its profile model, else [`Self::target`]
+    /// at the platform width. The default keeps every source that knows no
+    /// profile as it was.
+    async fn target_for(&self, _project: &str) -> Result<ProjectTarget> {
+        Ok(ProjectTarget { target: self.target().await?, dimension: None })
+    }
+
+    /// The image target of one project: its image model, `None` when the profile
+    /// names none (an image has no fallback).
+    async fn image_target_for(&self, _project: &str) -> Result<Option<ProjectTarget>> {
+        Ok(None)
+    }
 }
 
 /// The YAML block as the target: the endpoint is the full URL, as before the
@@ -96,9 +118,53 @@ pub async fn embed(client: &Client, target: &EmbedTarget, text: &str) -> Result<
     Ok(floats)
 }
 
+/// The refusal of an embedding the stores cannot hold (SPEC-0108 FR-NEW-003):
+/// a length other than the width in force, a zero vector (its cosine distance is
+/// undefined) or a value that is not finite. Nothing is stored for the file.
+pub fn check_vector(v: &[f32], dimension: u32) -> Result<()> {
+    if v.len() != dimension as usize {
+        return Err(ToolError::internal(format!(
+            "embedding has {} values, the model declares {dimension}",
+            v.len()
+        )));
+    }
+    if v.iter().any(|x| !x.is_finite()) {
+        return Err(ToolError::internal("embedding holds a value that is not a finite number"));
+    }
+    if v.iter().all(|x| *x == 0.0) {
+        return Err(ToolError::internal("embedding is a zero vector"));
+    }
+    Ok(())
+}
+
+/// [`embed`] then [`check_vector`] at `dimension`.
+pub async fn embed_checked(
+    client: &Client,
+    target: &EmbedTarget,
+    text: &str,
+    dimension: u32,
+) -> Result<Vec<f32>> {
+    let v = embed(client, target, text).await?;
+    check_vector(&v, dimension)?;
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_vector_refuses_the_unusable() {
+        assert!(check_vector(&[0.1, 0.2], 2).is_ok());
+        for (v, text) in [
+            (vec![0.1], "embedding has 1 values, the model declares 2"),
+            (vec![0.0, 0.0], "embedding is a zero vector"),
+            (vec![f32::NAN, 1.0], "embedding holds a value that is not a finite number"),
+            (vec![f32::INFINITY, 1.0], "embedding holds a value that is not a finite number"),
+        ] {
+            assert!(check_vector(&v, 2).unwrap_err().to_string().contains(text), "{text}");
+        }
+    }
 
     /// A token in the query string of an endpoint must not reach the error text.
     #[tokio::test]

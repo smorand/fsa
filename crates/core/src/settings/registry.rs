@@ -24,6 +24,13 @@ pub(super) fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// The value of the out of date marker: milliseconds, so two changes of one
+/// second hold two values and a recalculation that compares the marker it read
+/// with the one stored cannot clear a change it did not see (SPEC-0108 DEC-006).
+pub(super) fn marker_now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn invalid(text: impl Into<String>) -> ToolError {
     ToolError::invalid_argument(text)
 }
@@ -503,6 +510,12 @@ impl Registry {
         let at = now();
         let model = Model { name, dimension, max_input_tokens, updated_at: at.clone(), ..cur };
         SettingsStore::update_model(&mut tx, &model).await?;
+        // A vector made with another width or another model name is no longer the
+        // one the model gives (SPEC-0108 DEC-004): its projects read out of date.
+        if fields.iter().any(|f| f == "dimension" || f == "name") {
+            SettingsStore::mark_model_projects_stale(&mut tx, &model.model_id, &marker_now())
+                .await?;
+        }
         self.record(&mut tx, person, "update_model", Target::model(&model), fields, at).await?;
         tx.commit().await?;
         Ok(model)
@@ -700,6 +713,28 @@ pub struct RegistryTargets {
 }
 
 impl RegistryTargets {
+    /// The `url` (endpoint plus `suffix`) and decrypted bearer of a model's provider.
+    fn target_of(
+        store: &SettingsStore,
+        model: &Model,
+        row: &super::store::ProviderRow,
+        suffix: &str,
+    ) -> Result<(String, String, Option<SecretText>)> {
+        let bearer = match (row.provider.auth_scheme.as_str(), &row.secret_enc) {
+            (AUTH_BEARER, Some(blob)) => {
+                Some(secrets::decrypt(store.key(), blob).ok_or_else(|| {
+                    ToolError::internal(format!(
+                        "the secret of provider '{}' cannot be read",
+                        row.provider.name
+                    ))
+                })?)
+            }
+            _ => None,
+        };
+        let url = format!("{}{suffix}", row.provider.endpoint.trim_end_matches('/'));
+        Ok((url, model.name.clone(), bearer))
+    }
+
     /// The default model of `kind` with its provider's `url` (endpoint plus
     /// `suffix`) and decrypted bearer, or `None` when the kind has no default.
     async fn default_of(
@@ -714,19 +749,29 @@ impl RegistryTargets {
         let Some((store, (model, row))) = found else {
             return Ok(None);
         };
-        let bearer = match (row.provider.auth_scheme.as_str(), &row.secret_enc) {
-            (AUTH_BEARER, Some(blob)) => {
-                Some(secrets::decrypt(store.key(), blob).ok_or_else(|| {
-                    ToolError::internal(format!(
-                        "the secret of provider '{}' cannot be read",
-                        row.provider.name
-                    ))
-                })?)
-            }
-            _ => None,
+        Self::target_of(&store, &model, &row, suffix).map(Some)
+    }
+
+    /// The model a project's profile names for `kind`, as a target of its
+    /// declared width; `None` when the profile names none (SPEC-0108 FR-NEW-001).
+    async fn profile_model(
+        &self,
+        project: &str,
+        kind: &str,
+    ) -> Result<Option<crate::search::embedding::ProjectTarget>> {
+        let Some(store) = self.admin.settings() else { return Ok(None) };
+        let Some(profile) = store.profile_of(project).await? else { return Ok(None) };
+        let id = match kind {
+            "image_embedding" => profile.image_model_id,
+            _ => profile.text_model_id,
         };
-        let url = format!("{}{suffix}", row.provider.endpoint.trim_end_matches('/'));
-        Ok(Some((url, model.name, bearer)))
+        let Some(id) = id else { return Ok(None) };
+        let Some((model, row)) = store.model_with_provider(&id).await? else { return Ok(None) };
+        let (url, name, bearer) = Self::target_of(&store, &model, &row, "/embeddings")?;
+        Ok(Some(crate::search::embedding::ProjectTarget {
+            target: crate::search::embedding::EmbedTarget { url, model: name, bearer },
+            dimension: model.dimension.and_then(|d| u32::try_from(d).ok()),
+        }))
     }
 }
 
@@ -739,6 +784,23 @@ impl crate::search::embedding::EmbedTargets for RegistryTargets {
             }
             None => crate::search::embedding::StaticTargets::target_of(&self.fallback),
         })
+    }
+
+    async fn target_for(&self, project: &str) -> Result<crate::search::embedding::ProjectTarget> {
+        match self.profile_model(project, "text_embedding").await? {
+            Some(found) => Ok(found),
+            None => Ok(crate::search::embedding::ProjectTarget {
+                target: self.target().await?,
+                dimension: None,
+            }),
+        }
+    }
+
+    async fn image_target_for(
+        &self,
+        project: &str,
+    ) -> Result<Option<crate::search::embedding::ProjectTarget>> {
+        self.profile_model(project, "image_embedding").await
     }
 }
 

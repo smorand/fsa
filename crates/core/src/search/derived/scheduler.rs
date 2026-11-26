@@ -13,6 +13,10 @@
 //!
 //! Only `tokio::time` is used for due times, so a test can pause the clock.
 
+mod vectors;
+
+pub use vectors::WHOLE_PROJECT;
+
 use super::{Job, JobCause, JobKind, JobState, JobStore};
 use crate::chunking::ChunkDefaults;
 use crate::errors::ToolError;
@@ -110,6 +114,14 @@ pub struct Scheduler {
     origin_wall: chrono::DateTime<chrono::Utc>,
     origin: Instant,
     dispatcher: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The running recalculation of each project, at most one (SPEC-0108 DEC-005).
+    vector_runs: std::sync::Mutex<HashMap<String, vectors::VectorRun>>,
+    /// The file a recalculation is reading, per project, with its stale flag
+    /// (DEC-007): a change of that file raises it.
+    vector_inflight: std::sync::Mutex<HashMap<String, (String, Arc<AtomicBool>)>>,
+    /// The scopes of the recalculations a restart interrupted, started again by
+    /// [`Self::resume_vectors`] (FR-NEW-016).
+    vector_resume: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl Scheduler {
@@ -132,6 +144,9 @@ impl Scheduler {
             origin_wall: chrono::Utc::now(),
             origin: Instant::now(),
             dispatcher: std::sync::Mutex::new(None),
+            vector_runs: std::sync::Mutex::new(HashMap::new()),
+            vector_inflight: std::sync::Mutex::new(HashMap::new()),
+            vector_resume: std::sync::Mutex::new(Vec::new()),
         });
         let handle = tokio::spawn(dispatch(Arc::downgrade(&s), s.wake.clone()));
         *s.dispatcher.lock().expect("dispatcher mutex") = Some(handle);
@@ -163,6 +178,11 @@ impl Scheduler {
     /// per interrupted job.
     pub async fn recover(&self) -> crate::errors::Result<()> {
         let rows = self.store.load_unfinished(None).await?;
+        // A recalculation holds no slot: it ends failed and its scope starts again
+        // (FR-NEW-016), never a search index rebuild of its `/` path.
+        let (vector_rows, rows): (Vec<Job>, Vec<Job>) =
+            rows.into_iter().partition(|j| j.kind == JobKind::Vectors);
+        self.recover_vectors(vector_rows).await?;
         let (running, waiting): (Vec<Job>, Vec<Job>) =
             rows.into_iter().partition(|j| j.state == JobState::Running);
         let mut chunk_rows: Vec<Job> = Vec::new();
@@ -216,6 +236,7 @@ impl Scheduler {
     /// without a row write; a running job of the key becomes stale. The caller
     /// has checked that the project's index mode is active.
     pub async fn schedule(&self, project: &str, path: &str, cause: JobCause) {
+        self.mark_inflight_stale(project, path);
         let key = (project.to_string(), path.to_string(), JobKind::SearchIndex);
         let due = Instant::now() + self.delay;
         let mut slots = self.slots.lock().await;
@@ -324,6 +345,7 @@ impl Scheduler {
     /// before the caller clears the entries, so a commit the guard let through
     /// is cleared by the rebuild's epilogue (DEC-010). Cost: one row delete.
     pub async fn forget_path(&self, project: &str, path: &str) {
+        self.mark_inflight_stale(project, path);
         let mut slots = self.slots.lock().await;
         self.forget_locked(&mut slots, project, path).await;
     }
@@ -362,6 +384,9 @@ impl Scheduler {
     /// change whose new mode is active, as the full index rewrites every path.
     /// Cost: one pass over the slots, one row delete.
     pub async fn forget_project(&self, project: &str, clear_entries_at_end: bool) {
+        // A recalculation of a project that is gone, or whose entries were just
+        // wiped, must not write its vectors back (SPEC-0108).
+        self.cancel_vectors(project);
         let mut slots = self.slots.lock().await;
         let keys: Vec<Key> = slots.keys().filter(|k| k.0 == project).cloned().collect();
         for key in keys {
@@ -613,6 +638,23 @@ impl Scheduler {
     /// sets and entries unless it is a converted document. Both are a finished
     /// rebuild (`Ok(Some(0))`).
     async fn rebuild_file(
+        &self,
+        project: &str,
+        path: &str,
+        guard: &(dyn Fn() -> bool + Send + Sync),
+    ) -> crate::errors::Result<Option<usize>> {
+        let text = self.rebuild_text(project, path, guard).await?;
+        if text.is_none() {
+            return Ok(None);
+        }
+        // The images of a converted document follow its text (SPEC-0108).
+        match self.rebuild_images(project, path, guard).await? {
+            Some(_) => Ok(text),
+            None => Ok(None),
+        }
+    }
+
+    async fn rebuild_text(
         &self,
         project: &str,
         path: &str,

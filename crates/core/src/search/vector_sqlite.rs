@@ -1,31 +1,129 @@
 //! sqlite-vec vector store backend.
 //!
-//! Stores embeddings in a `vec0` virtual table alongside a companion metadata
-//! table. The sqlite-vec extension is registered once at process startup via
-//! `sqlite3_auto_extension` (see `storage/sqlite.rs`).
+//! Stores embeddings in `vec0` virtual tables alongside companion metadata
+//! tables, per project, in memory. The sqlite-vec extension is registered once
+//! at process startup via `sqlite3_auto_extension` (see `storage/sqlite.rs`).
 //!
-//! Each `index_chunks_checked` call embeds every chunk via the configured embedding
-//! endpoint before storing the resulting float vector. `query_vector` likewise
-//! embeds the query string before running the KNN `MATCH` scan, so callers
-//! never need to produce their own vectors.
+//! Each kind (text chunks, images) has its own pair of tables, created at the
+//! width of the project's model on the first write (SPEC-0108 DEC-001). A write
+//! at another width replaces the tables, since vectors of two widths cannot be
+//! compared; a query at another width finds nothing and changes nothing.
+//!
+//! Each `index_chunks_checked` call embeds every chunk via the project's
+//! embedding endpoint before storing the resulting float vector.
+//! `query_vector` likewise embeds the query string before running the KNN
+//! `MATCH` scan, so callers never need to produce their own vectors.
 
 #![cfg(feature = "rag")]
 
 use crate::errors::{Result, ToolError};
-use crate::search::{IndexStats, IndexedChunk, SearchBackend, SearchResult, embedding};
+use crate::search::{
+    ImageInput, IndexStats, IndexedChunk, SearchBackend, SearchResult, StoredVector, VectorKind,
+    VectorPage, embedding,
+};
 use async_trait::async_trait;
 use rusqlite::{Connection, params};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+/// The metadata table of a kind and the name of its `vec0` table at a width.
+fn names(kind: VectorKind, dimension: u32) -> (&'static str, String) {
+    match kind {
+        VectorKind::Text => ("search_vec_meta", format!("search_vec_{dimension}")),
+        VectorKind::Image => ("search_img_meta", format!("search_img_{dimension}")),
+    }
+}
+
+fn meta_table(kind: VectorKind) -> &'static str {
+    names(kind, 0).0
+}
 
 /// One open connection per volume, created on first use.
 struct VolumeConn {
     conn: Connection,
+    /// The widths each kind has a `vec0` table for, created by the first write at
+    /// that width. Vectors of two widths cannot be compared, so each width has its
+    /// own table and a query reads the one of the width in force.
+    text_dims: BTreeSet<u32>,
+    image_dims: BTreeSet<u32>,
+}
+
+impl VolumeConn {
+    fn dims(&self, kind: VectorKind) -> &BTreeSet<u32> {
+        match kind {
+            VectorKind::Text => &self.text_dims,
+            VectorKind::Image => &self.image_dims,
+        }
+    }
+
+    /// Makes sure the `vec0` table of `kind` at `dimension` exists.
+    fn ensure(&mut self, kind: VectorKind, dimension: u32) -> Result<()> {
+        if self.dims(kind).contains(&dimension) {
+            return Ok(());
+        }
+        let (_, vec) = names(kind, dimension);
+        self.conn
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS {vec} USING vec0(embedding float[{dimension}]);"
+            ))
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: create tables: {e}")))?;
+        match kind {
+            VectorKind::Text => self.text_dims.insert(dimension),
+            VectorKind::Image => self.image_dims.insert(dimension),
+        };
+        Ok(())
+    }
+
+    /// Removes the rows of `path` (every row of the volume when `None`) from the
+    /// tables of `kind` at every width; the number of metadata rows removed.
+    fn purge(&self, kind: VectorKind, volume_id: &str, path: Option<&str>) -> Result<usize> {
+        let meta = meta_table(kind);
+        let (clause, p): (&str, Vec<&str>) = match path {
+            Some(path) => ("volume_id=?1 AND path=?2", vec![volume_id, path]),
+            None => ("volume_id=?1", vec![volume_id]),
+        };
+        let count: i64 = self
+            .conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {meta} WHERE {clause}"),
+                rusqlite::params_from_iter(&p),
+                |row| row.get(0),
+            )
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: count: {e}")))?;
+        // The vec0 rows are keyed by the meta rowid, so they go first: once the
+        // meta rows are gone the subquery can no longer find them.
+        for dimension in self.dims(kind) {
+            let (_, vec) = names(kind, *dimension);
+            self.conn
+                .execute(
+                    &format!(
+                        "DELETE FROM {vec} WHERE rowid IN \
+                         (SELECT rowid FROM {meta} WHERE {clause} AND dim={dimension})"
+                    ),
+                    rusqlite::params_from_iter(&p),
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
+        }
+        self.conn
+            .execute(&format!("DELETE FROM {meta} WHERE {clause}"), rusqlite::params_from_iter(&p))
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+}
+
+/// The little endian bytes of a vector, the `vec0` wire form.
+fn to_bytes(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+fn from_bytes(b: &[u8]) -> Vec<f32> {
+    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// Vector search backend using sqlite-vec virtual tables.
 pub struct SqliteVecBackend {
+    /// `search.embedding.dimensions`: the width of a project that names no model.
     dimensions: u32,
     tantivy_dir: PathBuf,
     /// Shared HTTP client for embedding calls.
@@ -69,23 +167,104 @@ impl SqliteVecBackend {
             let _ = sqlite_vec::sqlite3_vec_init as *const ();
         }
 
-        conn.execute_batch(&format!(
+        // Only the metadata exists up front: the `vec0` tables take their width
+        // from the first write of the kind.
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS search_vec_meta (
                rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
                volume_id TEXT NOT NULL,
                path      TEXT NOT NULL,
                chunk_idx INTEGER NOT NULL,
-               chunk_text TEXT NOT NULL
+               chunk_text TEXT NOT NULL,
+               dim       INTEGER NOT NULL
              );
-             CREATE VIRTUAL TABLE IF NOT EXISTS search_vec
-               USING vec0(embedding float[{dims}]);",
-            dims = self.dimensions
-        ))
+             CREATE TABLE IF NOT EXISTS search_img_meta (
+               rowid     INTEGER PRIMARY KEY AUTOINCREMENT,
+               volume_id TEXT NOT NULL,
+               path      TEXT NOT NULL,
+               chunk_idx INTEGER NOT NULL,
+               chunk_text TEXT NOT NULL,
+               dim       INTEGER NOT NULL
+             );",
+        )
         .map_err(|e| ToolError::internal(format!("sqlite-vec: create tables: {e}")))?;
 
-        let vc = Arc::new(Mutex::new(VolumeConn { conn }));
+        let vc = Arc::new(Mutex::new(VolumeConn {
+            conn,
+            text_dims: BTreeSet::new(),
+            image_dims: BTreeSet::new(),
+        }));
         guard.insert(volume_id.to_string(), vc.clone());
         Ok(vc)
+    }
+
+    /// Replaces the rows of `path` in the tables of `kind` by `rows`, in one
+    /// transaction (an error returns before the commit and the drop rolls back).
+    async fn store(
+        &self,
+        kind: VectorKind,
+        volume_id: &str,
+        path: &str,
+        dimension: Option<u32>,
+        rows: Vec<(u32, String, Vec<f32>)>,
+    ) -> Result<usize> {
+        let vc = self.get_or_open(volume_id)?;
+        let vol = volume_id.to_string();
+        let path_owned = path.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut guard =
+                vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
+            if let Some(d) = dimension {
+                guard.ensure(kind, d)?;
+            }
+            let meta = meta_table(kind);
+            // Idempotent: the rows of this path at every width go first, so a
+            // model change leaves no vector of the old width (FR-NEW-004).
+            let tx = guard
+                .conn
+                .unchecked_transaction()
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: begin: {e}")))?;
+            for d in guard.dims(kind) {
+                let (_, vec) = names(kind, *d);
+                tx.execute(
+                    &format!(
+                        "DELETE FROM {vec} WHERE rowid IN \
+                         (SELECT rowid FROM {meta} WHERE volume_id=?1 AND path=?2 AND dim={d})"
+                    ),
+                    params![vol, path_owned],
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
+            }
+            tx.execute(
+                &format!("DELETE FROM {meta} WHERE volume_id=?1 AND path=?2"),
+                params![vol, path_owned],
+            )
+            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
+            for (number, text, vector) in &rows {
+                let Some(d) = dimension else { break };
+                let (_, vec) = names(kind, d);
+                // Insert metadata row first; its auto-increment rowid is used
+                // to link the vec0 table row.
+                tx.execute(
+                    &format!(
+                        "INSERT INTO {meta} (volume_id, path, chunk_idx, chunk_text, dim) \
+                         VALUES (?1, ?2, ?3, ?4, ?5)"
+                    ),
+                    params![vol, path_owned, i64::from(*number), text, i64::from(d)],
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert meta: {e}")))?;
+                let meta_rowid = tx.last_insert_rowid();
+                tx.execute(
+                    &format!("INSERT INTO {vec} (rowid, embedding) VALUES (?1, ?2)"),
+                    params![meta_rowid, to_bytes(vector)],
+                )
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert vec: {e}")))?;
+            }
+            tx.commit().map_err(|e| ToolError::internal(format!("sqlite-vec: commit: {e}")))?;
+            Ok(rows.len())
+        })
+        .await
+        .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
     }
 }
 
@@ -98,81 +277,117 @@ impl SearchBackend for SqliteVecBackend {
         chunks: &[IndexedChunk],
         still_current: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<usize>> {
-        let vc = self.get_or_open(volume_id)?;
-        let chunks = chunks.to_vec();
-        let n = chunks.len();
-        let vol = volume_id.to_string();
-        let path_owned = path.to_string();
-
         // Compute embeddings before entering the blocking closure: embedding
         // calls are async and must not be made from within spawn_blocking.
-        let mut embeddings: Vec<Vec<f32>> = Vec::with_capacity(chunks.len());
-        let target = self.targets.target().await?;
-        for chunk in &chunks {
-            let emb = embedding::embed(&self.client, &target, &chunk.text).await?;
-            embeddings.push(emb);
+        let project = self.targets.target_for(volume_id).await?;
+        let dimension = project.dimension.unwrap_or(self.dimensions);
+        let mut rows = Vec::with_capacity(chunks.len());
+        for chunk in chunks {
+            let emb =
+                embedding::embed_checked(&self.client, &project.target, &chunk.text, dimension)
+                    .await?;
+            rows.push((chunk.number, chunk.text.clone(), emb));
         }
 
         // After the embeddings, before the delete: a refusal keeps the old rows.
         if !still_current() {
             return Ok(None);
         }
+        let n = self.store(VectorKind::Text, volume_id, path, Some(dimension), rows).await?;
+        Ok(Some(n))
+    }
 
+    async fn index_images_checked(
+        &self,
+        volume_id: &str,
+        path: &str,
+        images: &[ImageInput],
+        still_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<Option<usize>> {
+        let project = self.targets.image_target_for(volume_id).await?;
+        let mut rows = Vec::new();
+        let mut dimension = None;
+        if let Some(project) = project.filter(|_| !images.is_empty()) {
+            let d = project.dimension.unwrap_or(self.dimensions);
+            dimension = Some(d);
+            for image in images {
+                let v = embedding::embed_checked(&self.client, &project.target, &image.data_uri, d)
+                    .await?;
+                rows.push((image.number, image.text.clone(), v));
+            }
+        }
+        if !still_current() {
+            return Ok(None);
+        }
+        let n = self.store(VectorKind::Image, volume_id, path, dimension, rows).await?;
+        Ok(Some(n))
+    }
+
+    async fn embeds_images(&self, volume_id: &str) -> Result<bool> {
+        Ok(self.targets.image_target_for(volume_id).await?.is_some())
+    }
+
+    async fn vectors_of(
+        &self,
+        volume_id: &str,
+        path: &str,
+        kind: VectorKind,
+        after: u32,
+        limit: usize,
+    ) -> Result<VectorPage> {
+        let vc = self.get_or_open(volume_id)?;
+        let vol = volume_id.to_string();
+        let path_owned = path.to_string();
         tokio::task::spawn_blocking(move || {
             let guard =
                 vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
-
-            // One transaction: an error returns before commit and the drop rolls
-            // the delete back, so the old chunks survive a half replacement.
-            let tx = guard
+            let empty = VectorPage { dimension: None, vectors: Vec::new(), next_after: None };
+            let meta = meta_table(kind);
+            // The width the path's rows were stored at (one: a write replaces all).
+            let dimension: Option<i64> = guard
                 .conn
-                .unchecked_transaction()
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: begin: {e}")))?;
-
-            // Idempotent: remove any existing rows for this path before re-inserting.
-            tx.execute(
-                "DELETE FROM search_vec WHERE rowid IN \
-                 (SELECT rowid FROM search_vec_meta WHERE volume_id=?1 AND path=?2)",
-                params![vol, path_owned],
-            )
-            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
-            tx.execute(
-                "DELETE FROM search_vec_meta WHERE volume_id=?1 AND path=?2",
-                params![vol, path_owned],
-            )
-            .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
-
-            for (chunk, embedding) in chunks.iter().zip(embeddings.iter()) {
-                // Insert metadata row first; its auto-increment rowid is used
-                // to link the vec0 table row.
-                tx.execute(
-                    "INSERT INTO search_vec_meta (volume_id, path, chunk_idx, chunk_text) \
-                         VALUES (?1, ?2, ?3, ?4)",
-                    params![vol, path_owned, i64::from(chunk.number), chunk.text],
+                .query_row(
+                    &format!("SELECT dim FROM {meta} WHERE volume_id=?1 AND path=?2 LIMIT 1"),
+                    params![vol, path_owned],
+                    |r| r.get(0),
                 )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert meta: {e}")))?;
-
-                let meta_rowid = tx.last_insert_rowid();
-
-                // Convert f32 slice to raw bytes for the vec0 MATCH interface.
-                //
-                // SAFETY: f32 is a plain-data type with no padding; reinterpreting
-                // its memory as bytes is always valid.
-                let bytes: &[u8] = unsafe {
-                    std::slice::from_raw_parts(
-                        embedding.as_ptr().cast::<u8>(),
-                        embedding.len() * std::mem::size_of::<f32>(),
-                    )
-                };
-
-                tx.execute(
-                    "INSERT INTO search_vec (rowid, embedding) VALUES (?1, ?2)",
-                    params![meta_rowid, bytes],
+                .ok();
+            let Some(dimension) = dimension.and_then(|d| u32::try_from(d).ok()) else {
+                return Ok(empty);
+            };
+            let (_, vec) = names(kind, dimension);
+            let mut stmt = guard
+                .conn
+                .prepare(&format!(
+                    "SELECT m.chunk_idx, m.chunk_text, v.embedding FROM {meta} m \
+                     JOIN {vec} v ON v.rowid = m.rowid \
+                     WHERE m.volume_id=?1 AND m.path=?2 AND m.chunk_idx>?3 \
+                     ORDER BY m.chunk_idx LIMIT ?4"
+                ))
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: prepare: {e}")))?;
+            let mut vectors: Vec<StoredVector> = stmt
+                .query_map(
+                    params![
+                        vol,
+                        path_owned,
+                        i64::from(after),
+                        i64::try_from(limit + 1).unwrap_or(i64::MAX)
+                    ],
+                    |row| {
+                        Ok(StoredVector {
+                            number: u32::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                            text: row.get(1)?,
+                            vector: from_bytes(&row.get::<_, Vec<u8>>(2)?),
+                        })
+                    },
                 )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: insert vec: {e}")))?;
-            }
-            tx.commit().map_err(|e| ToolError::internal(format!("sqlite-vec: commit: {e}")))?;
-            Ok(Some(n))
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: read vectors: {e}")))?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|e| ToolError::internal(format!("sqlite-vec: read vectors: {e}")))?;
+            let more = vectors.len() > limit;
+            vectors.truncate(limit);
+            let next_after = if more { vectors.last().map(|v| v.number) } else { None };
+            Ok(VectorPage { dimension: Some(dimension), vectors, next_after })
         })
         .await
         .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
@@ -182,34 +397,12 @@ impl SearchBackend for SqliteVecBackend {
         let vc = self.get_or_open(volume_id)?;
         let vol = volume_id.to_string();
         let path_owned = path.to_string();
-
         tokio::task::spawn_blocking(move || {
             let guard =
                 vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
-            let count: usize = guard
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) FROM search_vec_meta WHERE volume_id=?1 AND path=?2",
-                    params![vol, path_owned],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_or(0, |n| usize::try_from(n).unwrap_or(0));
-            guard
-                .conn
-                .execute(
-                    "DELETE FROM search_vec WHERE rowid IN \
-                     (SELECT rowid FROM search_vec_meta WHERE volume_id=?1 AND path=?2)",
-                    params![vol, path_owned],
-                )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete vec: {e}")))?;
-            guard
-                .conn
-                .execute(
-                    "DELETE FROM search_vec_meta WHERE volume_id=?1 AND path=?2",
-                    params![vol, path_owned],
-                )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete meta: {e}")))?;
-            Ok(count)
+            let n = guard.purge(VectorKind::Text, &vol, Some(&path_owned))?;
+            guard.purge(VectorKind::Image, &vol, Some(&path_owned))?;
+            Ok(n)
         })
         .await
         .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
@@ -218,33 +411,12 @@ impl SearchBackend for SqliteVecBackend {
     async fn delete_all(&self, volume_id: &str) -> Result<usize> {
         let vc = self.get_or_open(volume_id)?;
         let vol = volume_id.to_string();
-
         tokio::task::spawn_blocking(move || {
             let guard =
                 vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
-            let count: usize = guard
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) FROM search_vec_meta WHERE volume_id=?1",
-                    params![vol],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_or(0, |n| usize::try_from(n).unwrap_or(0));
-            // The vec0 rows are keyed by the meta rowid, so they go first: once
-            // the meta rows are gone the subquery can no longer find them.
-            guard
-                .conn
-                .execute(
-                    "DELETE FROM search_vec WHERE rowid IN \
-                     (SELECT rowid FROM search_vec_meta WHERE volume_id=?1)",
-                    params![vol],
-                )
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete all vec: {e}")))?;
-            guard
-                .conn
-                .execute("DELETE FROM search_vec_meta WHERE volume_id=?1", params![vol])
-                .map_err(|e| ToolError::internal(format!("sqlite-vec: delete all meta: {e}")))?;
-            Ok(count)
+            let n = guard.purge(VectorKind::Text, &vol, None)?;
+            guard.purge(VectorKind::Image, &vol, None)?;
+            Ok(n)
         })
         .await
         .map_err(|e| ToolError::internal(format!("sqlite-vec task join: {e}")))?
@@ -268,8 +440,10 @@ impl SearchBackend for SqliteVecBackend {
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         // Embed the query text before entering the blocking section.
-        let target = self.targets.target().await?;
-        let embedding = embedding::embed(&self.client, &target, query).await?;
+        let project = self.targets.target_for(volume_id).await?;
+        let dimension = project.dimension.unwrap_or(self.dimensions);
+        let embedding =
+            embedding::embed_checked(&self.client, &project.target, query, dimension).await?;
 
         let vc = self.get_or_open(volume_id)?;
         let vol = volume_id.to_string();
@@ -277,40 +451,36 @@ impl SearchBackend for SqliteVecBackend {
         tokio::task::spawn_blocking(move || {
             let guard =
                 vc.lock().map_err(|_| ToolError::internal("sqlite-vec conn mutex poisoned"))?;
-
-            // Convert embedding to raw bytes for the vec0 MATCH operator.
-            //
-            // SAFETY: f32 is a plain-data type with no padding.
-            let bytes: Vec<u8> = unsafe {
-                std::slice::from_raw_parts(
-                    embedding.as_ptr().cast::<u8>(),
-                    embedding.len() * std::mem::size_of::<f32>(),
-                )
-                .to_vec()
-            };
+            // No store of this width: nothing to find, and a read never rebuilds.
+            if !guard.text_dims.contains(&dimension) {
+                return Ok(Vec::new());
+            }
 
             let mut stmt = guard
                 .conn
-                .prepare(
+                .prepare(&format!(
                     "SELECT m.path, m.chunk_text, v.distance, m.chunk_idx \
-                     FROM search_vec v \
+                     FROM search_vec_{dimension} v \
                      JOIN search_vec_meta m ON m.rowid = v.rowid \
                      WHERE m.volume_id = ?1 \
                        AND v.embedding MATCH ?2 \
                        AND k = ?3 \
-                     ORDER BY v.distance",
-                )
+                     ORDER BY v.distance"
+                ))
                 .map_err(|e| ToolError::internal(format!("sqlite-vec: prepare: {e}")))?;
 
             let rows: Vec<SearchResult> = stmt
-                .query_map(params![vol, rusqlite::types::Value::Blob(bytes), top_k as i64], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, i64>(3)?,
-                    ))
-                })
+                .query_map(
+                    params![vol, rusqlite::types::Value::Blob(to_bytes(&embedding)), top_k as i64],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, f64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
                 .map_err(|e| ToolError::internal(format!("sqlite-vec: query: {e}")))?
                 .enumerate()
                 .filter_map(|(i, r)| {

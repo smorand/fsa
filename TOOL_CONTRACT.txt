@@ -143,6 +143,21 @@ admin.list_users
   params: (none)
   required: []
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+admin.recalculate_cancel
+  desc: Stop the running recalculation of a project after its current file; answers whether one was running (owner or platform admin).
+  params: project_id:string
+  required: ['project_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.recalculate_start
+  desc: Start the recalculation of the vectors of a project, or of one file when a path is given, with the models of its profile; one runs per project at a time; answers the job (owner or platform admin).
+  params: project_id:string, path:string=""
+  required: ['project_id']
+  annotations: destructiveHint=false, readOnlyHint=false, idempotentHint=true, openWorldHint=false
+admin.recalculate_status
+  desc: Read the running recalculation of a project, else the last finished one, with its progress in files, and whether the vectors are out of date (member or platform admin).
+  params: project_id:string
+  required: ['project_id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 admin.remove_member
   desc: Remove a person from a project (owner or platform admin).
   params: project_id:string, person:string
@@ -307,6 +322,11 @@ fs.get_table
   desc: Get one table kept from a document's last conversion, as Markdown or CSV.
   params: mount_id:string, path:string, id:string, format:string=null
   required: ['mount_id', 'path', 'id']
+  annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
+fs.get_vectors
+  desc: Read the vectors stored for a file, with the text each was computed from: its chunks (kind 'text') or the images of a converted document (kind 'image'), in number order, 20 per page by default.
+  params: mount_id:string, path:string, kind:string="text", after:integer=0, limit:integer=20
+  required: ['mount_id', 'path']
   annotations: readOnlyHint=true, idempotentHint=true, openWorldHint=false
 fs.glob
   desc: Find files by glob pattern, newest first (cap 100).
@@ -898,8 +918,12 @@ admin.list_users: {"users": [{"person": "admin@example.com", "is_admin": true}, 
 admin.list_members: {"project_id": "parity-probe", "members": [{"person": "admin@example.com", "role": "owner", "added_by": "admin@example.com"}]}
 admin.set_index_mode: {"project_id": "parity-probe", "index_mode": "bm25", "previous_mode": "none", "reindex_started": true}
 admin.get_index_mode: {"project_id": "parity-probe", "index_mode": "bm25"}
-admin.get_indexing_profile: {"project_id": "parity-probe", "chunking": {"strategy": "fixed"|"structural"|null, "settings": {"size_tokens": 512}, "filled": {"overlap_tokens": 0, "size_tokens": 512}|null, "source": "project"|"server_default"}, "text_model": <model view>|null, "image_model": <model view>|null, "vectors_out_of_date": false, "vectors_out_of_date_since": "2026-11-25T10:00:00Z"|null} (a model view is {"model_id": "mdl-0123456789ab"|null, "name": "qwen3-embedding-0.6b", "provider": "Local"|null, "kind": "text_embedding", "dimension": 1024, "source": "project"|"server_default"|"configuration"}; the text model falls back to the server default, then to search.embedding; the image model has no fallback)
+admin.get_indexing_profile: {"project_id": "parity-probe", "chunking": {"strategy": "fixed"|"structural"|null, "settings": {"size_tokens": 512}, "filled": {"overlap_tokens": 0, "size_tokens": 512}|null, "source": "project"|"server_default"}, "text_model": <model view>|null, "image_model": <model view>|null, "vectors_out_of_date": false, "vectors_out_of_date_since": "2026-11-25T10:00:00.123Z"|null} (a model view is {"model_id": "mdl-0123456789ab"|null, "name": "qwen3-embedding-0.6b", "provider": "Local"|null, "kind": "text_embedding", "dimension": 1024, "source": "project"|"server_default"|"configuration"}; the text model falls back to the server default, then to search.embedding; the image model has no fallback)
 admin.set_indexing_profile: the profile, as admin.get_indexing_profile (a change that leaves every field as it is writes and records nothing; changing a model sets vectors_out_of_date; admin.delete_model refuses a model a profile names)
+admin.recalculate_start: {"project_id": "proj", "job": {"job_id": "<uuid>", "path": "/", "kind": "vectors", "state": "running", "cause": "manual", "created_at": "2026-11-26T10:00:00Z", "progress": {"done": 0, "total": null}}, "already_running": false} (path is "/" for the whole project; the same scope again answers the running job with already_running true, another scope is ERR_INVALID_ARGUMENT)
+admin.recalculate_status: {"project_id": "proj", "job": null|{"job_id": "<uuid>", "path": "/", "kind": "vectors", "state": "running"|"done"|"failed"|"cancelled", "cause": "manual"|"change", "created_at": "2026-11-26T10:00:00Z", "ended_at": "2026-11-26T10:03:00Z", "reason": "embedding service unreachable", "progress": {"done": 3, "total": 3}}, "vectors_out_of_date": false} (ended_at once finished, reason when failed; a whole project job that ends done clears vectors_out_of_date unless a model changed meanwhile)
+admin.recalculate_cancel: {"project_id": "proj", "cancelled": true} (false when no recalculation runs; the job ends cancelled after its current file and the marker stays)
+fs.get_vectors: {"path": "/a.md", "kind": "text", "dimension": 384|null, "vectors": [{"number": 1, "text": "title\nchunk text", "vector": [0.1, 0.2]}], "next_after": 20|null} (dimension is the width of the project's model, null when the file has no vector; next_after is the last number of the page when more follow; ERR_NOT_SUPPORTED when search is off or the index mode is not rag or both)
 admin.get_project_quota: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234}
 admin.get_project_disk_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "file_count": 1, "truncated": false, "entries": [{"path": "/a.txt", "size": 1234, "state": "Active", "original_path": null}]}
 admin.get_project_folder_usage: {"project_id": "parity-probe", "max_mb": null, "used_bytes": 1234, "folder": {"path": "/", "size": 1234, "file_count": 1}, "item_count": 1, "truncated": false, "items": [{"path": "/a.txt", "kind": "File", "size": 1234}]}
@@ -917,7 +941,7 @@ admin.create_provider: {"provider_id": "prov-0123456789ab", "name": "Cloud Embed
 admin.update_provider: the provider, as admin.create_provider (an update that changes nothing returns it unchanged, updated_at included)
 admin.delete_provider: {"deleted": true}
 admin.create_model: {"model_id": "mdl-0123456789ab", "provider_id": "prov-0123456789ab", "name": "qwen3-embedding-0.6b", "kind": "text_embedding", "dimension": 1024, "max_input_tokens": 8192, "is_default": false, "created_at": "2026-11-21T10:00:00Z", "updated_at": "2026-11-21T10:00:00Z"} (dimension and max_input_tokens are null when absent)
-admin.update_model: the model, as admin.create_model (an update that changes nothing returns it unchanged, updated_at included)
+admin.update_model: the model, as admin.create_model (an update that changes nothing returns it unchanged, updated_at included; changing the dimension or the name of a model that project profiles name sets vectors_out_of_date for those projects)
 admin.delete_model: {"deleted": true}
 admin.set_default_model: the model, as admin.create_model, with "is_default": true (the model already default is returned unchanged)
 admin.clear_default_model: {"cleared": true} (also when the kind had no default)

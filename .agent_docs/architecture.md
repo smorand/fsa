@@ -548,10 +548,30 @@ Code: `settings/profile.rs` (rules, `impl Registry`), `settings/profile_store.rs
   `fs.create_chunk_set`), text model, image model. One transaction, one `UPDATE` of the five columns, one record
   (`set_indexing_profile`, target kind `project_profile`, field names). A set that changes nothing writes nothing.
 * **Out of date.** `vectors_stale_at` is set when `text_model_id` or `image_model_id` changes (a clear included),
-  never by a chunk change. Part 2 clears it when the vectors are rebuilt.
+  never by a chunk change, and (SPEC-0108) by `admin.update_model` changing the dimension or the name of a model a profile names. A whole project recalculation that ends `done` clears it, compare and clear on the value read at its start (`JobStore::clear_stale_if`).
 * **Fallback.** Text model: project, else the registry default `text_embedding`, else `search.embedding` when its
   endpoint is set (`model_id` null, `source: configuration`); image model none. A strategy change drops the old settings.
 * **Delete guard.** `Registry::try_delete_model` counts `project` rows naming the model, soft removed projects included.
 * **Migrate.** `migrate.rs::columns_of` appends the `ColumnMigration` columns of a table; before, `fsa migrate` copied
   neither these columns nor `index_mode`, `quota_bytes`, `deleted_at` or `converter_id`.
 
+
+## Vectors per project dimension and recalculation (SPEC-0108, 2026-11-26)
+
+* **Target per project.** `EmbedTargets::target_for(project)` and `image_target_for(project)` (`search/embedding.rs`);
+  `RegistryTargets` (`settings/registry.rs`) reads the profile row and the model with its provider
+  (`SettingsStore::model_with_provider`), else the server default, else `search.embedding`. The width of a profile model is
+  its `dimension`; `None` means the platform width (`search.embedding.dimensions`). Two to three admin queries per index or
+  query call, no cache (SPEC-0102 DEC-007).
+* **Stores.** pgvector: `table_name(kind, dim, platform)`, created on first use under one in process lock, ivfflat index up to 2000
+  dimensions; a write deletes the path in every table of the kind (a model change leaves no old width), a query reads the
+  table of the width in force and writes nothing on SQLite (on PostgreSQL it creates the empty table). sqlite-vec: per volume
+  in memory connection, `search_vec_meta` and `search_img_meta` carry a `dim` column, one `vec0` table per width.
+* **Checks.** `embedding::check_vector` (length, finite, not all zero) runs after every embedding, before any write.
+* **Job.** `derived_job` kind `vectors`, path `/` for a project, columns `progress_done` and `progress_total`, state
+  `cancelled`. `Scheduler::start_vectors` (`search/derived/scheduler/vectors.rs`) keeps one run per project in a map, spawns a
+  task that rebuilds each file with `rebuild_file` (text entries then `rebuild_images`), a stale flag per file in flight
+  raised by `schedule` and `forget_path`, a cancel flag read between files and by the guard. `recover` ends running
+  `vectors` rows failed and `resume_vectors` (called by `app.rs`) starts their scopes again.
+* **Images.** `SearchBackend::index_images_checked`, only for engines that report mode `rag`; a converted document's
+  pictures are read from the artifact set and sent as `data:image/<format>;base64,...`.

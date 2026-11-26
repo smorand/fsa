@@ -692,6 +692,76 @@
       }
     },
     {
+      "name": "admin.recalculate_cancel",
+      "description": "Stop the running recalculation of a project after its current file; answers whether one was running (owner or platform admin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.recalculate_start",
+      "description": "Start the recalculation of the vectors of a project, or of one file when a path is given, with the models of its profile; one runs per project at a time; answers the job (owner or platform admin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of one file to recalculate; empty recalculates every file of the project.",
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "admin.recalculate_status",
+      "description": "Read the running recalculation of a project, else the last finished one, with its progress in files, and whether the vectors are out of date (member or platform admin).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project_id": {
+            "description": "Id of the project.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
       "name": "admin.remove_member",
       "description": "Remove a person from a project (owner or platform admin).",
       "inputSchema": {
@@ -1919,6 +1989,47 @@
           "mount_id",
           "path",
           "id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "fs.get_vectors",
+      "description": "Read the vectors stored for a file, with the text each was computed from: its chunks (kind 'text') or the images of a converted document (kind 'image'), in number order, 20 per page by default.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mount_id": {
+            "description": "Project/volume id the operation targets.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute POSIX path of the file.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "What the vectors stand for: 'text' (chunks of the default set, the default) or 'image'.",
+            "type": "string",
+            "default": "text"
+          },
+          "after": {
+            "description": "Number of the last entry of the previous page; 0 reads from the start.",
+            "type": "integer",
+            "default": 0
+          },
+          "limit": {
+            "description": "Entries per page, 1 to 100.",
+            "type": "integer",
+            "default": 20
+          }
+        },
+        "required": [
+          "mount_id",
+          "path"
         ]
       },
       "annotations": {

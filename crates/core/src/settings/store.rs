@@ -190,6 +190,29 @@ impl SettingsStore {
         Ok(Some((model, provider)))
     }
 
+    /// The model `model_id` with its provider, in one query (a project's profile
+    /// model, SPEC-0108 FR-NEW-001); `None` when it is gone.
+    pub(crate) async fn model_with_provider(
+        &self,
+        model_id: &str,
+    ) -> Result<Option<(Model, ProviderRow)>> {
+        let m = MODEL_COLS.split(", ").map(|c| format!("m.{}", c.trim()));
+        let p = PROVIDER_COLS.split(", ").map(|c| format!("p.{}", c.trim()));
+        let cols = m.chain(p).collect::<Vec<_>>().join(", ");
+        let q = Query::new(format!(
+            "SELECT {cols} FROM model m JOIN provider p ON p.provider_id=m.provider_id \
+             WHERE m.model_id=?1"
+        ))
+        .bind(model_id);
+        let Some(r) = self.db.query_opt(&q).await? else { return Ok(None) };
+        let model = Self::read_model(&r)?;
+        let n = MODEL_COLS.split(", ").count();
+        let tail: Vec<SqlValue> =
+            (n..r.len()).map(|i| r.value(i).cloned()).collect::<Result<_>>()?;
+        let provider = Self::read_provider(&RowValues::new(r.columns()[n..].into(), tail))?;
+        Ok(Some((model, provider)))
+    }
+
     /// The id of the model of `provider_id` holding `key`, if any.
     pub(crate) async fn model_id_of_key(
         tx: &mut Box<dyn RelationalTx>,

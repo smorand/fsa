@@ -1,4 +1,4 @@
-# Tool reference (148 tools)
+# Tool reference (152 tools)
 
 Facts below come from `TOOL_CONTRACT.txt` (captured from the running reference
 server) and the `tools/` modules. Parameters are listed as
@@ -187,6 +187,7 @@ recorded, so `fs.list_derived_jobs` (empty with search off) never shows it.
 | `fs.get_chunk` | chunk `number` in full with `before` and `after` neighbours (0 to 20 each) | `path`, `set_id`, `number:int`, `before:int=0`, `after:int=0` | `chunks[{number, unit, heading_path, page_start, page_end, token_count, figures, document_title, text}]` | RO,I,!OW | member |
 | `fs.create_chunk_set` | the set of this strategy and settings, built from the file text when absent, else the equal set (SPEC-0101 FR-NEW-013, FR-NEW-029) | `path`, `strategy` (`fixed` or `structural`), `settings:object={}` | `Set` as in `fs.list_chunk_sets` | !D,!RO,I,!OW | member |
 | `fs.delete_chunk_set` | removes an extra set and its chunks; the default set is refused | `path`, `set_id` | `{deleted: true}` | D,!RO,!I,!OW | member |
+| `fs.get_vectors` | the vectors stored for a file with the text each was computed from (SPEC-0108), `kind` `text` or `image`, `limit` 1 to 100 | `path`, `kind="text"`, `after:int=0`, `limit:int=20` | `path`, `kind`, `dimension` (null when none), `vectors[{number, text, vector}]`, `next_after` | RO,I,!OW | member; `ERR_NOT_SUPPORTED` when search is off or the mode has no vectors |
 
 (2026-11-22, SPEC-0101 US-0276) `fs.create_chunk_set` checks, in order: strategy, each setting in
 request order (unknown, does not apply, not a whole number, out of range), the overlap against the
@@ -618,6 +619,9 @@ BL-0153 (no total across cross reference streams).
 | `admin.get_index_mode` | read the search index mode | `project_id` | `project_id`, `index_mode` | RO,I,!OW | member or admin |
 | `admin.get_indexing_profile` | read the indexing profile of a project (SPEC-0107) | `project_id` | `project_id`, `chunking{strategy, settings, filled, source}`, `text_model`, `image_model` (null or `{model_id, name, provider, kind, dimension, source}`), `vectors_out_of_date`, `vectors_out_of_date_since` | RO,I,!OW | member or admin |
 | `admin.set_indexing_profile` | change the fields given of the profile; an empty text clears; a changed model sets the out of date marker; no op writes nothing | `project_id`, `chunk_strategy`?, `chunk_settings`?, `text_model_id`?, `image_model_id`? | the profile, as `admin.get_indexing_profile` | !D,!RO,I,!OW | owner/admin; refusals as `fs.create_chunk_set` for the strategy, `chunk_settings need a chunk_strategy`, `model not found: <id>` (`ERR_NOT_FOUND`), `model '<name>' is not a text_embedding model` (or an image_embedding model) |
+| `admin.recalculate_start` | start a `vectors` job over every file of a project or over one file (SPEC-0108); one per project, the same scope answers the running job | `project_id`, `path`? | `project_id`, `job{job_id, path, kind, state, cause, created_at, progress{done, total}}`, `already_running` | !D,!RO,I,!OW | owner/admin |
+| `admin.recalculate_status` | read the running vectors job, else the last finished one | `project_id` | `project_id`, `job` (null or as above, plus `ended_at`, `reason`), `vectors_out_of_date` | RO,I,!OW | member or admin |
+| `admin.recalculate_cancel` | stop the running vectors job after its current file | `project_id` | `project_id`, `cancelled` | !D,!RO,I,!OW | owner/admin |
 | `admin.set_purge_config` | configure auto-purge: enable flag, internal/external driver, file and project retention | `project_id`, `autopurge_enabled`, `use_internal_purge`, `file_retention_days`?, `project_retention_days`? | `project_id`, `autopurge_enabled`, `use_internal_purge`, `file_retention_days`, `project_retention_days` | !D,!RO,I,!OW | owner/admin |
 | `admin.undelete_project` | clear a project's soft-delete flag, immediately restoring access | `project_id` | `project_id`, `undeleted` | !D,!RO,!I,!OW | owner/admin |
 | `admin.set_project_quota` | set or clear a project's maximum storage size (SPEC-0010) | `project_id`, `max_mb`? | `project_id`, `max_mb` | !D,!RO,I,!OW | admin |
@@ -794,10 +798,10 @@ before any handler runs.
 
 | Configuration | Served |
 |---|---|
-| default | 94 (53 `fs.*`, 41 `admin.*`) |
-| git flag on | 148 |
-| git and search flags on | 152 |
-| every flag, pandoc on `PATH` | 173 (171 without pandoc: `doc.*` registers nothing) |
+| default | 98 (54 `fs.*`, 44 `admin.*`) |
+| git flag on | 152 |
+| git and search flags on | 156 |
+| every flag, pandoc on `PATH` | 177 (175 without pandoc: `doc.*` registers nothing) |
 | one optional family alone | 92 + `web` 5, `context7` 2, `sqlite` 8, `db` 5, `doc` 2 |
 
 The optional families (`web`, `context7`, `sqlite`, `db`, `doc`) are not
@@ -864,7 +868,7 @@ Observed while hardening the extraction paths; none is a reported defect, all ar
 ## Registry tools and the models screen (SPEC-0102, 2026-11-22)
 
 The 12 registry tools (`admin.create_provider` to `admin.list_setting_changes`) are platform admin only, reading
-included, and count in the 41 `admin.*` tools, with the ten SPEC-0106 converter tools and the two SPEC-0107 indexing profile tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
+included, and count in the 44 `admin.*` tools, with the ten SPEC-0106 converter tools, the two SPEC-0107 indexing profile tools and the three SPEC-0108 recalculation tools. They have REST routes under `/api/admin/` (`api.md`) and the browser
 screen `/app/models` calls the same functions of `tools/models.rs`. No tool logs an argument; a secret is a `SecretText`.
 
 ## Document converters (SPEC-0106)
@@ -876,7 +880,17 @@ only (`secret`, `clear_secret`), answers carry `has_secret`. Tests: `cargo test 
 
 ## Indexing profile (SPEC-0107)
 
-`admin.get_indexing_profile` and `admin.set_indexing_profile` count in the 41 `admin.*` tools. Deleting a model a
+`admin.get_indexing_profile` and `admin.set_indexing_profile` count in the 44 `admin.*` tools. Deleting a model a
 profile names is refused (`admin.delete_model`, `model '<name>' is used by <n> project(s)`). See `architecture.md`
 "Indexing profile". Tests: `cargo test -p fsa-core --lib -- e2e_0107_`.
 
+
+## Vectors and recalculation (SPEC-0108)
+
+`fs.get_vectors(mount_id, path, kind?, after?, limit?)` (member, read only, MCP only) answers `path`, `kind`, `dimension` (null when
+the file has no vector), `vectors[{number, text, vector}]` in number order and `next_after`. Refusals in order: membership,
+`kind` not `text` or `image`, `after` below 0, `limit` outside 1 to 100 (`ERR_INVALID_ARGUMENT`), search off or an index mode
+other than `rag` or `both` (`ERR_NOT_SUPPORTED`), a path that is not a file (`ERR_NOT_FOUND`). The three `admin.recalculate_*`
+tools count in the 44 `admin.*` tools; start and cancel refuse anyone but the owner or a platform administrator
+(`ERR_FORBIDDEN`), start also refuses an index mode without vectors, a path that is not a file of the project and a second scope
+while one runs. See `search.md` "Vectors per project". Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0108_`.

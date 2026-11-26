@@ -94,6 +94,30 @@ impl SettingsStore {
         tx.query_opt(&q).await?.map(|r| r.i64(0)).transpose().map(|n| n.unwrap_or(0))
     }
 
+    /// Sets the vectors of every project whose profile names `model_id` out of
+    /// date at `at` (SPEC-0108 FR-NEW-010); the number of projects marked.
+    pub(crate) async fn mark_model_projects_stale(
+        tx: &mut Box<dyn RelationalTx>,
+        model_id: &str,
+        at: &str,
+    ) -> Result<u64> {
+        let q = Query::new(
+            "UPDATE project SET vectors_stale_at=?1 WHERE text_model_id=?2 OR image_model_id=?2",
+        )
+        .bind(at)
+        .bind(model_id);
+        tx.execute(&q).await
+    }
+
+    /// The profile of a project outside any transaction, one read; `None` when
+    /// the project row is gone.
+    pub(crate) async fn profile_of(&self, project_id: &str) -> Result<Option<ProfileRow>> {
+        let mut tx = self.begin().await?;
+        let row = Self::profile_row(&mut tx, project_id).await?;
+        tx.commit().await?;
+        Ok(row)
+    }
+
     pub(crate) async fn provider_name(
         tx: &mut Box<dyn RelationalTx>,
         provider_id: &str,

@@ -150,8 +150,8 @@ fn tool_contract_golden_is_current() {
     // fs.get_chunk: 50 fs, so 121; fs.create_chunk_set and fs.delete_chunk_set: 52 fs, so 123. SPEC-0102 adds five
     // admin registry tools: 22 admin, so 128; US-0284 adds four model tools: 26 admin, so 132; US-0285 adds three default tools: 29 admin, so 135. SPEC-0104 adds fs.get_document_structure: 53 fs, so 136. SPEC-0106 US-0309 adds
     // admin.create_converter and admin.list_converters: 31 admin, so 138. US-0312 adds admin.update_converter: 32 admin, so 139.
-    // US-0313 adds six default and project converter tools: 38 admin, so 145. US-0314 adds one: 39 admin, so 146. SPEC-0107 adds two: 41 admin, so 148.
-    assert_eq!(reg.len(), 148, "the frozen contract covers 53 fs, 41 admin and 54 git tools");
+    // US-0313 adds six default and project converter tools: 38 admin, so 145. US-0314 adds one: 39 admin, so 146. SPEC-0107 adds two: 41 admin, so 148. SPEC-0108 adds fs.get_vectors: 54 fs, and three admin tools: 44 admin, so 152.
+    assert_eq!(reg.len(), 152, "the frozen contract covers 54 fs, 44 admin and 54 git tools");
     let rendered = render(&reg);
 
     if std::env::var_os(REWRITE_ENV).is_some() {
@@ -273,8 +273,8 @@ fn e2e_new_960_the_thirty_one_enumerated_names_are_exactly_the_new_tool_set() {
     git_enumeration_verdict(reg.names()).expect("the git family must match the enumeration");
 
     assert_eq!(PRE_SPEC_GIT_TOOLS.len() + NEW_GIT_TOOLS.len() + TAG_GIT_TOOLS.len(), 54);
-    // SPEC-0101 adds five fs.* chunk tools: 123. SPEC-0102 adds five admin.* tools: 128. US-0284 adds four: 132. US-0285 adds three: 135. SPEC-0104 adds one: 136. US-0309 adds two: 138. US-0312 adds one: 139. US-0313 adds six: 145. US-0314 adds one: 146. SPEC-0107 adds two: 148.
-    assert_eq!(reg.len(), 148);
+    // SPEC-0101 adds five fs.* chunk tools: 123. SPEC-0102 adds five admin.* tools: 128. US-0284 adds four: 132. US-0285 adds three: 135. SPEC-0104 adds one: 136. US-0309 adds two: 138. US-0312 adds one: 139. US-0313 adds six: 145. US-0314 adds one: 146. SPEC-0107 adds two: 148. SPEC-0108 adds four: 152.
+    assert_eq!(reg.len(), 152);
 
     // Every new tool is frozen, and carries the family's required mount_id.
     let Some(frozen) = frozen_tools() else {
@@ -330,7 +330,7 @@ fn e2e_new_931_every_hardcoded_tool_count_site_reports_the_new_numbers() {
     let admin_family = reg.names().iter().filter(|n| n.starts_with("admin.")).count();
 
     // contract_golden.rs's own total, and the subtotals all.rs asserts.
-    assert_eq!(reg.len(), 148);
+    assert_eq!(reg.len(), 152);
     assert_eq!(git_family, 54);
     assert_eq!(fs_family + admin_family + git_family, reg.len());
 
@@ -344,7 +344,7 @@ fn e2e_new_931_every_hardcoded_tool_count_site_reports_the_new_numbers() {
         eprintln!("skipped: {PATH} is absent");
         return;
     };
-    assert_eq!(frozen.len(), 148, "the golden file holds one entry per registered tool");
+    assert_eq!(frozen.len(), 152, "the golden file holds one entry per registered tool");
 
     // The contract text documents the same names, set for set.
     let text =
