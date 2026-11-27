@@ -16,6 +16,8 @@ pub mod converter;
 mod converter_rules;
 mod converter_store;
 pub(crate) mod converters;
+mod infra_check;
+mod infra_rules;
 pub mod model;
 pub mod profile;
 mod profile_store;
@@ -31,6 +33,8 @@ mod converters_e2e;
 #[cfg(test)]
 mod e2e;
 #[cfg(test)]
+pub(crate) mod infra_testkit;
+#[cfg(test)]
 mod key_fixtures;
 #[cfg(test)]
 mod profile_e2e;
@@ -38,6 +42,14 @@ mod profile_e2e;
 mod profile_pg_e2e;
 #[cfg(all(test, feature = "rag"))]
 mod search_e2e;
+#[cfg(test)]
+mod server_settings10_boot_e2e;
+#[cfg(test)]
+mod server_settings10_check_e2e;
+#[cfg(test)]
+mod server_settings10_e2e;
+#[cfg(all(test, feature = "postgres"))]
+mod server_settings10_pg_e2e;
 #[cfg(test)]
 mod server_settings3_boot_e2e;
 #[cfg(test)]

@@ -276,7 +276,7 @@ async fn e2e_0116_040_the_yaml_seeds_server_and_auth_once() {
     assert_eq!(second.config.server.port, 47833);
     let all = changes_of(&second).await;
     let seeds = seeds_of(&all);
-    assert_eq!(seeds.len(), 13, "{seeds:?}");
+    assert_eq!(seeds.len(), 14, "{seeds:?}");
     for s in ["server", "auth"] {
         let n = all
             .iter()

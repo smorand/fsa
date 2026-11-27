@@ -50,6 +50,13 @@ impl SettingsStore {
         Ok(self.db.query_opt(&q).await?.map(|_| ()))
     }
 
+    /// The id of every project, ascending, outside any transaction (SPEC-0117: the
+    /// projects whose data a change of the infra stores must find in the new place).
+    pub(crate) async fn project_ids(&self) -> Result<Vec<String>> {
+        let rows = self.db.query(&Query::new("SELECT id FROM project ORDER BY id")).await?;
+        rows.iter().map(|r| r.text(0)).collect()
+    }
+
     pub(crate) async fn begin(&self) -> Result<Box<dyn RelationalTx>> {
         self.db.begin().await
     }

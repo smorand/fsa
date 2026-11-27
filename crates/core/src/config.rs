@@ -340,7 +340,7 @@ fn d_region() -> String {
     "us-east-1".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BlobConfig {
     /// "local" (filesystem, default) or "minio"/"s3".
@@ -351,6 +351,22 @@ pub struct BlobConfig {
     pub secret_key: String,
     pub bucket_prefix: String,
     pub region: String,
+}
+/// The two keys are secrets: `Debug` says whether they are set, never what they are
+/// (SPEC-0117 FR-NEW-003).
+impl fmt::Debug for BlobConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = |k: &str| if k.trim().is_empty() { "unset" } else { "set" };
+        f.debug_struct("BlobConfig")
+            .field("backend", &self.backend)
+            .field("dir", &self.dir)
+            .field("endpoint", &self.endpoint)
+            .field("access_key", &format_args!("{}", state(&self.access_key)))
+            .field("secret_key", &format_args!("{}", state(&self.secret_key)))
+            .field("bucket_prefix", &self.bucket_prefix)
+            .field("region", &self.region)
+            .finish()
+    }
 }
 impl Default for BlobConfig {
     fn default() -> Self {
@@ -446,6 +462,41 @@ pub struct InfraConfig {
     pub meta: MetaConfig,
     pub blob: BlobConfig,
     pub admin: AdminConfig,
+    pub git: GitStoreConfig,
+    pub oauth: OauthStoreConfig,
+}
+
+impl InfraConfig {
+    /// The four blocks a stored `infra` section holds: everything but the admin store,
+    /// which only the start gives (SPEC-0117 FR-NEW-002).
+    pub fn stores(&self) -> InfraStores {
+        InfraStores {
+            meta: self.meta.clone(),
+            blob: self.blob.clone(),
+            git: self.git.clone(),
+            oauth: self.oauth.clone(),
+        }
+    }
+
+    /// This configuration with the four blocks of `stores` and the admin block as it is.
+    pub fn with_stores(&self, stores: InfraStores) -> Self {
+        Self {
+            meta: stores.meta,
+            blob: stores.blob,
+            admin: self.admin.clone(),
+            git: stores.git,
+            oauth: stores.oauth,
+        }
+    }
+}
+
+/// The `infra` setting: the stores without the admin one (SPEC-0117). An unknown key,
+/// the admin block included, is refused when a stored section is read.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InfraStores {
+    pub meta: MetaConfig,
+    pub blob: BlobConfig,
     pub git: GitStoreConfig,
     pub oauth: OauthStoreConfig,
 }
@@ -2244,8 +2295,8 @@ infra:
         assert_eq!(format!("{parsed:?}"), MINIO_TEMPLATE_SNAPSHOT);
     }
 
-    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: "", secret_key: "", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
-    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: "test-access", secret_key: "test-secret", bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
+    const LOCAL_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "local", dir: "state/blobs", endpoint: "", access_key: unset, secret_key: unset, bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
+    const MINIO_TEMPLATE_SNAPSHOT: &str = r#"ServerConfig { server: HttpConfig { host: "0.0.0.0", port: 5002, mcp_path: "/mcp", public_base_url: "" }, auth: AuthConfig { jwt: JwtConfig { public_key_path: ".keys/jwt.pub", header: "X-Forwarded-Authorization", algorithms: ["RS256"], audience: None, issuer: Some("web-a2a"), username_claim: "email" }, admins: ["admin@example.com"] }, infra: InfraConfig { meta: MetaConfig { backend: "sqlite", dir: "state/volumes", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, blob: BlobConfig { backend: "minio", dir: "state/blobs", endpoint: "http://minio.test:9000", access_key: set, secret_key: set, bucket_prefix: "mcpfs-", region: "us-east-1" }, admin: AdminConfig { backend: "sqlite", path: "state/admin.db", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, git: GitStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } }, oauth: OauthStoreConfig { backend: "sqlite", dsn: Dsn(unset), schema: "public", pool: PoolConfig { max_connections: 10, acquire_timeout_secs: 30 } } }, safety: SafetyConfig { write_quota_bytes: 52428800, trash_dir: ".mcp_trash", read_guard: true, allow_hard_delete: false, max_read_lines: 2000, purge_interval_secs: 3600, project_purge_grace_days: 30, max_diff_file_bytes: DiffLimit(Some(5242880)) }, extract: ExtractConfig { ocr: OcrConfig { provider: "none", endpoint: "", model: "", api_key_env: None, prompt: "Transcribe this document faithfully into Markdown." } }, api: ApiConfig { enabled: true }, git: GitConfig { enabled: false, object_format: "sha1", anonymous_read: false, max_pack_size_mb: 512, github_client_id: "", github_client_secret_env: None, gitlab_client_id: "", gitlab_client_secret_env: "GITLAB_CLIENT_SECRET", gitlab_instance_url: "https://gitlab.com", hosts: HostMap([]), remote_timeout_secs: 120, max_stash_entries: 100, max_rebase_todo: 200, github_scope: "repo", gitlab_scope: "api read_repository write_repository", provider_api_timeout_secs: 30, max_pr_diff_mb: 12 }, web: WebConfig { enabled: false, max_results: 10, request_timeout_secs: 10, safe_search: "moderate" }, context7: Context7Config { enabled: false, api_url: "https://context7.com/api", request_timeout_secs: 30 }, sqlite: SqliteConfig { enabled: false, max_result_rows: 1000, statement_timeout_secs: 30 }, db: DbConfig { enabled: false, max_result_rows: 1000, max_file_bytes: 104857600 }, doc: DocConfig { enabled: false, pandoc_bin: "", pandoc_timeout_secs: 30 }, doc_service: DocServiceConfig { enabled: false, mode: "cli", extensions: [], max_input_bytes: 536870912, cli: DocServiceCliConfig { command: ["doc-convert", "--quiet", "-o", "{outdir}", "{document}"], timeout_secs: 900 }, api: DocServiceApiConfig { url: "", auth_header: "Authorization", auth_token: Secret(unset), file_field: "file", response_field: "", timeout_secs: 900 } }, search: SearchConfig { enabled: false, mode: "bm25", tantivy_dir: "state/search", embedding: EmbeddingConfig { endpoint: "", model: "", api_key_env: "", dimensions: 1536 }, reranking: RerankConfig { enabled: false, endpoint: "", model: "", api_key_env: "", top_n: 10 }, settle_delay_seconds: "", chunking: ChunkingConfig { fixed_size_tokens: "", fixed_overlap_tokens: "", heading_cut_depth: "", max_tokens: "", list_max_items: "" } } }"#;
 
     // ── doc service ─────────────────────────────────────────────────────────────
 

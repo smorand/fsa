@@ -21,8 +21,8 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// The sections, in the order lists show them (SPEC-0114, SPEC-0115 added the next three, SPEC-0116 the last two).
-pub const SECTIONS: [&str; 13] = [
+/// The sections, in the order lists show them (SPEC-0114, SPEC-0115 added the next three, SPEC-0116 the next two, SPEC-0117 the last).
+pub const SECTIONS: [&str; 14] = [
     "safety",
     "api",
     "extract",
@@ -36,6 +36,7 @@ pub const SECTIONS: [&str; 13] = [
     "context7",
     "server",
     "auth",
+    "infra",
 ];
 
 const SECRET_MAX: usize = 4096;
@@ -44,6 +45,7 @@ const SECRET_MAX: usize = 4096;
 pub(crate) fn secret_paths(section: &str) -> &'static [&'static str] {
     match section {
         "doc_service" => &["api.auth_token"],
+        "infra" => &["blob.access_key", "blob.secret_key", "meta.dsn", "git.dsn", "oauth.dsn"],
         _ => &[],
     }
 }
@@ -85,6 +87,7 @@ pub(crate) fn section_json(config: &ServerConfig, section: &str) -> Value {
         "context7" => serde_json::to_value(&config.context7),
         "server" => serde_json::to_value(&config.server),
         "auth" => serde_json::to_value(&config.auth),
+        "infra" => serde_json::to_value(config.infra.stores()),
         other => unreachable!("section '{other}' was checked"),
     };
     v.expect("a configuration section serializes")
@@ -120,6 +123,10 @@ pub(crate) fn with_section(
         "context7" => next.context7 = serde_json::from_value(value).map_err(bad)?,
         "server" => next.server = serde_json::from_value(value).map_err(bad)?,
         "auth" => next.auth = serde_json::from_value(value).map_err(bad)?,
+        "infra" => {
+            let stores = serde_json::from_value(value).map_err(bad)?;
+            next.infra = config.infra.with_stores(stores);
+        }
         other => return Err(unknown_section(other)),
     }
     Ok(next)
@@ -241,6 +248,12 @@ fn changed_paths(old: &Value, new: &Value, prefix: &str, out: &mut Vec<String>) 
 fn last4(secret: &str) -> String {
     let n = secret.chars().count();
     if n < 8 { String::new() } else { secret.chars().skip(n - 4).collect() }
+}
+
+/// What a read shows of a secret's end: nothing for a DSN, whose tail may be a password
+/// (SPEC-0117 DEC-005).
+fn shown_tail(path: &str, secret: &str) -> String {
+    if path.ends_with(".dsn") { String::new() } else { last4(secret) }
 }
 
 pub(crate) fn decrypt_all(key: Option<[u8; 32]>, blob: &[u8]) -> Option<BTreeMap<String, String>> {
@@ -422,6 +435,23 @@ impl ServerSettings {
         // Today's checks, on the configuration as it will be.
         let candidate = with_section(&self.running, section, full)?;
         candidate.check()?;
+        if section == "infra" {
+            super::infra_rules::blob_rules(&candidate)?;
+            // The probes may wait on a network: the store has one connection, so the
+            // transaction is given up for them and taken again, and a change made
+            // meanwhile makes this attempt start over (the retry of `set`).
+            drop(tx);
+            let projects = self.store.project_ids().await?;
+            super::infra_check::run(&self.running, &candidate, &projects).await?;
+            tx = self.store.begin().await?;
+            let again = SettingsStore::server_setting_in(&mut tx, section).await?;
+            let key = |r: &Option<ServerSettingRow>| {
+                r.as_ref().map(|r| (r.value.clone(), r.updated_at.clone()))
+            };
+            if key(&again) != key(&row) {
+                return Err(ToolError::internal("the setting changed while it was checked"));
+            }
+        }
         let mut canonical = section_json(&candidate, section);
         let canonical_secrets = split_secrets(section, &mut canonical);
         let mut new_full = canonical.clone();
@@ -466,7 +496,7 @@ impl ServerSettings {
                     let s = running_secrets.get(*p);
                     secrets_json.insert(
                         (*p).to_string(),
-                        json!({"has_value": s.is_some(), "last4": s.map(|s| last4(s)).unwrap_or_default()}),
+                        json!({"has_value": s.is_some(), "last4": s.map(|s| shown_tail(p, s)).unwrap_or_default()}),
                     );
                 }
                 value = running;
@@ -482,9 +512,10 @@ impl ServerSettings {
                 for p in paths {
                     let (has, tail) = match &secrets {
                         None => (false, String::new()),
-                        Some(Some(m)) => {
-                            (m.contains_key(*p), m.get(*p).map(|s| last4(s)).unwrap_or_default())
-                        }
+                        Some(Some(m)) => (
+                            m.contains_key(*p),
+                            m.get(*p).map(|s| shown_tail(p, s)).unwrap_or_default(),
+                        ),
                         // Stored but unreadable: say it is set, show nothing.
                         Some(None) => (true, String::new()),
                     };

@@ -91,7 +91,7 @@ async fn e2e_0114_009_unknown_names_and_wrong_types_name_the_section() {
     let m = set(&fx, "nope", json!({})).await.unwrap_err();
     assert_eq!(
         m,
-        "unknown setting section 'nope', expected one of safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth"
+        "unknown setting section 'nope', expected one of safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth, infra"
     );
     let m = settings(&fx).get("nope").await.unwrap_err().message;
     assert!(m.starts_with("unknown setting section 'nope'"), "{m}");
@@ -144,7 +144,8 @@ async fn e2e_0114_010_list_and_get_shapes() {
             "web",
             "context7",
             "server",
-            "auth"
+            "auth",
+            "infra"
         ]
     );
     for s in list["settings"].as_array().unwrap() {

@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 
 pub(super) const ALICE: &str = "admin@example.com";
 pub(super) const BOB: &str = "bob@example.com";
-pub(super) const ALL_THIRTEEN: &str =
-    "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth";
+pub(super) const ALL_THIRTEEN: &str = "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth, infra";
 
 pub(super) fn settings(fx: &Fx) -> ServerSettings {
     ServerSettings::of(fx.state.admin.as_ref(), fx.state.config.clone()).unwrap()

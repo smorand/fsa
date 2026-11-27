@@ -170,7 +170,11 @@ async fn copy_table(
 }
 
 /// Count the rows of one table scope, for the post copy verification.
-async fn count_rows(db: &dyn RelationalDb, table: &str, volume: Option<&str>) -> Result<i64> {
+pub(crate) async fn count_rows(
+    db: &dyn RelationalDb,
+    table: &str,
+    volume: Option<&str>,
+) -> Result<i64> {
     let q = match volume {
         Some(v) => Query::new(format!("SELECT COUNT(*) FROM {table} WHERE volume_id=?1")).bind(v),
         None => Query::new(format!("SELECT COUNT(*) FROM {table}")),
@@ -182,7 +186,7 @@ async fn count_rows(db: &dyn RelationalDb, table: &str, volume: Option<&str>) ->
 }
 
 /// Every distinct sha a file node in one volume refers to.
-async fn shas_of(db: &dyn RelationalDb, volume: &str) -> Result<BTreeSet<String>> {
+pub(crate) async fn shas_of(db: &dyn RelationalDb, volume: &str) -> Result<BTreeSet<String>> {
     let rows = db
         .query(
             &Query::new("SELECT sha256 FROM nodes WHERE volume_id=?1 AND sha256 IS NOT NULL")

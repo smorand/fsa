@@ -732,8 +732,8 @@ The YAML stays as an optional seed and fallback. At start a section with a store
 YAML file, each section with no row is imported once; **a later edit of the YAML does not override the database**
 (the start logs a warning when they differ). A stored secret needs the key it was stored with: a missing or other
 `FSA_TOKEN_KEY` stops the start naming the section. The command line flags `--sqlite`, `--db`, `--doc`, `--git`, `--web`, `--context7` still force
-their switch on (and are never stored). `server`, `auth` and `infra` are still read from the file (BL-0180,
-BL-0181), so a database only start still needs `auth` keys from a file until they move. `fsa purge` and `fsa
+their switch on (and are never stored). Since SPEC-0117 every section is a setting except the admin store (`--database-url`
+or `FSA_DATABASE_URL`) and `FSA_TOKEN_KEY`: a start with those two alone reads the rest from the database. `fsa purge` and `fsa
 migrate` read the file only. Tests: `cargo test -p fsa-core --lib -- e2e_0114_`.
 
 The `git`, `web` and `context7` sections (SPEC-0115) follow the same rules. `git.hosts` is the list of trusted git
@@ -771,6 +771,28 @@ The variables that name a secret (`git.github_client_secret_env`, `git.gitlab_cl
 the server itself reads (`FSA_TOKEN_KEY`, `FSA_DATABASE_URL`, the MinIO and DSN variables) are never read as such a secret.
 A YAML file keeps any other name with a warning at the start; a name that a stored section holds outside the namespace is
 not used.
+
+### Infra stores (SPEC-0117)
+
+`infra` (`meta`, `blob`, `git`, `oauth`; never `admin`) is the last section. Only the admin store (`--database-url`) and
+`FSA_TOKEN_KEY` stay outside the database. The S3 keys (`blob.access_key`, `blob.secret_key`) and the three DSNs
+(`meta.dsn`, `git.dsn`, `oauth.dsn`) are write only secrets, encrypted under `FSA_TOKEN_KEY`: a read shows `has_value` and
+`last4` (the DSNs show an empty `last4`, their tail may be a password), a change record names keys only. A change applies at
+the next start. **The server never moves data.** Before a change is saved:
+
+- a relational store whose place differs (backend, DSN, schema, `meta.dir`, or for git and oauth the state root, the parent of
+  `meta.dir`) is opened (its schema applied, as any open does) and must hold the same rows as the current one, project by
+  project (`nodes`, `blob_refs` and content addresses; the git tables; `oauth_tokens`). If not, the change is refused with
+  `... run fsa migrate --from <current config> --to <new config> first`. Run the migration, then change the setting.
+- a blob store that moves must hold every content address of every project (`fsa migrate` reports the missing ones; it copies
+  no blob bytes, copy them with the tool of your choice); S3 (`minio`, `s3`) is probed with one `HEAD`
+  (`<bucket_prefix>probe/fsa-probe`) and refused with `infra.blob cannot be used: ...` when the endpoint or the keys do not work
+  (15 second limit).
+- an unreachable DSN is refused with `infra.<store> cannot be reached: ...`, the DSN and the keys never in the message.
+
+A YAML start imports the section once (the keys encrypted; with no master key a YAML that holds a key is not imported and
+stays in force). `fsa migrate` copies the row with the admin tables. Tests: `cargo test -p fsa-core --lib -- e2e_0117_`
+(PostgreSQL ones need `MCPFS_TEST_PG_DSN` and `--features postgres`).
 
 ## Project quota enforcement
 

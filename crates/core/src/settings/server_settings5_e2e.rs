@@ -700,7 +700,7 @@ async fn e2e_0116_046_the_administrator_reads_sets_and_lists_by_tool_and_route()
     assert_eq!(body["value"]["jwt"]["public_keys"], json!([k1]));
     let (st, list) = fx.rest(ALICE, "GET", "/api/admin/settings", None).await;
     assert_eq!(st, 200);
-    assert_eq!(list["settings"].as_array().unwrap().len(), 13);
+    assert_eq!(list["settings"].as_array().unwrap().len(), 14);
 }
 
 async fn screen_post(fx: &Fx, section: &str, value: &str) -> (axum::http::StatusCode, String) {
@@ -726,7 +726,7 @@ async fn e2e_0116_045_the_screen_lists_thirteen_sections_and_shows_a_refused_key
     for s in super::server_settings::SECTIONS {
         assert!(html.contains(&format!("data-section=\"{s}\"")), "{s}");
     }
-    assert_eq!(super::server_settings::SECTIONS.len(), 13);
+    assert_eq!(super::server_settings::SECTIONS.len(), 14);
     let (st, _) = screen_post(&fx, "server", "{\"port\": 47835}").await;
     assert_eq!(st, 303);
     let (_, html) = fx.page(&router, Via::Cookie(ALICE), "GET", "/app/settings", None).await;

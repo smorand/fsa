@@ -353,3 +353,7 @@
 | US-0351 | SPEC-0116 | the start: address, banner, key check, stored and seed rules | US-0350 | 1 | landed |  |  |
 | US-0352 | SPEC-0116 | the secret variable names | US-0351 | 1 | landed |  |  |
 | US-0353 | SPEC-0116 | PostgreSQL, docs and contract | US-0352 | 1 | landed |  |  |
+| US-0354 | SPEC-0117 | the section, its secrets and the static rules | main | 1 | landed |  |  |
+| US-0355 | SPEC-0117 | probes and data checks | US-0354 | 1 | landed |  |  |
+| US-0356 | SPEC-0117 | the start, the seed and migrate | US-0355 | 1 | landed |  |  |
+| US-0357 | SPEC-0117 | PostgreSQL, docs and contract | US-0356 | 1 | landed |  |  |

@@ -11,8 +11,7 @@ use serde_json::{Value, json};
 const ALICE: &str = "admin@example.com";
 const BOB: &str = "bob@example.com";
 const BARE: &str = "git.hosts key '";
-const ALL_THIRTEEN: &str =
-    "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth";
+const ALL_THIRTEEN: &str = "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth, infra";
 
 fn settings(fx: &Fx) -> ServerSettings {
     ServerSettings::of(fx.state.admin.as_ref(), fx.state.config.clone()).unwrap()
