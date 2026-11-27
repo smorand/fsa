@@ -1745,13 +1745,13 @@ pub struct RecalculateStartArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SectionArgs {
-    /// Section name: safety, api, extract, doc, sqlite, db, doc_service or search.
+    /// Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web or context7.
     pub section: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SetSettingArgs {
-    /// Section name: safety, api, extract, doc, sqlite, db, doc_service or search.
+    /// Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web or context7.
     pub section: String,
     /// Object of the keys to change, named as in the YAML configuration, for example {"max_read_lines": 500}; nested keys are nested objects; a key not given keeps its value.
     #[serde(default)]
@@ -4118,7 +4118,7 @@ impl McpServer {
 
     #[tool(
         name = "admin.list_settings",
-        description = "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only)."
+        description = "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only)."
     )]
     pub(crate) async fn admin_list_settings(&self) -> Result<CallToolResult, ErrorData> {
         let out = crate::tools::settings::list_settings(&self.state, &self.person).await;

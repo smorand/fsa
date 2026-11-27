@@ -29,6 +29,7 @@ pub async fn apply(
     let mut config = config;
     let mut seeds = Vec::new();
     let mut applied = false;
+    let mut git_applied = false;
     for section in SECTIONS {
         match rows.iter().find(|r| r.section == section) {
             Some(row) => {
@@ -49,6 +50,10 @@ pub async fn apply(
                 })?;
                 config.note_stored_switch(section);
                 applied = true;
+                // Only a list that differs from the one the configuration held needs
+                // publishing: a file start published its own at load.
+                git_applied |=
+                    section == "git" && before["hosts"] != section_json(&config, section)["hosts"];
                 if config.from_yaml_file && before != section_json(&config, section) {
                     tracing::warn!(
                         section,
@@ -63,6 +68,14 @@ pub async fn apply(
     if applied {
         config
             .check()
+            .map_err(|e| anyhow::anyhow!("the stored settings are refused: {}", e.message))?;
+    }
+    // The host map is what every remote operation resolves hosts with. A YAML start
+    // published its own at load; a stored `git` section replaces it here, never from
+    // `config.rs` (SPEC-0115 DEC-003). Only when the stored list differs from the one the
+    // configuration held, so an unchanged list never races the map's other readers.
+    if git_applied {
+        crate::git::remote::validate_hosts(&config.git)
             .map_err(|e| anyhow::anyhow!("the stored settings are refused: {}", e.message))?;
     }
     if !seeds.is_empty() {

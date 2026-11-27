@@ -5,7 +5,7 @@ use super::ServerSettings;
 use super::e2e::Fx;
 use serde_json::{Value, json};
 
-const ALICE: &str = "admin@example.com";
+pub(super) const ALICE: &str = "admin@example.com";
 const TOKEN: &str = "tok-abcdef123456";
 
 fn settings(fx: &Fx) -> ServerSettings {
@@ -91,7 +91,7 @@ async fn e2e_0114_009_unknown_names_and_wrong_types_name_the_section() {
     let m = set(&fx, "nope", json!({})).await.unwrap_err();
     assert_eq!(
         m,
-        "unknown setting section 'nope', expected one of safety, api, extract, doc, sqlite, db, doc_service, search"
+        "unknown setting section 'nope', expected one of safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7"
     );
     let m = settings(&fx).get("nope").await.unwrap_err().message;
     assert!(m.starts_with("unknown setting section 'nope'"), "{m}");
@@ -129,7 +129,22 @@ async fn e2e_0114_010_list_and_get_shapes() {
         .iter()
         .map(|s| s["section"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["safety", "api", "extract", "doc", "sqlite", "db", "doc_service", "search"]);
+    assert_eq!(
+        names,
+        [
+            "safety",
+            "api",
+            "extract",
+            "doc",
+            "sqlite",
+            "db",
+            "doc_service",
+            "search",
+            "git",
+            "web",
+            "context7"
+        ]
+    );
     for s in list["settings"].as_array().unwrap() {
         assert_eq!(s["source"], "default");
         assert_eq!(s["restart_required"], false);
@@ -185,7 +200,7 @@ async fn e2e_0114_013_each_section_round_trips() {
 use crate::config::ServerConfig;
 use base64::Engine;
 
-const KEY_A: [u8; 32] = [42u8; 32];
+pub(super) const KEY_A: [u8; 32] = [42u8; 32];
 const KEY_B: [u8; 32] = [43u8; 32];
 
 fn env_of(key: Option<[u8; 32]>) -> impl Fn(&str) -> Option<String> + Sync {
@@ -198,7 +213,7 @@ fn env_of(key: Option<[u8; 32]>) -> impl Fn(&str) -> Option<String> + Sync {
 
 /// A configuration for a real start in `root`, with the admin store at
 /// `root/admin.db`: the shape `--database-url sqlite:...` gives.
-fn boot_config(root: &std::path::Path) -> ServerConfig {
+pub(super) fn boot_config(root: &std::path::Path) -> ServerConfig {
     let (_key, public) = crate::keys::write_keypair(root.join("keys")).unwrap();
     let mut c = ServerConfig::default();
     c.auth.jwt.public_key_path = public.display().to_string();
@@ -209,7 +224,7 @@ fn boot_config(root: &std::path::Path) -> ServerConfig {
     c
 }
 
-async fn boot(
+pub(super) async fn boot(
     config: ServerConfig,
     key: Option<[u8; 32]>,
 ) -> Result<(axum::Router, std::sync::Arc<crate::state::AppState>), String> {
@@ -218,12 +233,12 @@ async fn boot(
 
 /// A YAML load publishes the process wide git host map, so it takes the lock
 /// the tests of that map take; the guard is dropped before any await.
-fn load_yaml(path: &std::path::Path) -> ServerConfig {
+pub(super) fn load_yaml(path: &std::path::Path) -> ServerConfig {
     let _hosts = crate::git::remote::tests::lock_for_test();
     ServerConfig::load(path).unwrap()
 }
 
-async fn set_on(state: &crate::state::AppState, section: &str, patch: Value) {
+pub(super) async fn set_on(state: &crate::state::AppState, section: &str, patch: Value) {
     ServerSettings::of(state.admin.as_ref(), std::sync::Arc::new(state.config.as_ref().clone()))
         .unwrap()
         .set(ALICE, section, patch)
@@ -263,7 +278,7 @@ async fn e2e_0114_003_start_with_only_the_database_and_the_key_reads_the_setting
     assert_eq!(got["restart_required"], false, "the running server holds the stored value");
 }
 
-fn yaml_for(root: &std::path::Path, extra: &str) -> std::path::PathBuf {
+pub(super) fn yaml_for(root: &std::path::Path, extra: &str) -> std::path::PathBuf {
     let p = root.join("config.yaml");
     let (_k, public) = crate::keys::write_keypair(root.join("keys")).unwrap();
     std::fs::write(
@@ -415,6 +430,8 @@ fn e2e_0114_017_the_database_url_sets_the_admin_store() {
 
 #[test]
 fn e2e_0114_017b_serve_needs_a_file_or_a_url_and_the_url_wins() {
+    // The host map is process wide: a start that succeeds publishes it.
+    let _hosts = crate::git::remote::tests::lock_for_test();
     use crate::cli::load_serve_config_with;
     let d = tempfile::tempdir().unwrap();
     let none =

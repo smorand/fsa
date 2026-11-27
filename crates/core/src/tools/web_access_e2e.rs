@@ -58,12 +58,12 @@ async fn site(body: &str) -> (u16, Arc<Record>) {
     stand_in(vec![("/", page(body))]).await
 }
 
-async fn fetch(app: &Router, token: &str, url: &str) -> Value {
+pub(crate) async fn fetch(app: &Router, token: &str, url: &str) -> Value {
     call_tool(app, token, "web.fetch", json!({"url": url})).await
 }
 
 /// The error of a refused call, without the framing the MCP route puts before every tool error.
-fn refusal_text(v: &Value) -> String {
+pub(crate) fn refusal_text(v: &Value) -> String {
     assert!(v["error"].is_null(), "the tool is served, so it is dispatched: {v}");
     assert_eq!(v["result"]["isError"], Value::Bool(true), "the call must be refused: {v}");
     let text = v["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{v}"));
@@ -73,11 +73,11 @@ fn refusal_text(v: &Value) -> String {
     error.to_string()
 }
 
-fn refused(site: &str) -> String {
+pub(crate) fn refused(site: &str) -> String {
     format!("ERR_FORBIDDEN: host '{site}' is not allowed by the web access lists")
 }
 
-fn served_text(v: &Value) -> String {
+pub(crate) fn served_text(v: &Value) -> String {
     match success_payload(v) {
         Value::String(s) => s,
         other => panic!("{other}"),
@@ -386,6 +386,8 @@ async fn e2e_0097_046_upper_case_wildcard_and_ipv6_accepted() {
 
 /// The configuration is read the way the server reads it at boot, and must be accepted.
 fn start_with_black(list: &[&str]) {
+    // The host map is process wide: a start that succeeds publishes it.
+    let _hosts = crate::git::remote::tests::lock_for_test();
     let yaml = format!(
         "web:\n  enabled: true\n  black_list_url: {}\n",
         serde_json::to_string(list).unwrap()

@@ -21,9 +21,20 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// The sections of this increment, in the order lists show them.
-pub const SECTIONS: [&str; 8] =
-    ["safety", "api", "extract", "doc", "sqlite", "db", "doc_service", "search"];
+/// The sections, in the order lists show them (SPEC-0114, SPEC-0115 added the last three).
+pub const SECTIONS: [&str; 11] = [
+    "safety",
+    "api",
+    "extract",
+    "doc",
+    "sqlite",
+    "db",
+    "doc_service",
+    "search",
+    "git",
+    "web",
+    "context7",
+];
 
 const SECRET_MAX: usize = 4096;
 
@@ -31,6 +42,16 @@ const SECRET_MAX: usize = 4096;
 pub(crate) fn secret_paths(section: &str) -> &'static [&'static str] {
     match section {
         "doc_service" => &["api.auth_token"],
+        _ => &[],
+    }
+}
+
+/// The keys of a section that hold a map with keys of their own (host names): a
+/// change gives the whole map, which replaces the stored one, so a host can be
+/// removed (SPEC-0115 DEC-001).
+fn free_paths(section: &str) -> &'static [&'static str] {
+    match section {
+        "git" => &["hosts"],
         _ => &[],
     }
 }
@@ -57,6 +78,9 @@ pub(crate) fn section_json(config: &ServerConfig, section: &str) -> Value {
         "db" => serde_json::to_value(&config.db),
         "doc_service" => serde_json::to_value(&config.doc_service),
         "search" => serde_json::to_value(&config.search),
+        "git" => serde_json::to_value(&config.git),
+        "web" => serde_json::to_value(&config.web),
+        "context7" => serde_json::to_value(&config.context7),
         other => unreachable!("section '{other}' was checked"),
     };
     v.expect("a configuration section serializes")
@@ -82,6 +106,14 @@ pub(crate) fn with_section(
         "db" => next.db = serde_json::from_value(value).map_err(bad)?,
         "doc_service" => next.doc_service = serde_json::from_value(value).map_err(bad)?,
         "search" => next.search = serde_json::from_value(value).map_err(bad)?,
+        "git" => next.git = serde_json::from_value(value).map_err(bad)?,
+        "web" => {
+            // The test only fields are not settings: keep the ones the process holds.
+            let mut web: crate::config::WebConfig = serde_json::from_value(value).map_err(bad)?;
+            web.keep_test_seams_of(&config.web);
+            next.web = web;
+        }
+        "context7" => next.context7 = serde_json::from_value(value).map_err(bad)?,
         other => return Err(unknown_section(other)),
     }
     Ok(next)
@@ -159,6 +191,9 @@ fn check_keys(section: &str, template: &Value, patch: &Value, prefix: &str) -> R
     let Some(p) = patch.as_object() else { return Ok(()) };
     for (k, v) in p {
         let path = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+        if free_paths(section).contains(&path.as_str()) {
+            continue;
+        }
         let Some(t) = template.get(k) else {
             return Err(ToolError::invalid_argument(format!(
                 "unknown key '{path}' in setting '{section}'"
@@ -278,6 +313,13 @@ impl ServerSettings {
         let key = self.store.key();
         let template = section_json(&ServerConfig::default(), section);
         check_keys(section, &template, patch, "")?;
+        for path in free_paths(section) {
+            if matches!(path_get(patch, path), Some(Value::Null)) {
+                return Err(ToolError::invalid_argument(format!(
+                    "invalid setting '{section}': {path} must be an object or a list of pairs"
+                )));
+            }
+        }
         let mut given: BTreeMap<String, String> = BTreeMap::new();
         for path in secret_paths(section) {
             match path_get(patch, path) {
@@ -344,6 +386,11 @@ impl ServerSettings {
             path_remove(&mut plain, path);
         }
         merge(&mut current, &plain);
+        for path in free_paths(section) {
+            if let Some(v) = path_get(&plain, path) {
+                path_set(&mut current, path, v.clone());
+            }
+        }
         let mut secrets_now = kept;
         for (path, v) in given {
             if v.is_empty() {

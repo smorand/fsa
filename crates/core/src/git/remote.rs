@@ -46,8 +46,27 @@ use crate::safety::SafetyManager;
 /// by the time `validate_hosts` ran. The hand-written [`Deserialize`] below
 /// collects every `(key, value)` pair `serde_norway` hands it instead of folding
 /// them into a map, so a duplicate survives to be rejected explicitly.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct HostMap(pub Vec<(String, String)>);
+
+/// Written as an object of host to provider, keys in byte order, so a stored
+/// setting reads the same wherever it was typed (SPEC-0115 FR-NEW-016). The
+/// order of the Vec is the operator's, kept for the start; nothing else reads it.
+impl Serialize for HostMap {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut sorted: Vec<&(String, String)> = self.0.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut map = serializer.serialize_map(Some(sorted.len()))?;
+        for (host, provider) in sorted {
+            map.serialize_entry(host, provider)?;
+        }
+        map.end()
+    }
+}
 
 impl<'de> Deserialize<'de> for HostMap {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
@@ -58,7 +77,27 @@ impl<'de> Deserialize<'de> for HostMap {
         impl<'de> serde::de::Visitor<'de> for HostMapVisitor {
             type Value = HostMap;
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a mapping of hostname to provider")
+                f.write_str(
+                    "a mapping of hostname to provider, or a list of [host, provider] pairs",
+                )
+            }
+            // `hosts:` with no value was an empty map for the YAML reader (serde_norway
+            // read it through `deserialize_map`); a settings change refuses null before
+            // it gets here (`ServerSettings::try_set`).
+            fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+                Ok(HostMap::default())
+            }
+            // A list of pairs keeps a repeated host, which a JSON object cannot carry
+            // (SPEC-0115 DEC-002): the duplicate check of `check_hosts` still sees it.
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(entry) = seq.next_element::<(String, String)>()? {
+                    entries.push(entry);
+                }
+                Ok(HostMap(entries))
             }
             fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
             where
@@ -71,7 +110,7 @@ impl<'de> Deserialize<'de> for HostMap {
                 Ok(HostMap(entries))
             }
         }
-        deserializer.deserialize_map(HostMapVisitor)
+        deserializer.deserialize_any(HostMapVisitor)
     }
 }
 

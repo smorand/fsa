@@ -125,7 +125,7 @@ async fn list_tools(app: &Router, token: &str) -> Vec<Value> {
         .clone()
 }
 
-async fn list_names(app: &Router, token: &str) -> Vec<String> {
+pub(crate) async fn list_names(app: &Router, token: &str) -> Vec<String> {
     list_tools(app, token).await.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
 }
 

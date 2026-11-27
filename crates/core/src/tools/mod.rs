@@ -130,7 +130,7 @@ pub mod sqlite;
 #[cfg(test)]
 mod teardown_e2e;
 #[cfg(test)]
-mod tool_surface_e2e;
+pub(crate) mod tool_surface_e2e;
 pub(crate) mod trash;
 #[cfg(test)]
 mod trash_search_e2e;
@@ -140,7 +140,7 @@ pub(crate) mod web_access;
 #[cfg(test)]
 mod web_access_boot_e2e;
 #[cfg(test)]
-mod web_access_e2e;
+pub(crate) mod web_access_e2e;
 #[cfg(test)]
 mod web_bound_e2e;
 #[cfg(test)]

@@ -344,3 +344,6 @@
 | US-0342 | SPEC-0114 | boot reads the settings and the database URL | US-0341 | 1 | landed |  |  |
 | US-0343 | SPEC-0114 | tools, REST routes and the settings screen | US-0342 | 1 | landed |  |  |
 | US-0344 | SPEC-0114 | migrate, PostgreSQL, docs and contract | US-0343 | 1 | landed |  |  |
+| US-0345 | SPEC-0115 | the three sections and their rules | main | 1 | landed |  |  |
+| US-0346 | SPEC-0115 | boot reads the three sections | US-0345 | 1 | landed |  |  |
+| US-0347 | SPEC-0115 | PostgreSQL, docs and contract | US-0346 | 1 | landed |  |  |

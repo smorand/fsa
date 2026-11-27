@@ -36,6 +36,12 @@ mod profile_pg_e2e;
 #[cfg(all(test, feature = "rag"))]
 mod search_e2e;
 #[cfg(test)]
+mod server_settings3_boot_e2e;
+#[cfg(test)]
+mod server_settings3_e2e;
+#[cfg(all(test, feature = "postgres"))]
+mod server_settings3_pg_e2e;
+#[cfg(test)]
 mod server_settings_e2e;
 #[cfg(all(test, feature = "postgres"))]
 mod server_settings_pg_e2e;

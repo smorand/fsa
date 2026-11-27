@@ -716,8 +716,8 @@ page carries (403 otherwise). Every stored value is escaped and the page has no 
 
 ## Server settings in the database
 
-Eight sections of the configuration (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`,
-`search`) are settings a platform administrator reads and changes without editing a file: the tools
+Eleven sections of the configuration (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`,
+`search`, `git`, `web`, `context7`) are settings a platform administrator reads and changes without editing a file: the tools
 `admin.list_settings`, `admin.get_setting` and `admin.set_setting`, `GET /api/admin/settings`,
 `GET|PUT /api/admin/settings/{section}` (body `{"value": {...}}`) and the `/app/settings` page. A change
 merges the keys given over the section, is checked by the same rules as the YAML (same messages, an unknown
@@ -731,10 +731,22 @@ The YAML stays as an optional seed and fallback. At start a section with a store
 (the database wins); a section with no row takes the YAML or the default. When the configuration was read from a
 YAML file, each section with no row is imported once; **a later edit of the YAML does not override the database**
 (the start logs a warning when they differ). A stored secret needs the key it was stored with: a missing or other
-`FSA_TOKEN_KEY` stops the start naming the section. The command line flags `--sqlite`, `--db`, `--doc` still force
-their switch on. `server`, `auth`, `git`, `web`, `context7` and `infra` are still read from the file (BL-0179 to
+`FSA_TOKEN_KEY` stops the start naming the section. The command line flags `--sqlite`, `--db`, `--doc`, `--git`, `--web`, `--context7` still force
+their switch on (and are never stored). `server`, `auth` and `infra` are still read from the file (BL-0180,
 BL-0181), so a database only start still needs `auth` keys from a file until they move. `fsa purge` and `fsa
 migrate` read the file only. Tests: `cargo test -p fsa-core --lib -- e2e_0114_`.
+
+The `git`, `web` and `context7` sections (SPEC-0115) follow the same rules. `git.hosts` is the list of trusted git
+hosts, an object of host to provider (`github`, `gitlab`, `generic`, `anonymous`); a change that gives `hosts`
+**replaces** the whole list (so a host can be removed), keeps each key as typed (`GitHub.com` and `github.com` are two
+hosts, a remote URL is matched in lower case) and reads back in byte order. A list of `[host, provider]` pairs is
+accepted too, which is how a repeated host is still refused (`git.hosts contains duplicate host 'x'`; a JSON object
+cannot hold a repeated key). The two web access lists are checked when they are set, with the messages of the start.
+These sections hold no secret value: provider client secrets are the names of environment variables, and host
+credentials stay in the encrypted token store, which a change of the host list never touches. A stored `git`
+section publishes its host list at the start, so a server started from a database URL alone resolves the stored
+hosts. `max_pack_size_mb` and every other key apply at the next start. Tests:
+`cargo test -p fsa-core --lib -- e2e_0115_` (PostgreSQL ones need `MCPFS_TEST_PG_DSN`).
 
 ## Project quota enforcement
 

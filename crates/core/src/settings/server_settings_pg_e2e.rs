@@ -16,14 +16,14 @@ const ADMIN: &str = "admin@example.com";
 const TOKEN: &str = "tok-abcdef123456";
 const KEY: [u8; 32] = [7u8; 32];
 
-struct Pg {
-    admin: Arc<RelationalAdminStore>,
-    db: Arc<PostgresRelationalDb>,
+pub(super) struct Pg {
+    pub(super) admin: Arc<RelationalAdminStore>,
+    pub(super) db: Arc<PostgresRelationalDb>,
     schema: String,
 }
 
 impl Pg {
-    async fn new() -> Option<Self> {
+    pub(super) async fn new() -> Option<Self> {
         let dsn = std::env::var("MCPFS_TEST_PG_DSN").ok().filter(|v| !v.trim().is_empty())?;
         let id = uuid::Uuid::new_v4().to_string().replace('-', "");
         let schema = format!("fsa_p114_{}", &id[..12]);
@@ -38,11 +38,24 @@ impl Pg {
         Some(Self { admin, db, schema })
     }
 
-    fn settings(&self, running: ServerConfig) -> ServerSettings {
+    pub(super) fn settings(&self, running: ServerConfig) -> ServerSettings {
         ServerSettings::of(self.admin.as_ref(), Arc::new(running)).unwrap()
     }
 
-    async fn drop_schema(self) {
+    /// How many lines of the settings record the store holds.
+    pub(super) async fn setting_lines(&self) -> i64 {
+        self.db
+            .query_opt(&Query::new(
+                "SELECT COUNT(*) FROM setting_change WHERE target_kind='setting'",
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .i64(0)
+            .unwrap()
+    }
+
+    pub(super) async fn drop_schema(self) {
         let _ =
             self.db.execute(&Query::new(format!("DROP SCHEMA \"{}\" CASCADE", self.schema))).await;
     }

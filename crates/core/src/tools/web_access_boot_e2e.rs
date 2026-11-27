@@ -56,6 +56,8 @@ fn free_port() -> u16 {
 
 #[test]
 fn e2e_0097_041_valid_lists_start_the_server() {
+    // The host map is process wide: a start that succeeds publishes it.
+    let _hosts = crate::git::remote::tests::lock_for_test();
     let black = ["10.0.0.0/8", "*.corp.example", "fd00::/8", "blocked.example"];
     let c = ServerConfig::from_yaml(&web_yaml(true, &black, &["docs.example"])).unwrap();
     assert_eq!(c.web.black_list_url, black);
@@ -129,6 +131,8 @@ fn e2e_0097_063_the_web_switch_off_does_not_skip_the_check() {
 
 #[test]
 fn e2e_0097_066_valid_lists_with_the_web_tools_off() {
+    // The host map is process wide: a start that succeeds publishes it.
+    let _hosts = crate::git::remote::tests::lock_for_test();
     let c = ServerConfig::from_yaml(&web_yaml(false, &["10.0.0.0/8"], &[])).unwrap();
     assert_eq!(c.web.black_list_url, ["10.0.0.0/8"]);
     assert!(c.web.white_list_url.is_empty());
@@ -227,6 +231,8 @@ fn e2e_0097_086_more_than_one_trailing_dot() {
 
 #[test]
 fn e2e_0097_086_exactly_one_trailing_dot_is_accepted() {
+    // The host map is process wide: a start that succeeds publishes it.
+    let _hosts = crate::git::remote::tests::lock_for_test();
     let c = ServerConfig::from_yaml(&web_yaml(true, &["blocked.example.", "*.corp.example."], &[]))
         .unwrap();
     assert_eq!(c.web.black_list_url.len(), 2);

@@ -694,6 +694,16 @@ impl std::fmt::Debug for WebConfig {
 }
 
 impl WebConfig {
+    /// A configuration rebuilt from a stored section keeps the test only seams of
+    /// the one the process runs on (they are `serde(skip)`, SPEC-0115 D4).
+    pub(crate) fn keep_test_seams_of(&mut self, _from: &WebConfig) {
+        #[cfg(test)]
+        {
+            self.test_base = _from.test_base.clone();
+            self.test_net = _from.test_net.clone();
+        }
+    }
+
     /// Refuse an entry of either access list that is not one of the accepted forms.
     pub fn validate_lists(&self) -> Result<()> {
         crate::tools::web_access::AccessLists::from_config(self).map(drop)

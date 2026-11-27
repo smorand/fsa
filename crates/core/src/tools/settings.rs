@@ -17,15 +17,14 @@ use serde_json::Value;
 
 /// Must equal the `#[tool]` descriptions in `mcp::server`, literals there.
 #[cfg(test)]
-pub(crate) const LIST_SETTINGS: &str = "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).";
+pub(crate) const LIST_SETTINGS: &str = "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).";
 #[cfg(test)]
 pub(crate) const GET_SETTING: &str = "Read one server setting section: its value without secrets, for each secret whether it is set and its last 4 characters, where it comes from, and whether a restart is needed to apply it (platform admin only).";
 #[cfg(test)]
 pub(crate) const SET_SETTING: &str = "Change keys of one server setting section: the keys given are merged over the section, an unknown key or a value that today's configuration check refuses is refused, a secret key set to an empty text is cleared; the change applies at the next start (platform admin only).";
 
 #[cfg(test)]
-pub(crate) const SECTION_PARAM: &str =
-    "Section name: safety, api, extract, doc, sqlite, db, doc_service or search.";
+pub(crate) const SECTION_PARAM: &str = "Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web or context7.";
 #[cfg(test)]
 pub(crate) const VALUE_PARAM: &str = "Object of the keys to change, named as in the YAML configuration, for example {\"max_read_lines\": 500}; nested keys are nested objects; a key not given keeps its value.";
 
