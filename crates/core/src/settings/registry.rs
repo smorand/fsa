@@ -782,7 +782,7 @@ impl crate::search::embedding::EmbedTargets for RegistryTargets {
             Some((url, model, bearer)) => {
                 crate::search::embedding::EmbedTarget { url, model, bearer }
             }
-            None => crate::search::embedding::StaticTargets::target_of(&self.fallback),
+            None => crate::search::embedding::StaticTargets::target_of(&self.fallback)?,
         })
     }
 

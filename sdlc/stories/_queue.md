@@ -347,3 +347,9 @@
 | US-0345 | SPEC-0115 | the three sections and their rules | main | 1 | landed |  |  |
 | US-0346 | SPEC-0115 | boot reads the three sections | US-0345 | 1 | landed |  |  |
 | US-0347 | SPEC-0115 | PostgreSQL, docs and contract | US-0346 | 1 | landed |  |  |
+| US-0348 | SPEC-0116 | the server section, the section list and the change order | main | 1 | landed |  |  |
+| US-0349 | SPEC-0116 | the auth section and its change rules | US-0348 | 1 | landed |  |  |
+| US-0350 | SPEC-0116 | identity with several keys | US-0349 | 1 | landed |  |  |
+| US-0351 | SPEC-0116 | the start: address, banner, key check, stored and seed rules | US-0350 | 1 | landed |  |  |
+| US-0352 | SPEC-0116 | the secret variable names | US-0351 | 1 | landed |  |  |
+| US-0353 | SPEC-0116 | PostgreSQL, docs and contract | US-0352 | 1 | landed |  |  |

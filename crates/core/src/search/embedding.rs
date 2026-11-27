@@ -61,20 +61,23 @@ pub trait EmbedTargets: Send + Sync {
 pub struct StaticTargets(pub EmbeddingConfig);
 
 impl StaticTargets {
-    pub fn target_of(config: &EmbeddingConfig) -> EmbedTarget {
-        let bearer = if config.api_key_env.is_empty() {
-            None
-        } else {
-            std::env::var(&config.api_key_env).ok().map(SecretText::new)
-        };
-        EmbedTarget { url: config.endpoint.clone(), model: config.model.clone(), bearer }
+    pub fn target_of(config: &EmbeddingConfig) -> Result<EmbedTarget> {
+        let name = &config.api_key_env;
+        if crate::config::is_master_name(name) {
+            return Err(ToolError::invalid_argument(format!(
+                "Embedding key variable '{name}' is not allowed: the server reserves it"
+            )));
+        }
+        let bearer =
+            if name.is_empty() { None } else { std::env::var(name).ok().map(SecretText::new) };
+        Ok(EmbedTarget { url: config.endpoint.clone(), model: config.model.clone(), bearer })
     }
 }
 
 #[async_trait::async_trait]
 impl EmbedTargets for StaticTargets {
     async fn target(&self) -> Result<EmbedTarget> {
-        Ok(Self::target_of(&self.0))
+        Self::target_of(&self.0)
     }
 }
 

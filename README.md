@@ -716,8 +716,8 @@ page carries (403 otherwise). Every stored value is escaped and the page has no 
 
 ## Server settings in the database
 
-Eleven sections of the configuration (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`,
-`search`, `git`, `web`, `context7`) are settings a platform administrator reads and changes without editing a file: the tools
+Thirteen sections of the configuration (`safety`, `api`, `extract`, `doc`, `sqlite`, `db`, `doc_service`,
+`search`, `git`, `web`, `context7`, `server`, `auth`) are settings a platform administrator reads and changes without editing a file: the tools
 `admin.list_settings`, `admin.get_setting` and `admin.set_setting`, `GET /api/admin/settings`,
 `GET|PUT /api/admin/settings/{section}` (body `{"value": {...}}`) and the `/app/settings` page. A change
 merges the keys given over the section, is checked by the same rules as the YAML (same messages, an unknown
@@ -747,6 +747,30 @@ credentials stay in the encrypted token store, which a change of the host list n
 section publishes its host list at the start, so a server started from a database URL alone resolves the stored
 hosts. `max_pack_size_mb` and every other key apply at the next start. Tests:
 `cargo test -p fsa-core --lib -- e2e_0115_` (PostgreSQL ones need `MCPFS_TEST_PG_DSN`).
+
+### Server and auth (SPEC-0116)
+
+`server` (listen `host`, `port`, `mcp_path`, `public_base_url`) and `auth` (`jwt.public_keys`, `jwt.public_key_path`,
+`jwt.header`, `jwt.algorithms`, `jwt.issuer`, `jwt.audience`, `jwt.username_claim`, `admins`) follow the same tools,
+routes and page. The server listens where the stored `server` section says and prints its banner after the stored settings
+are applied (`Serving fsa <version> on <host>:<port> (config=<file or none, settings from the database>)`); a change of the
+address needs a restart, the running server keeps its address. A token is verified with **every** public key of the list
+and with the key file, so two keys are accepted while a key is rotated (give both, restart, then give the new one alone,
+restart). Keys are public data given as PEM text (SPKI `PUBLIC KEY` or `RSA PUBLIC KEY`, RSA 2048 to 8192 bits, at most 8):
+a private key, a certificate, an elliptic curve key or a key of another size is refused **before it is saved** and is never
+echoed; a change that would leave no key, no administrator or no identity claim is refused, because it would lock every
+caller out. The server refuses to serve when it holds no key at all (`no auth key is configured: ...`); a first start from a
+YAML file (`fsa serve --config config.yaml --database-url sqlite:state/admin.db`) imports the keys, after that
+`fsa serve --database-url ... ` and `FSA_TOKEN_KEY` are enough. The 30 second clock skew, the order of the token header and
+the `Authorization` header and every message of the token check are unchanged. `server.public_base_url` is not changeable
+through the tools (it prefixes export links that carry a credential); the MCP path must be one the router can mount.
+
+The variables that name a secret (`git.github_client_secret_env`, `git.gitlab_client_secret_env`, `extract.ocr.api_key_env`,
+`search.embedding.api_key_env`, `search.reranking.api_key_env`) accept, through the tools, the default name of the key or
+`FSA_SECRET_<GITHUB|GITLAB|OCR|EMBEDDING|RERANKING>_` followed by capital letters, digits and underscores; the twelve variables
+the server itself reads (`FSA_TOKEN_KEY`, `FSA_DATABASE_URL`, the MinIO and DSN variables) are never read as such a secret.
+A YAML file keeps any other name with a warning at the start; a name that a stored section holds outside the namespace is
+not used.
 
 ## Project quota enforcement
 

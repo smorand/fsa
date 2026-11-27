@@ -26,6 +26,7 @@ pub mod identity;
 pub mod keys;
 pub mod logging;
 pub mod mcp;
+pub mod mcp_mount;
 pub mod migrate;
 pub mod models_screen;
 pub mod purge;

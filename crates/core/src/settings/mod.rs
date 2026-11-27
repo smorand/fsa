@@ -11,6 +11,7 @@
 //! holds the shapes, `converter_rules` the input checks, `converter_store` the
 //! SQL and `converters` the operations.
 
+pub(crate) mod change_rules;
 pub mod converter;
 mod converter_rules;
 mod converter_store;
@@ -30,6 +31,8 @@ mod converters_e2e;
 #[cfg(test)]
 mod e2e;
 #[cfg(test)]
+mod key_fixtures;
+#[cfg(test)]
 mod profile_e2e;
 #[cfg(all(test, feature = "postgres"))]
 mod profile_pg_e2e;
@@ -41,6 +44,18 @@ mod server_settings3_boot_e2e;
 mod server_settings3_e2e;
 #[cfg(all(test, feature = "postgres"))]
 mod server_settings3_pg_e2e;
+#[cfg(test)]
+mod server_settings4_e2e;
+#[cfg(test)]
+mod server_settings5_e2e;
+#[cfg(test)]
+mod server_settings6_e2e;
+#[cfg(test)]
+mod server_settings7_e2e;
+#[cfg(test)]
+mod server_settings8_e2e;
+#[cfg(all(test, feature = "postgres"))]
+mod server_settings9_pg_e2e;
 #[cfg(test)]
 mod server_settings_e2e;
 #[cfg(all(test, feature = "postgres"))]

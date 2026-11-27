@@ -173,10 +173,14 @@ fn d_username_claim() -> String {
     "email".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JwtConfig {
+    /// The file holding one RSA public key (today's form, kept).
     pub public_key_path: String,
+    /// RSA public keys as PEM texts, all accepted at once so a key can be rotated
+    /// (SPEC-0116 FR-NEW-040). Public data, never a secret.
+    pub public_keys: Vec<String>,
     pub header: String,
     pub algorithms: Vec<String>,
     pub audience: Option<String>,
@@ -187,6 +191,7 @@ impl Default for JwtConfig {
     fn default() -> Self {
         Self {
             public_key_path: String::new(),
+            public_keys: Vec::new(),
             header: d_header(),
             algorithms: d_algorithms(),
             audience: None,
@@ -196,12 +201,99 @@ impl Default for JwtConfig {
     }
 }
 
+/// The six fields every recorded snapshot of the config tests prints; the key list
+/// is added only when it holds a key, so a configuration written before the list
+/// existed prints as it always did (SPEC-0116 FR-NEW-015). Key texts are never
+/// printed, only their number.
+impl fmt::Debug for JwtConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("JwtConfig");
+        d.field("public_key_path", &self.public_key_path);
+        d.field("header", &self.header);
+        d.field("algorithms", &self.algorithms);
+        d.field("audience", &self.audience);
+        d.field("issuer", &self.issuer);
+        d.field("username_claim", &self.username_claim);
+        if !self.public_keys.is_empty() {
+            d.field("public_keys", &format_args!("{} key(s)", self.public_keys.len()));
+        }
+        d.finish()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
     pub jwt: JwtConfig,
     /// Platform admins (caseless match).
     pub admins: Vec<String>,
+}
+
+impl AuthConfig {
+    /// Whether any key is configured: a key file path or a non empty key list. The
+    /// server refuses to serve without one (SPEC-0116 FR-NEW-011).
+    pub fn holds_key(&self) -> bool {
+        !self.jwt.public_key_path.trim().is_empty() || !self.jwt.public_keys.is_empty()
+    }
+}
+
+/// The variables the server itself holds a secret in, or reads its start from: never
+/// read as the secret of a git provider, an OCR service or an embedding service, and
+/// never given to one of those keys by a change (SPEC-0116 FR-NEW-018, FR-NEW-019).
+pub const MASTER_NAMES: [&str; 12] = [
+    "FSA_TOKEN_KEY",
+    "MCPFS_TOKEN_KEY",
+    "FSA_DATABASE_URL",
+    "FSA_MINIO_ACCESS_KEY",
+    "FSA_MINIO_SECRET_KEY",
+    "FSA_META_DSN",
+    "MCPFS_META_DSN",
+    "MCPFS_ADMIN_DSN",
+    "MCPFS_GIT_DSN",
+    "MCPFS_OAUTH_DSN",
+    "FSA_DOC_SERVICE_TOKEN",
+    "MCPFS_DOC_SERVICE_TOKEN",
+];
+
+/// The default names of each of the five keys that name a secret variable: what a
+/// configuration may keep naming whatever the secret namespace says (FR-NEW-018).
+pub fn secret_name_defaults(dotted: &str) -> &'static [&'static str] {
+    match dotted {
+        "git.github_client_secret_env" => {
+            &["FSA_GITHUB_CLIENT_SECRET", "MCPFS_GITHUB_CLIENT_SECRET"]
+        }
+        "git.gitlab_client_secret_env" => &["GITLAB_CLIENT_SECRET"],
+        "extract.ocr.api_key_env" => &["FSA_OCR_KEY", "MCP_FS_OCR_KEY"],
+        _ => &[],
+    }
+}
+
+/// Whether `name` is one of the [`MASTER_NAMES`].
+pub fn is_master_name(name: &str) -> bool {
+    MASTER_NAMES.contains(&name)
+}
+
+/// The refusal of a listen host, `None` when it is a host name or an IPv4 address:
+/// labels of 1 to 63 ASCII letters, digits or hyphens that neither start nor end with
+/// a hyphen, separated by single dots, 253 characters at most (SPEC-0116 FR-NEW-002).
+pub fn host_refusal(host: &str) -> Option<String> {
+    let label = |l: &str| {
+        (1..=63).contains(&l.len())
+            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+    };
+    let ok = !host.is_empty() && host.len() <= 253 && host.split('.').all(label);
+    (!ok).then(|| format!("invalid server.host '{host}': expected an IPv4 address or a host name"))
+}
+
+/// The refusal of a public base URL, `None` when it is empty or starts with the scheme
+/// `http://` or `https://` (case sensitive, SPEC-0116 FR-NEW-002).
+pub fn public_base_url_refusal(url: &str) -> Option<String> {
+    let ok = url.is_empty() || url.starts_with("http://") || url.starts_with("https://");
+    (!ok).then(|| {
+        format!("invalid server.public_base_url '{url}': must start with http:// or https://")
+    })
 }
 
 fn d_meta_backend() -> String {
@@ -1318,6 +1410,44 @@ impl ServerConfig {
         validate_doc_service(&self.doc_service)?;
         validate_search(&self.search)?;
         crate::git::remote::check_hosts(&self.git)?;
+        Ok(())
+    }
+
+    /// The rules of the listen host, the MCP path and the public base URL that a stored
+    /// `server` section obeys at the start (SPEC-0116 FR-NEW-002, FR-NEW-046, FR-NEW-048).
+    pub fn check_server_forms(&self) -> Result<()> {
+        if let Some(m) = host_refusal(&self.server.host) {
+            return Err(ToolError::invalid_argument(m));
+        }
+        self.check_mcp_path()?;
+        if let Some(m) = public_base_url_refusal(&self.server.public_base_url) {
+            return Err(ToolError::invalid_argument(m));
+        }
+        Ok(())
+    }
+
+    /// The MCP path: it starts with `/` (today's words) and the router can mount it.
+    pub fn check_mcp_path(&self) -> Result<()> {
+        let path = &self.server.mcp_path;
+        if !path.starts_with('/') {
+            return Err(ToolError::invalid_argument(format!(
+                "server.mcp_path must start with '/' (got '{path}')"
+            )));
+        }
+        match crate::mcp_mount::refusal(path) {
+            Some(m) => Err(ToolError::invalid_argument(m)),
+            None => Ok(()),
+        }
+    }
+
+    /// The form of the listed keys and their number, as a start reads them (a size is
+    /// judged at a change only, SPEC-0116 FR-NEW-020).
+    pub fn check_auth_keys(&self) -> Result<()> {
+        let keys: Vec<&str> = self.auth.jwt.public_keys.iter().map(String::as_str).collect();
+        crate::settings::change_rules::check_key_entries(&keys, false)?;
+        if keys.len() > 8 {
+            return Err(ToolError::invalid_argument("auth.jwt.public_keys holds more than 8 keys"));
+        }
         Ok(())
     }
 

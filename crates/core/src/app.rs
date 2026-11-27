@@ -124,9 +124,9 @@ pub(crate) async fn build_with_env(
     }
 
     let mcp_path = config.server.mcp_path.clone();
-    if !mcp_path.starts_with('/') {
-        anyhow::bail!("server.mcp_path must start with '/' (got '{mcp_path}')");
-    }
+    // Also judged for a configuration given directly, so no path reaches the router
+    // that would make it panic (SPEC-0116 FR-NEW-046).
+    config.check_mcp_path().map_err(|e| anyhow::anyhow!(e.message))?;
 
     // Built once, here, so the api mode's HTTP client and its connection pool are
     // reused across conversions instead of rebuilt per call.
@@ -238,8 +238,40 @@ pub(crate) async fn build_with_env(
 /// Bind and serve until Ctrl+C, running the purge background loop (FR-NEW-009)
 /// alongside it for the whole lifetime of the process.
 pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let (app, state) = build_with_state(config).await?;
+    serve_with_env(config, Arc::new(|name| std::env::var(name).ok()), None).await
+}
+
+/// The start banner (SPEC-0116 FR-NEW-021): the address in force once the stored
+/// settings are applied, and where the configuration came from.
+pub fn banner_line(version: &str, config: &ServerConfig, origin: Option<&str>) -> String {
+    format!(
+        "Serving fsa {version} on {}:{} (config={})",
+        config.server.host,
+        config.server.port,
+        origin.unwrap_or("none, settings from the database")
+    )
+}
+
+/// The refusal to serve with no key anywhere (SPEC-0116 FR-NEW-011).
+pub const NO_AUTH_KEY: &str = "no auth key is configured: store auth.jwt.public_keys or set auth.jwt.public_key_path (a first start from a YAML file imports them)";
+
+/// The environment a start reads through, shared with the task that serves.
+pub type EnvFn = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
+/// [`serve`] reading the environment through `env` and naming where the configuration
+/// came from. The address, the banner and the key check come from the configuration
+/// the stored settings produced, so a stored address is the one listened on.
+pub async fn serve_with_env(
+    config: ServerConfig,
+    env: EnvFn,
+    origin: Option<String>,
+) -> anyhow::Result<()> {
+    let (app, state) = build_with_env(config, &*env).await?;
+    eprintln!("{}", banner_line(VERSION, &state.config, origin.as_deref()));
+    if !state.config.auth.holds_key() {
+        anyhow::bail!(NO_AUTH_KEY);
+    }
+    let addr = format!("{}:{}", state.config.server.host, state.config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}"))?;

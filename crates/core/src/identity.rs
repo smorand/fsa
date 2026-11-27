@@ -14,7 +14,9 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde_json::Value;
 
 pub struct IdentityResolver {
-    key: Option<DecodingKey>,
+    /// The keys a token may be signed with, in the order they are tried: the stored
+    /// list first, then the key file (SPEC-0116 FR-NEW-040).
+    keys: Vec<DecodingKey>,
     header: String,
     issuer: Option<String>,
     audience: Option<String>,
@@ -46,16 +48,33 @@ fn parse_algorithm(name: &str) -> Option<Algorithm> {
 }
 
 impl IdentityResolver {
-    /// Build from config, loading the public key from `auth.jwt.public_key_path`.
-    /// A missing key path yields a resolver that rejects every token.
+    /// Build from config: the keys of `auth.jwt.public_keys`, then the key of
+    /// `auth.jwt.public_key_path`. No usable key yields a resolver that rejects every
+    /// token. A listed key the token library cannot verify with (a modulus outside
+    /// 2048 to 8192 bits) is left out: it verifies nothing, as before.
     pub fn new(auth: &AuthConfig) -> Self {
-        let key = if auth.jwt.public_key_path.is_empty() {
-            None
-        } else {
-            std::fs::read(&auth.jwt.public_key_path)
-                .ok()
-                .and_then(|pem| DecodingKey::from_rsa_pem(&pem).ok())
-        };
+        let mut keys: Vec<DecodingKey> = auth
+            .jwt
+            .public_keys
+            .iter()
+            .filter_map(|entry| parse_rsa_public(entry))
+            .filter(|(_, bits)| (2048..=8192).contains(bits))
+            .map(|(pkcs1, _)| DecodingKey::from_rsa_der(&pkcs1))
+            .collect();
+        let path = &auth.jwt.public_key_path;
+        if !path.is_empty() {
+            let file =
+                std::fs::read(path).ok().and_then(|pem| DecodingKey::from_rsa_pem(&pem).ok());
+            match file {
+                Some(k) => keys.push(k),
+                // With a list in force the file is a second source that stopped working:
+                // say so once, the list keeps serving (FR-NEW-025).
+                None if !auth.jwt.public_keys.is_empty() => tracing::warn!(
+                    "auth.jwt.public_key_path '{path}' cannot be read as an RSA public key: it is ignored"
+                ),
+                None => {}
+            }
+        }
         let mut algorithms = Vec::new();
         let mut unsupported = Vec::new();
         for name in &auth.jwt.algorithms {
@@ -71,7 +90,7 @@ impl IdentityResolver {
             algorithms.push(Algorithm::RS256);
         }
         Self {
-            key,
+            keys,
             header: auth.jwt.header.clone(),
             issuer: auth.jwt.issuer.clone(),
             audience: auth.jwt.audience.clone(),
@@ -98,7 +117,7 @@ impl IdentityResolver {
         let key = DecodingKey::from_rsa_pem(pem)
             .map_err(|e| ToolError::internal(format!("invalid RSA public key: {e}")))?;
         Ok(Self {
-            key: Some(key),
+            keys: vec![key],
             header: "X-Forwarded-Authorization".to_string(),
             issuer: issuer.map(str::to_string),
             audience: None,
@@ -148,10 +167,9 @@ impl IdentityResolver {
 
     /// Verify a token and return the normalized caller identity.
     pub fn verify(&self, token: &str) -> Result<String> {
-        let key = self
-            .key
-            .as_ref()
-            .ok_or_else(|| ToolError::unauthenticated("no JWT public key configured"))?;
+        if self.keys.is_empty() {
+            return Err(ToolError::unauthenticated("no JWT public key configured"));
+        }
 
         // Honour every configured algorithm, not just RS256.
         let primary = self.algorithms.first().copied().unwrap_or(Algorithm::RS256);
@@ -171,8 +189,32 @@ impl IdentityResolver {
             None => v.validate_aud = false,
         }
 
-        let data = jsonwebtoken::decode::<Value>(token, key, &v)
-            .map_err(|e| ToolError::unauthenticated(format!("invalid token: {e}")))?;
+        // The first key that verifies the token serves. When none does, the error is
+        // the first one that is not an invalid signature (an expiry says more than a
+        // key that was never the signer's), else the first (FR-NEW-040).
+        let mut errors = Vec::new();
+        let mut decoded = None;
+        for key in &self.keys {
+            match jsonwebtoken::decode::<Value>(token, key, &v) {
+                Ok(d) => {
+                    decoded = Some(d);
+                    break;
+                }
+                Err(e) => errors.push(e),
+            }
+        }
+        let data = match decoded {
+            Some(d) => d,
+            None => {
+                let pick = errors
+                    .iter()
+                    .position(|e| {
+                        !matches!(e.kind(), jsonwebtoken::errors::ErrorKind::InvalidSignature)
+                    })
+                    .unwrap_or(0);
+                return Err(ToolError::unauthenticated(format!("invalid token: {}", errors[pick])));
+            }
+        };
 
         let person =
             data.claims.get(&self.username_claim).and_then(Value::as_str).ok_or_else(|| {
@@ -191,6 +233,45 @@ impl IdentityResolver {
             .ok_or_else(|| ToolError::unauthenticated("no bearer token in request headers"))?;
         self.verify(&token)
     }
+}
+
+/// The RSA public key an entry of `jwt.public_keys` holds, as the PKCS1 DER the token
+/// library takes, with its modulus length in bits. `None` when the entry is not exactly
+/// one PEM block of an RSA public key (`PUBLIC KEY` or `RSA PUBLIC KEY`) between blank
+/// lines. The key is read from its DER, not through the PEM readers of the `rsa` crate,
+/// which refuse a modulus over 4096 bits (SPEC-0116 D15).
+pub(crate) fn parse_rsa_public(entry: &str) -> Option<(Vec<u8>, usize)> {
+    use base64::Engine;
+    use rsa::pkcs1::RsaPublicKey;
+    use rsa::pkcs8::spki::SubjectPublicKeyInfoRef;
+    let blank = |l: &str| l.trim_matches([' ', '\t', '\r']).is_empty();
+    let lines: Vec<&str> =
+        entry.lines().map(|l| l.strip_suffix('\r').unwrap_or(l)).filter(|l| !blank(l)).collect();
+    let (first, last) = (lines.first()?, lines.last()?);
+    let label = match *first {
+        "-----BEGIN PUBLIC KEY-----" => "PUBLIC KEY",
+        "-----BEGIN RSA PUBLIC KEY-----" => "RSA PUBLIC KEY",
+        _ => return None,
+    };
+    if lines.len() < 3 || *last != format!("-----END {label}-----") {
+        return None;
+    }
+    let body: String = lines[1..lines.len() - 1].concat();
+    let der = base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()?;
+    let pkcs1: Vec<u8> = if label == "RSA PUBLIC KEY" {
+        der
+    } else {
+        let info = SubjectPublicKeyInfoRef::try_from(der.as_slice()).ok()?;
+        if info.algorithm.oid.to_string() != "1.2.840.113549.1.1.1" {
+            return None;
+        }
+        info.subject_public_key.raw_bytes().to_vec()
+    };
+    let key = RsaPublicKey::try_from(pkcs1.as_slice()).ok()?;
+    let modulus = key.modulus.as_bytes();
+    let at = modulus.iter().position(|b| *b != 0)?;
+    let bits = (modulus.len() - at - 1) * 8 + (8 - modulus[at].leading_zeros() as usize);
+    Some((pkcs1, bits))
 }
 
 #[cfg(test)]

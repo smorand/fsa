@@ -47,6 +47,9 @@ const ALLOWED: &[(&str, &str)] = &[
     ("crates/core/src/config.rs", "MCP_FS_"),
     ("crates/core/src/config.rs", "MCPFS_"),
     ("crates/core/src/git/oauth/store.rs", "MCPFS_"),
+    // the tests of the names that may not hold a secret (SPEC-0116): they name the old default names
+    ("crates/core/src/settings/server_settings8_e2e.rs", "MCPFS_"),
+    ("crates/core/src/settings/server_settings8_e2e.rs", "MCP_FS_"),
     ("crates/fsa/tests/env_compat_e2e.rs", "mcp-fs"),
     ("crates/fsa/tests/env_compat_e2e.rs", "MCP_FS_"),
     // retained: the bucket prefix `mcpfs-`, the DSN and the schema `mcpfs`

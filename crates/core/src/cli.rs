@@ -356,17 +356,10 @@ async fn cmd_serve(
             config.force(name);
         }
     }
-    // The banner goes to stderr so it never pollutes a piped stdout.
-    eprintln!(
-        "Serving fsa {} on {}:{} (config={})",
-        crate::app::VERSION,
-        config.server.host,
-        config.server.port,
-        resolved
-            .as_ref()
-            .map_or_else(|| "none, settings from the database".into(), |p| p.display().to_string())
-    );
-    crate::app::serve(config).await
+    // The banner goes to stderr so it never pollutes a piped stdout; `serve` prints it
+    // once the stored settings are applied, so it names the address really listened on.
+    let origin = resolved.as_ref().map(|p| p.display().to_string());
+    crate::app::serve_with_env(config, std::sync::Arc::new(|n| std::env::var(n).ok()), origin).await
 }
 
 /// Config path resolution: `--config`, else `FSA_CONFIG`, else

@@ -182,6 +182,13 @@ impl HttpDeviceFlowClient {
     /// Read a client secret from the environment at call time. Returning an error
     /// (instead of posting an empty secret) keeps the failure legible.
     fn secret(env_name: &str, provider: &str) -> Result<String> {
+        // A variable the server itself holds a secret in is never a client secret,
+        // whatever put its name here (SPEC-0116 FR-NEW-019).
+        if crate::config::is_master_name(env_name) {
+            return Err(ToolError::invalid_argument(format!(
+                "{provider} client secret variable '{env_name}' is not allowed: the server reserves it"
+            )));
+        }
         match std::env::var(env_name) {
             Ok(v) if !v.trim().is_empty() => Ok(v),
             _ => Err(ToolError::invalid_argument(format!(

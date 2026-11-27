@@ -540,7 +540,7 @@
         "type": "object",
         "properties": {
           "section": {
-            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web or context7.",
+            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server or auth.",
             "type": "string"
           }
         },
@@ -701,7 +701,7 @@
     },
     {
       "name": "admin.list_settings",
-      "description": "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).",
+      "description": "List the server setting sections (safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth) with where each value comes from (database, yaml or default), whether a restart is needed to apply it, and who changed it last (platform admin only).",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -1042,7 +1042,7 @@
         "type": "object",
         "properties": {
           "section": {
-            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web or context7.",
+            "description": "Section name: safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server or auth.",
             "type": "string"
           },
           "value": {

@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 const ALICE: &str = "admin@example.com";
 const BOB: &str = "bob@example.com";
 const BARE: &str = "git.hosts key '";
-const ALL_ELEVEN: &str =
-    "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7";
+const ALL_THIRTEEN: &str =
+    "safety, api, extract, doc, sqlite, db, doc_service, search, git, web, context7, server, auth";
 
 fn settings(fx: &Fx) -> ServerSettings {
     ServerSettings::of(fx.state.admin.as_ref(), fx.state.config.clone()).unwrap()
@@ -203,12 +203,12 @@ async fn e2e_0115_018_the_list_names_eleven_sections_and_an_unknown_one_lists_th
         .iter()
         .map(|s| s["section"].as_str().unwrap())
         .collect();
-    assert_eq!(names.join(", "), ALL_ELEVEN);
+    assert_eq!(names.join(", "), ALL_THIRTEEN);
     for s in &list["settings"].as_array().unwrap()[8..] {
         assert_eq!(s["source"], "default");
     }
     let m = set(&fx, "nope", json!({})).await.unwrap_err();
-    assert_eq!(m, format!("unknown setting section 'nope', expected one of {ALL_ELEVEN}"));
+    assert_eq!(m, format!("unknown setting section 'nope', expected one of {ALL_THIRTEEN}"));
 }
 
 async fn screen_post(fx: &Fx, section: &str, value: &str) -> (axum::http::StatusCode, String) {
@@ -338,10 +338,10 @@ async fn e2e_0115_033_a_refused_change_adds_no_record_line() {
 async fn e2e_0115_034_a_secret_env_name_is_a_plain_name_never_resolved() {
     let fx = Fx::new().await;
     // SAFETY of the test: a name nobody else reads.
-    let out = set(&fx, "git", json!({"gitlab_client_secret_env": "MY_GITLAB_SECRET_0115"}))
+    let out = set(&fx, "git", json!({"gitlab_client_secret_env": "FSA_SECRET_GITLAB_0115"}))
         .await
         .unwrap();
-    assert_eq!(out["value"]["gitlab_client_secret_env"], "MY_GITLAB_SECRET_0115");
+    assert_eq!(out["value"]["gitlab_client_secret_env"], "FSA_SECRET_GITLAB_0115");
     assert_eq!(out["secrets"], json!({}));
 }
 
@@ -367,7 +367,7 @@ async fn e2e_0115_036_a_refused_patch_on_the_screen_shows_the_message() {
 async fn e2e_0115_037_a_section_in_capitals_is_unknown() {
     let fx = Fx::new().await;
     let m = set(&fx, "GIT", json!({})).await.unwrap_err();
-    assert_eq!(m, format!("unknown setting section 'GIT', expected one of {ALL_ELEVEN}"));
+    assert_eq!(m, format!("unknown setting section 'GIT', expected one of {ALL_THIRTEEN}"));
 }
 
 #[tokio::test]

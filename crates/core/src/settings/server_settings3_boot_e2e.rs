@@ -39,7 +39,7 @@ fn forget_hosts() {
     validate_hosts(&GitConfig::default()).unwrap();
 }
 
-async fn changes_of(state: &Arc<AppState>) -> Vec<Value> {
+pub(super) async fn changes_of(state: &Arc<AppState>) -> Vec<Value> {
     let mut out = Vec::new();
     let mut marker = String::new();
     loop {
@@ -230,7 +230,7 @@ async fn e2e_0115_005_the_yaml_seeds_once_and_a_later_edit_does_not_override() {
     );
     let all = changes_of(&second).await;
     let seeds: Vec<&Value> = all.iter().filter(|c| c["action"] == "seed_setting").collect();
-    assert_eq!(seeds.len(), 11, "the first start imports every section once");
+    assert_eq!(seeds.len(), 13, "the first start imports every section once");
     for s in ["git", "web", "context7"] {
         let n =
             seeds.iter().filter(|c| c["target_id"] == s && c["person"] == "system:yaml").count();

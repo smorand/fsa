@@ -80,7 +80,13 @@ impl OcrProvider for MultimodalOcrProvider {
         if !self.enabled() {
             return Ok(String::new());
         }
-        let api_key = std::env::var(self.config.api_key_env_name()).unwrap_or_default();
+        let name = self.config.api_key_env_name();
+        if crate::config::is_master_name(&name) {
+            return Err(ToolError::invalid_argument(format!(
+                "OCR key variable '{name}' is not allowed: the server reserves it"
+            )));
+        }
+        let api_key = std::env::var(name).unwrap_or_default();
         let b64 = base64::engine::general_purpose::STANDARD.encode(image);
         let data_url = format!("data:{mime_type};base64,{b64}");
         let payload = serde_json::json!({

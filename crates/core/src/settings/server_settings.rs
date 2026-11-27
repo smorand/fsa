@@ -21,8 +21,8 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// The sections, in the order lists show them (SPEC-0114, SPEC-0115 added the last three).
-pub const SECTIONS: [&str; 11] = [
+/// The sections, in the order lists show them (SPEC-0114, SPEC-0115 added the next three, SPEC-0116 the last two).
+pub const SECTIONS: [&str; 13] = [
     "safety",
     "api",
     "extract",
@@ -34,6 +34,8 @@ pub const SECTIONS: [&str; 11] = [
     "git",
     "web",
     "context7",
+    "server",
+    "auth",
 ];
 
 const SECRET_MAX: usize = 4096;
@@ -81,6 +83,8 @@ pub(crate) fn section_json(config: &ServerConfig, section: &str) -> Value {
         "git" => serde_json::to_value(&config.git),
         "web" => serde_json::to_value(&config.web),
         "context7" => serde_json::to_value(&config.context7),
+        "server" => serde_json::to_value(&config.server),
+        "auth" => serde_json::to_value(&config.auth),
         other => unreachable!("section '{other}' was checked"),
     };
     v.expect("a configuration section serializes")
@@ -114,6 +118,8 @@ pub(crate) fn with_section(
             next.web = web;
         }
         "context7" => next.context7 = serde_json::from_value(value).map_err(bad)?,
+        "server" => next.server = serde_json::from_value(value).map_err(bad)?,
+        "auth" => next.auth = serde_json::from_value(value).map_err(bad)?,
         other => return Err(unknown_section(other)),
     }
     Ok(next)
@@ -305,12 +311,19 @@ impl ServerSettings {
 
     async fn try_set(&self, person: &str, section: &str, patch: &Value) -> Result<Value> {
         check_section(section)?;
+        if !patch.is_object() && matches!(section, "server" | "auth") {
+            return Err(ToolError::invalid_argument(format!(
+                "invalid setting '{section}': the value has the wrong type"
+            )));
+        }
         if !patch.is_object() {
             return Err(ToolError::invalid_argument(format!(
                 "the value of setting '{section}' must be an object"
             )));
         }
         let key = self.store.key();
+        super::change_rules::names(section, patch)?;
+        super::change_rules::types(section, patch)?;
         let template = section_json(&ServerConfig::default(), section);
         check_keys(section, &template, patch, "")?;
         for path in free_paths(section) {
@@ -379,6 +392,8 @@ impl ServerSettings {
         };
         let mut old_full = current.clone();
         join_secrets(&mut old_full, &kept);
+        // The rules on what the change gives (SPEC-0116), before anything is merged.
+        super::change_rules::pre(section, patch, &old_full)?;
 
         // The patch without its secret keys, then the secrets decided.
         let mut plain = patch.clone();
@@ -402,6 +417,8 @@ impl ServerSettings {
         let mut full = current;
         join_secrets(&mut full, &secrets_now);
 
+        // The rules on the section as it will be, before it is read into its struct.
+        super::change_rules::post(section, patch, &full, &old_full)?;
         // Today's checks, on the configuration as it will be.
         let candidate = with_section(&self.running, section, full)?;
         candidate.check()?;
