@@ -1,0 +1,6 @@
+/* Loaded inside <noscript> only (SPEC-0118 G4). Ours, not copied from app-design: without
+   script a tab panel is shown, a confirmation modal is an inline form, its trigger is hidden. */
+.panel{display:block}
+.overlay{position:static;display:block;background:none;padding:0;backdrop-filter:none}
+.overlay .modal{box-shadow:none;max-width:none;border:1px solid var(--border);margin:8px 0}
+[data-open],[data-close]{display:none}

@@ -315,7 +315,7 @@ async fn e2e_0111_009_every_stored_value_is_escaped() {
     let (s, html) = w.open(ALICE, PROJ, NAME_XSS, "&set_id=set-xss00001&chunk=1").await;
     assert_eq!(s, StatusCode::OK, "{html}");
     for raw in
-        ["<script", "<img src=x", "<svg onload", "<iframe", "<b>bold</b>", "onerror=alert(1)>"]
+        ["<script>", "<img src=x", "<svg onload", "<iframe", "<b>bold</b>", "onerror=alert(1)>"]
     {
         assert!(!html.contains(raw), "unescaped {raw} in the page\n{html}");
     }

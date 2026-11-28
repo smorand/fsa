@@ -12,6 +12,7 @@
 //! or from the request passes [`escape_html`] before it enters the page, and
 //! the page carries no script.
 
+use crate::app_shell::{self, Page, Screen as Nav, Viewer};
 use crate::errors::{Result, ToolError, code};
 use crate::state::AppState;
 use crate::token_screen::{CsrfStore, check_csrf, escape_html, resolve_person};
@@ -79,7 +80,7 @@ async fn render(
 ) -> Response {
     match read_page(s, person, mount, q, answer).await {
         Ok(body) => html(StatusCode::OK, body),
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(&s.app, person, &e).await,
     }
 }
 
@@ -97,7 +98,7 @@ async fn recalculate(
     };
     let mount = param(&fields, "mount_id");
     if let Err(e) = s.app.authorize(&mount, &person).await {
-        return html(status_of(&e), error_page(&e));
+        return refused_page(&s.app, &person, &e).await;
     }
     let token = fields.remove("csrf_token");
     if let Some(refusal) = check_csrf(&s.csrf, source, &person, token.as_deref()) {
@@ -114,7 +115,7 @@ async fn recalculate(
     .await;
     match done {
         Ok(job) => render(&s, &person, &mount, &fields, Some(&job)).await,
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(&s.app, &person, &e).await,
     }
 }
 
@@ -130,12 +131,11 @@ fn html(status: StatusCode, body: String) -> Response {
     (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
 }
 
-fn error_page(e: &ToolError) -> String {
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>File metadata</title></head>\n\
-         <body>\n<h1>File metadata</h1>\n<p class=\"error\">{}</p>\n</body>\n</html>\n",
-        escape_html(&e.to_string())
-    )
+/// A refusal: the shell with the alert, the status of the error, the text the bare error
+/// page held.
+async fn refused_page(app: &AppState, person: &str, e: &ToolError) -> Response {
+    let viewer = Viewer::load(app, person).await;
+    app_shell::refusal(&viewer, Nav::FileMetadata, status_of(e), &e.to_string())
 }
 
 /// The project picker of FR-NEW-004: the caller's own projects, no metadata.
@@ -143,16 +143,19 @@ async fn picker(app: &AppState, person: &str) -> Response {
     match app.admin.list_projects_for(person).await {
         Ok(projects) => {
             let ids: Vec<String> = projects.into_iter().map(|p| p.id).collect();
-            html(StatusCode::OK, page_shell(person, &open_form(&ids, "", ""), ""))
+            let viewer = Viewer::load(app, person).await;
+            html(StatusCode::OK, page_shell(&viewer, &open_form(&ids, "", ""), ""))
         }
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(app, person, &e).await,
     }
 }
 
 /// The form that opens a file: a project of the caller and a path.
 fn open_form(projects: &[String], mount: &str, path: &str) -> String {
-    let mut out = String::from("<form method=\"get\" action=\"/app/file-metadata\">");
-    out.push_str("<select name=\"mount_id\">");
+    let mut out = String::from(
+        "<div class=\"card\"><form class=\"card-b row\" method=\"get\" action=\"/app/file-metadata\">",
+    );
+    out.push_str("<select class=\"select\" name=\"mount_id\">");
     for id in projects {
         let sel = if id == mount { " selected" } else { "" };
         let id = escape_html(id);
@@ -160,17 +163,21 @@ fn open_form(projects: &[String], mount: &str, path: &str) -> String {
     }
     let _ = writeln!(
         out,
-        "</select><input name=\"path\" value=\"{}\"><button type=\"submit\">Open</button></form>",
+        "</select><input class=\"input\" name=\"path\" value=\"{}\"><button type=\"submit\" class=\"btn primary\">Open</button></form></div>",
         escape_html(path)
     );
     out
 }
 
-fn page_shell(person: &str, head: &str, body: &str) -> String {
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>File metadata</title></head>\n\
-         <body>\n<h1>File metadata</h1>\n<p>Signed in as {}</p>\n{head}{body}</body>\n</html>\n",
-        escape_html(person)
+fn page_shell(viewer: &Viewer, head: &str, body: &str) -> String {
+    app_shell::page(
+        viewer,
+        Page {
+            screen: Nav::FileMetadata,
+            title: "File metadata",
+            body: format!("{head}{body}"),
+            alert: None,
+        },
     )
 }
 
@@ -228,7 +235,7 @@ fn or_empty(r: Result<Value>) -> Result<Option<Value>> {
     }
 }
 
-const NO_CONVERSION: &str = "<p>No conversion yet</p>\n";
+const NO_CONVERSION: &str = "<p class=\"muted\">No conversion yet</p>\n";
 
 async fn read_page(
     s: &Screen,
@@ -271,11 +278,14 @@ async fn read_page(
         open_form(&projects, mount, &path),
         escape_html(&format!("{mount}:{path}"))
     );
-    Ok(page_shell(person, &head, &body))
+    let viewer = Viewer::load(app, person).await;
+    Ok(page_shell(&viewer, &head, &body))
 }
 
 async fn text_section(app: &AppState, mount: &str, path: &str) -> Result<String> {
-    let mut out = String::from("<section data-section=\"text\">\n<h3>Text</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"text\">\n<div class=\"card-h\"><h3>Text</h3></div><div class=\"card-b\">\n",
+    );
     let view =
         or_empty(artifacts::document_view(app, mount, path, false, None, Some("text")).await)?;
     match view {
@@ -291,7 +301,7 @@ async fn text_section(app: &AppState, mount: &str, path: &str) -> Result<String>
             let _ = writeln!(out, "<pre>{}</pre>", escape_html(&shown));
         }
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     Ok(out)
 }
 
@@ -307,13 +317,15 @@ fn more_link(answer: &Value, mount: &str, path: &str, param: &str) -> String {
 }
 
 fn images_section(images: Option<&Value>, mount: &str, path: &str) -> String {
-    let mut out = String::from("<section data-section=\"images\">\n<h3>Images</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"images\">\n<div class=\"card-h\"><h3>Images</h3></div><div class=\"card-b\">\n",
+    );
     let list = images.and_then(|v| v["images"].as_array()).filter(|l| !l.is_empty());
     match (images, list) {
         (None, _) => out.push_str(NO_CONVERSION),
         (Some(_), None) => out.push_str("<p>No image</p>\n"),
         (Some(all), Some(list)) => {
-            out.push_str("<table>\n<tbody>\n");
+            out.push_str("<div class=\"table-wrap\"><table>\n<tbody>\n");
             for i in list {
                 let _ = writeln!(
                     out,
@@ -324,22 +336,24 @@ fn images_section(images: Option<&Value>, mount: &str, path: &str) -> String {
                     id = text(i, "id"),
                 );
             }
-            out.push_str("</tbody>\n</table>\n");
+            out.push_str("</tbody>\n</table></div>\n");
             out.push_str(&more_link(all, mount, path, "images_marker"));
         }
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     out
 }
 
 fn tables_section(tables: Option<&Value>, mount: &str, path: &str) -> String {
-    let mut out = String::from("<section data-section=\"tables\">\n<h3>Tables</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"tables\">\n<div class=\"card-h\"><h3>Tables</h3></div><div class=\"card-b\">\n",
+    );
     let list = tables.and_then(|v| v["tables"].as_array()).filter(|l| !l.is_empty());
     match (tables, list) {
         (None, _) => out.push_str(NO_CONVERSION),
         (Some(_), None) => out.push_str("<p>No table</p>\n"),
         (Some(all), Some(list)) => {
-            out.push_str("<table>\n<tbody>\n");
+            out.push_str("<div class=\"table-wrap\"><table>\n<tbody>\n");
             for t in list {
                 let _ = writeln!(
                     out,
@@ -351,16 +365,18 @@ fn tables_section(tables: Option<&Value>, mount: &str, path: &str) -> String {
                     id = text(t, "id"),
                 );
             }
-            out.push_str("</tbody>\n</table>\n");
+            out.push_str("</tbody>\n</table></div>\n");
             out.push_str(&more_link(all, mount, path, "tables_marker"));
         }
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     out
 }
 
 fn headings_section(headings: Option<&Value>, mount: &str, path: &str) -> String {
-    let mut out = String::from("<section data-section=\"headings\">\n<h3>Headings</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"headings\">\n<div class=\"card-h\"><h3>Headings</h3></div><div class=\"card-b\">\n",
+    );
     let list = headings.and_then(|v| v["headings"].as_array()).filter(|l| !l.is_empty());
     match (headings, list) {
         (None, _) => out.push_str(NO_CONVERSION),
@@ -379,7 +395,7 @@ fn headings_section(headings: Option<&Value>, mount: &str, path: &str) -> String
             out.push_str(&more_link(all, mount, path, "headings_marker"));
         }
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     out
 }
 
@@ -394,12 +410,14 @@ async fn chunks_section(
 ) -> Result<(String, Option<String>)> {
     let sets = chunks::list_chunk_sets(app, person, mount, path).await?;
     let sets = sets["sets"].as_array().cloned().unwrap_or_default();
-    let mut out = String::from("<section data-section=\"chunk-sets\">\n<h3>Chunk sets</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"chunk-sets\">\n<div class=\"card-h\"><h3>Chunk sets</h3></div><div class=\"card-b\">\n",
+    );
     if sets.is_empty() {
-        out.push_str("<p>No chunk set</p>\n</section>\n");
+        out.push_str("<p>No chunk set</p>\n</div></section>\n");
         return Ok((out, None));
     }
-    out.push_str("<table>\n<tbody>\n");
+    out.push_str("<div class=\"table-wrap\"><table>\n<tbody>\n");
     for s in &sets {
         let raw_id = s["set_id"].as_str().unwrap_or_default();
         let default = if s["default"].as_bool() == Some(true) { "default" } else { "" };
@@ -417,7 +435,7 @@ async fn chunks_section(
             id = escape_html(raw_id),
         );
     }
-    out.push_str("</tbody>\n</table>\n");
+    out.push_str("</tbody>\n</table></div>\n");
     let wanted = param(q, "set_id");
     let shown = sets
         .iter()
@@ -431,7 +449,7 @@ async fn chunks_section(
     } else {
         out.push_str(&chunk_view(app, person, mount, path, set_id, &chunk).await?);
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     Ok((out, Some(set_id.to_string())))
 }
 
@@ -445,7 +463,10 @@ async fn chunk_list(
     marker: &str,
 ) -> Result<String> {
     let page = chunks::list_chunks(app, person, mount, path, set_id, marker).await?;
-    let mut out = format!("<h4>Chunks of {}</h4>\n<table>\n<tbody>\n", escape_html(set_id));
+    let mut out = format!(
+        "<h4>Chunks of {}</h4>\n<div class=\"table-wrap\"><table>\n<tbody>\n",
+        escape_html(set_id)
+    );
     for c in page["chunks"].as_array().cloned().unwrap_or_default() {
         let n = number(&c, "number");
         let headings: Vec<&str> = c["heading_path"]
@@ -461,7 +482,7 @@ async fn chunk_list(
             text(&c, "preview"),
         );
     }
-    out.push_str("</tbody>\n</table>\n");
+    out.push_str("</tbody>\n</table></div>\n");
     if let Some(next) = page["marker"].as_str() {
         let _ = writeln!(
             out,
@@ -530,7 +551,7 @@ async fn chunk_view(
 /// The job a recalculation answered (FR-NEW-008).
 fn answer_section(job: &Value) -> String {
     format!(
-        "<section data-section=\"answer\" data-answer-job=\"{}\">\n<h3>Recalculation requested</h3>\n<table>\n<tbody>\n{}</tbody>\n</table>\n</section>\n",
+        "<section class=\"card\" data-section=\"answer\" data-answer-job=\"{}\">\n<div class=\"card-h\"><h3>Recalculation requested</h3></div><div class=\"table-wrap\"><div class=\"table-wrap\"><table>\n<tbody>\n{}</tbody>\n</table></div>\n</div></section>\n",
         text(job, "job_id"),
         job_row(job)
     )
@@ -549,18 +570,20 @@ fn actions_section(token: &str, mount: &str, path: &str, set_id: Option<&str>) -
              <input type=\"hidden\" name=\"mount_id\" value=\"{}\">\
              <input type=\"hidden\" name=\"path\" value=\"{}\">\
              <input type=\"hidden\" name=\"kind\" value=\"{kind}\">{set}\
-             <button type=\"submit\">{label}</button></form>\n",
+             <button type=\"submit\" class=\"btn\">{label}</button></form>\n",
             escape_html(token),
             escape_html(mount),
             escape_html(path),
         )
     };
-    let mut out = String::from("<section data-section=\"actions\">\n<h3>Recalculate</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"actions\">\n<div class=\"card-h\"><h3>Recalculate</h3></div><div class=\"card-b\">\n",
+    );
     out.push_str(&form("search_index", "Recalculate the search entries", None));
     if let Some(id) = set_id {
         out.push_str(&form("chunks", "Recalculate the chunk set shown", Some(id)));
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     out
 }
 
@@ -581,17 +604,19 @@ fn job_row(j: &Value) -> String {
 async fn jobs_section(app: &AppState, mount: &str, path: &str) -> Result<String> {
     let jobs = derived::list_derived_jobs(app, mount, path, "").await?;
     let jobs = jobs["jobs"].as_array().cloned().unwrap_or_default();
-    let mut out = String::from("<section data-section=\"jobs\">\n<h3>Jobs</h3>\n");
+    let mut out = String::from(
+        "<section class=\"card\" data-section=\"jobs\">\n<div class=\"card-h\"><h3>Jobs</h3></div><div class=\"card-b\">\n",
+    );
     if jobs.is_empty() {
         out.push_str("<p>No job</p>\n");
     } else {
-        out.push_str("<table>\n<tbody>\n");
+        out.push_str("<div class=\"table-wrap\"><table>\n<tbody>\n");
         for j in &jobs {
             out.push_str(&job_row(j));
         }
-        out.push_str("</tbody>\n</table>\n");
+        out.push_str("</tbody>\n</table></div>\n");
     }
-    out.push_str("</section>\n");
+    out.push_str("</div></section>\n");
     Ok(out)
 }
 

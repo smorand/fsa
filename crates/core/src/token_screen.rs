@@ -26,6 +26,7 @@
 //! a bearer header instead has no ambient credential to forge, so it is
 //! exempt.
 
+use crate::app_shell::{self, Page, Screen, Viewer};
 use crate::errors::{Result, ToolError, code};
 use crate::identity::IdentityResolver;
 use crate::state::AppState;
@@ -132,11 +133,10 @@ async fn show(State(state): State<ScreenState>, headers: HeaderMap) -> Response 
             // Issued only once the page is actually about to render, so a failed
             // render never leaves an unusable token sitting in the store.
             let csrf_token = state.csrf.issue(&person);
-            let body = page_shell(&person, &rows, &hosts, &csrf_token);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
-                .into_response()
+            let viewer = Viewer::load(&state.app, &person).await;
+            app_shell::html(StatusCode::OK, page_shell(&viewer, &rows, &hosts, &csrf_token))
         }
-        Err(e) => error_response(&e),
+        Err(e) => app_shell::refuse(&state.app, &person, &headers, Screen::Tokens, &e).await,
     }
 }
 
@@ -180,9 +180,9 @@ async fn seed(
     if let Some(resp) = check_csrf(&state.csrf, source, &person, form.csrf_token.as_deref()) {
         return resp;
     }
-    match seed_token(&state.app, person, &form.host, &form.token).await {
+    match seed_token(&state.app, person.clone(), &form.host, &form.token).await {
         Ok(()) => redirect_to_tokens(),
-        Err(e) => error_response(&e),
+        Err(e) => app_shell::refuse(&state.app, &person, &headers, Screen::Tokens, &e).await,
     }
 }
 
@@ -198,9 +198,9 @@ async fn revoke(
     if let Some(resp) = check_csrf(&state.csrf, source, &person, form.csrf_token.as_deref()) {
         return resp;
     }
-    match revoke_token(&state.app, person, &form.host).await {
+    match revoke_token(&state.app, person.clone(), &form.host).await {
         Ok(()) => redirect_to_tokens(),
-        Err(e) => error_response(&e),
+        Err(e) => app_shell::refuse(&state.app, &person, &headers, Screen::Tokens, &e).await,
     }
 }
 
@@ -291,12 +291,6 @@ fn unauthorized(err: &ToolError) -> Response {
 
 /// Any other tool error, mapped to its HTTP status (FR-NEW-046: a rejected host
 /// or token is `400` with `ERR_INVALID_ARGUMENT`).
-fn error_response(err: &ToolError) -> Response {
-    let status =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(json!({"error": err.code, "detail": err.message}))).into_response()
-}
-
 fn redirect_to_tokens() -> Response {
     (StatusCode::SEE_OTHER, [(header::LOCATION, "/app/tokens")]).into_response()
 }
@@ -305,20 +299,42 @@ fn redirect_to_tokens() -> Response {
 /// value) and a host selector limited to declared, non-anonymous hosts
 /// (E2E-NEW-103). `data-host`/`data-validity` attributes on each row are for
 /// this module's own tests only; no client script depends on them.
-fn page_shell(person: &str, rows: &[TokenRow], hosts: &[String], csrf_token: &str) -> String {
-    let person = escape_html(person);
+fn page_shell(viewer: &Viewer, rows: &[TokenRow], hosts: &[String], csrf_token: &str) -> String {
     let csrf_token = escape_html(csrf_token);
-    let table_rows: String = rows
-        .iter()
-        .map(|r| {
-            let host = escape_html(&r.host);
-            let provider = escape_html(&r.provider);
-            let validity = escape_html(&r.validity);
-            format!(
-                "<tr data-host=\"{host}\" data-validity=\"{validity}\"><td>{host}</td><td>{provider}</td><td>{validity}</td></tr>\n"
-            )
-        })
-        .collect();
+    let list = if rows.is_empty() {
+        app_shell::empty_state("key", "No token", "Save a token below to reach a git host.")
+    } else {
+        let table_rows: String = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let host = escape_html(&r.host);
+                let provider = escape_html(&r.provider);
+                let validity = escape_html(&r.validity);
+                let fields = format!(
+                    "<input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\
+                     <input type=\"hidden\" name=\"host\" value=\"{host}\">"
+                );
+                let remove = app_shell::confirm(
+                    &format!("m-remove-{i}"),
+                    "Remove",
+                    "Remove this token?",
+                    &format!("The token for {} is deleted from the server.", r.host),
+                    "/app/tokens/revoke",
+                    &fields,
+                );
+                format!(
+                    "<tr data-host=\"{host}\" data-validity=\"{validity}\"><td>{host}</td><td>{provider}</td>\
+                     <td><span class=\"badge\">{validity}</span></td><td>{remove}</td></tr>\n"
+                )
+            })
+            .collect();
+        format!(
+            "<div class=\"card\"><div class=\"table-wrap\"><table>\n\
+             <thead><tr><th>Host</th><th>Provider</th><th>Validity</th><th></th></tr></thead>\n\
+             <tbody>\n{table_rows}</tbody>\n</table></div></div>\n"
+        )
+    };
     let options: String = hosts
         .iter()
         .map(|h| {
@@ -326,17 +342,19 @@ fn page_shell(person: &str, rows: &[TokenRow], hosts: &[String], csrf_token: &st
             format!("<option value=\"{host}\">{host}</option>\n")
         })
         .collect();
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Git tokens</title></head>\n\
-         <body>\n<h1>Git tokens</h1>\n<p>Signed in as {person}</p>\n\
-         <table>\n<thead><tr><th>Host</th><th>Provider</th><th>Validity</th></tr></thead>\n\
-         <tbody>\n{table_rows}</tbody>\n</table>\n\
-         <form method=\"post\" action=\"/app/tokens\">\n\
+    let body = format!(
+        "{list}<div class=\"card\"><form method=\"post\" action=\"/app/tokens\">\n\
+         <div class=\"card-h\"><h3>Save a token</h3></div>\
+         <div class=\"card-b col\">\
          <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\n\
-         <select name=\"host\">\n{options}</select>\n\
-         <input name=\"token\" type=\"password\"><button type=\"submit\">Save</button>\n\
-         </form>\n</body>\n</html>\n"
-    )
+         <div class=\"field\"><label for=\"host\">Host</label>\
+         <select class=\"select\" id=\"host\" name=\"host\">\n{options}</select></div>\
+         <div class=\"field\"><label for=\"token\">Token</label>\
+         <input class=\"input\" id=\"token\" name=\"token\" type=\"password\"></div></div>\
+         <div class=\"card-f\"><button type=\"submit\" class=\"btn primary\">Save</button></div>\n\
+         </form></div>\n"
+    );
+    app_shell::page(viewer, Page { screen: Screen::Tokens, title: "Git tokens", body, alert: None })
 }
 
 /// Minimal HTML escaping: the identity claim is attacker-controlled by the

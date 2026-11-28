@@ -16,6 +16,7 @@
 //! inputs are password fields without a value, and an empty secret on an edit
 //! keeps the stored one (the registry's rule for an absent secret).
 
+use crate::app_shell::{self, Page, Screen as Nav, Viewer};
 use crate::errors::{Result, ToolError};
 use crate::settings::{ModelInput, ModelUpdate, ProviderUpdate, SecretText};
 use crate::state::AppState;
@@ -72,7 +73,7 @@ async fn act(
     // Identity, then the admin refusal, then the one time token: a non admin
     // cookie post is told it is not an admin, not that its token is wrong.
     if let Err(e) = s.app.require_admin(&person) {
-        return html(status_of(&e), error_page(&e));
+        return refused_page(&s.app, &person, &e).await;
     }
     let token = fields.remove("csrf_token");
     if let Some(refusal) = check_csrf(&s.csrf, source, &person, token.as_deref()) {
@@ -234,20 +235,21 @@ async fn render(
             // leaves a token behind.
             let token = s.csrf.issue(person);
             let changes: Vec<Value> = changes["changes"].as_array().cloned().unwrap_or_default();
-            let body =
-                page(person, &token, refused, &providers, &models_, &defaults, &changes, &profiles);
+            let viewer = Viewer::load(app, person).await;
+            let body = page(
+                &viewer, &token, refused, &providers, &models_, &defaults, &changes, &profiles,
+            );
             html(status, body)
         }
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(app, person, &e).await,
     }
 }
 
-fn error_page(e: &ToolError) -> String {
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Models</title></head>\n\
-         <body>\n<h1>Models</h1>\n<p class=\"error\">{}</p>\n</body>\n</html>\n",
-        escape_html(&e.to_string())
-    )
+/// A refusal of the registry: the shell with the alert, the status of the error, the text
+/// the bare error page held.
+async fn refused_page(app: &AppState, person: &str, e: &ToolError) -> Response {
+    let viewer = Viewer::load(app, person).await;
+    app_shell::refusal(&viewer, Nav::Models, status_of(e), &e.to_string())
 }
 
 fn text(v: &Value, key: &str) -> String {
@@ -290,7 +292,7 @@ fn profile_section(p: &Value) -> String {
 
 #[allow(clippy::too_many_arguments)]
 fn page(
-    person: &str,
+    viewer: &Viewer,
     token: &str,
     refused: Option<&ToolError>,
     providers: &[Value],
@@ -302,89 +304,114 @@ fn page(
     let csrf =
         format!("<input type=\"hidden\" name=\"csrf_token\" value=\"{}\">", escape_html(token));
     let mut out = String::new();
-    out.push_str(&format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Models</title></head>\n\
-         <body>\n<h1>Models</h1>\n<p>Signed in as {}</p>\n",
-        escape_html(person)
-    ));
-    if let Some(e) = refused {
-        out.push_str(&format!("<p class=\"error\">{}</p>\n", escape_html(&e.to_string())));
-    }
-    out.push_str("<h2>Defaults</h2>\n<ul>\n");
+    let mut n = 0usize;
+    // Defaults.
+    out.push_str("<div class=\"card\"><div class=\"card-h\"><h2>Defaults</h2></div><div class=\"table-wrap\"><table><tbody>\n");
     for kind in ["text_embedding", "reranker"] {
         let d = &defaults[kind];
         let who = if d.is_null() { "none".to_string() } else { text(d, "name") };
-        out.push_str(&format!("<li data-default=\"{kind}\">{kind}: {who}\n"));
+        n += 1;
+        let clear = app_shell::confirm(
+            &format!("m-default-{n}"),
+            "Clear",
+            "Clear this default?",
+            &format!("The {kind} default is removed."),
+            "/app/models/default/clear",
+            &format!("{csrf}<input type=\"hidden\" name=\"kind\" value=\"{kind}\">"),
+        );
         out.push_str(&format!(
-            "<form method=\"post\" action=\"/app/models/default/clear\">{csrf}<input type=\"hidden\" name=\"kind\" value=\"{kind}\"><button type=\"submit\">Clear</button></form></li>\n"
+            "<tr data-default=\"{kind}\"><td>{kind}: {who}</td><td>{clear}</td></tr>\n"
         ));
     }
-    out.push_str("</ul>\n<h2>Providers</h2>\n");
+    out.push_str("</tbody></table></div></div>\n<h2>Providers</h2>\n");
+    if providers.is_empty() {
+        out.push_str(&app_shell::empty_state(
+            "cpu",
+            "No provider",
+            "Create a provider below to register models.",
+        ));
+    }
     for p in providers {
         let id = text(p, "provider_id");
         let secret =
             if p["has_secret"].as_bool() == Some(true) { "Secret stored" } else { "No secret" };
         out.push_str(&format!(
-            "<section data-provider=\"{id}\">\n<h3>{}</h3>\n<p>{} ({}) {secret}</p>\n",
+            "<section class=\"card\" data-provider=\"{id}\">\n<div class=\"card-h\"><h3>{}</h3></div><div class=\"card-b col\">\n<p class=\"muted\">{} ({}) {secret}</p>\n",
             text(p, "name"),
             text(p, "endpoint"),
             text(p, "auth_scheme"),
         ));
         out.push_str(&format!(
-            "<form method=\"post\" action=\"/app/models/provider/update\">{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\">\
-             <input name=\"name\" value=\"{}\"><input name=\"endpoint\" value=\"{}\"><input name=\"auth_scheme\" value=\"{}\">\
-             <input name=\"secret\" type=\"password\" autocomplete=\"new-password\"><label><input type=\"checkbox\" name=\"clear_secret\" value=\"true\">Clear secret</label>\
-             <button type=\"submit\">Save</button></form>\n",
+            "<form class=\"row\" method=\"post\" action=\"/app/models/provider/update\">{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\">\
+             <input class=\"input\" name=\"name\" value=\"{}\"><input class=\"input\" name=\"endpoint\" value=\"{}\"><input class=\"input\" name=\"auth_scheme\" value=\"{}\">\
+             <input class=\"input\" name=\"secret\" type=\"password\" autocomplete=\"new-password\"><label class=\"check\"><input type=\"checkbox\" name=\"clear_secret\" value=\"true\">Clear secret</label>\
+             <button type=\"submit\" class=\"btn\">Save</button></form>\n",
             text(p, "name"),
             text(p, "endpoint"),
             text(p, "auth_scheme"),
         ));
-        out.push_str(&format!(
-            "<form method=\"post\" action=\"/app/models/provider/delete\">{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\"><button type=\"submit\">Delete provider</button></form>\n<ul>\n"
+        n += 1;
+        out.push_str("<div class=\"row\">");
+        out.push_str(&app_shell::confirm(
+            &format!("m-provider-{n}"),
+            "Delete provider",
+            "Delete this provider?",
+            &format!("The provider {} is deleted.", p["name"].as_str().unwrap_or_default()),
+            "/app/models/provider/delete",
+            &format!("{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\">"),
         ));
+        out.push_str("</div><ul>\n");
         for m in models_.iter().filter(|m| m["provider_id"] == p["provider_id"]) {
             let mid = text(m, "model_id");
             let kind = text(m, "kind");
             let star = if m["is_default"].as_bool() == Some(true) { " (default)" } else { "" };
             out.push_str(&format!(
-                "<li data-model=\"{mid}\">{} {kind} dimension {} max tokens {}{star}\n",
+                "<li data-model=\"{mid}\"><span class=\"badge\">{kind}</span> {} dimension {} max tokens {}{star}\n",
                 text(m, "name"),
                 number_text(m, "dimension"),
                 number_text(m, "max_input_tokens"),
             ));
             out.push_str(&format!(
-                "<form method=\"post\" action=\"/app/models/model/update\">{csrf}<input type=\"hidden\" name=\"model_id\" value=\"{mid}\">\
-                 <input name=\"name\" value=\"{}\"><input name=\"dimension\" value=\"{}\"><input name=\"max_input_tokens\" value=\"{}\"><button type=\"submit\">Save</button></form>\n",
+                "<form class=\"row\" method=\"post\" action=\"/app/models/model/update\">{csrf}<input type=\"hidden\" name=\"model_id\" value=\"{mid}\">\
+                 <input class=\"input\" name=\"name\" value=\"{}\"><input class=\"input\" name=\"dimension\" value=\"{}\"><input class=\"input\" name=\"max_input_tokens\" value=\"{}\"><button type=\"submit\" class=\"btn\">Save</button></form>\n",
                 text(m, "name"),
                 number_text(m, "dimension"),
                 number_text(m, "max_input_tokens"),
             ));
-            out.push_str(&format!(
-                "<form method=\"post\" action=\"/app/models/model/delete\">{csrf}<input type=\"hidden\" name=\"model_id\" value=\"{mid}\"><button type=\"submit\">Delete model</button></form>\n"
+            n += 1;
+            out.push_str("<span class=\"row\">");
+            out.push_str(&app_shell::confirm(
+                &format!("m-model-{n}"),
+                "Delete model",
+                "Delete this model?",
+                &format!("The model {} is deleted.", m["name"].as_str().unwrap_or_default()),
+                "/app/models/model/delete",
+                &format!("{csrf}<input type=\"hidden\" name=\"model_id\" value=\"{mid}\">"),
             ));
+            out.push_str("</span>");
             if matches!(m["kind"].as_str(), Some("text_embedding" | "reranker")) {
                 out.push_str(&format!(
-                    "<form method=\"post\" action=\"/app/models/default/set\">{csrf}<input type=\"hidden\" name=\"kind\" value=\"{kind}\"><input type=\"hidden\" name=\"model_id\" value=\"{mid}\"><button type=\"submit\">Make default</button></form>\n"
+                    "<form method=\"post\" action=\"/app/models/default/set\">{csrf}<input type=\"hidden\" name=\"kind\" value=\"{kind}\"><input type=\"hidden\" name=\"model_id\" value=\"{mid}\"><button type=\"submit\" class=\"btn sm\">Make default</button></form>\n"
                 ));
             }
             out.push_str("</li>\n");
         }
         out.push_str(&format!(
-            "</ul>\n<form method=\"post\" action=\"/app/models/model/create\">{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\">\
-             <input name=\"name\"><select name=\"kind\"><option>text_embedding</option><option>image_embedding</option><option>reranker</option><option>ocr</option><option>chat</option></select>\
-             <input name=\"dimension\"><input name=\"max_input_tokens\"><button type=\"submit\">Add model</button></form>\n</section>\n"
+            "</ul>\n<form class=\"row\" method=\"post\" action=\"/app/models/model/create\">{csrf}<input type=\"hidden\" name=\"provider_id\" value=\"{id}\">\
+             <input class=\"input\" name=\"name\" placeholder=\"Model name\"><select class=\"select\" name=\"kind\"><option>text_embedding</option><option>image_embedding</option><option>reranker</option><option>ocr</option><option>chat</option></select>\
+             <input class=\"input\" name=\"dimension\" placeholder=\"Dimension\"><input class=\"input\" name=\"max_input_tokens\" placeholder=\"Max input tokens\"><button type=\"submit\" class=\"btn primary\">Add model</button></form>\n</div></section>\n"
         ));
     }
     out.push_str(&format!(
-        "<h2>New provider</h2>\n<form method=\"post\" action=\"/app/models/provider/create\">{csrf}\
-         <input name=\"name\"><input name=\"endpoint\"><select name=\"auth_scheme\"><option>none</option><option>bearer</option></select>\
-         <input name=\"secret\" type=\"password\" autocomplete=\"new-password\"><button type=\"submit\">Create provider</button></form>\n"
+        "<div class=\"card\"><div class=\"card-h\"><h2>New provider</h2></div><div class=\"card-b\"><form class=\"row\" method=\"post\" action=\"/app/models/provider/create\">{csrf}\
+         <input class=\"input\" name=\"name\" placeholder=\"Name\"><input class=\"input\" name=\"endpoint\" placeholder=\"Endpoint URL\"><select class=\"select\" name=\"auth_scheme\"><option>none</option><option>bearer</option></select>\
+         <input class=\"input\" name=\"secret\" type=\"password\" autocomplete=\"new-password\" placeholder=\"Secret\"><button type=\"submit\" class=\"btn primary\">Create provider</button></form></div></div>\n"
     ));
-    out.push_str("<h2>Project profiles</h2>\n");
+    out.push_str("<div class=\"card\"><div class=\"card-h\"><h2>Project profiles</h2></div><div class=\"card-b col\">\n");
     for p in profiles {
         out.push_str(&profile_section(p));
     }
-    out.push_str("<h2>Latest changes</h2>\n<table>\n<tbody>\n");
+    out.push_str("</div></div>\n<div class=\"card\"><div class=\"card-h\"><h2>Latest changes</h2></div><div class=\"table-wrap\"><table>\n<tbody>\n");
     for c in changes.iter().take(CHANGES_SHOWN) {
         let fields: Vec<&str> = c["fields"]
             .as_array()
@@ -400,6 +427,7 @@ fn page(
             escape_html(&fields.join(", ")),
         ));
     }
-    out.push_str("</tbody>\n</table>\n</body>\n</html>\n");
-    out
+    out.push_str("</tbody>\n</table></div></div>\n");
+    let alert = refused.map(|e| app_shell::alert(&e.to_string()));
+    app_shell::page(viewer, Page { screen: Nav::Models, title: "Models", body: out, alert })
 }

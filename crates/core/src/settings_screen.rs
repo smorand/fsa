@@ -12,6 +12,7 @@
 //! single use `CsrfStore` token (one instance per router), required only when
 //! the cookie authenticated the request. No secret is rendered or prefilled.
 
+use crate::app_shell::{self, Page, Screen as Nav, Viewer};
 use crate::errors::ToolError;
 use crate::state::AppState;
 use crate::token_screen::{CsrfStore, check_csrf, escape_html, resolve_person};
@@ -64,7 +65,7 @@ async fn set(
     };
     // Identity, then the admin refusal, then the one time token.
     if let Err(e) = s.app.require_admin(&person) {
-        return html(status_of(&e), error_page(&e));
+        return refused_page(&s.app, &person, &e).await;
     }
     let token = fields.remove("csrf_token");
     if let Some(refusal) = check_csrf(&s.csrf, source, &person, token.as_deref()) {
@@ -94,12 +95,11 @@ fn html(status: StatusCode, body: String) -> Response {
     (status, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body).into_response()
 }
 
-fn error_page(e: &ToolError) -> String {
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Settings</title></head>\n\
-         <body>\n<h1>Settings</h1>\n<p class=\"error\">{}</p>\n</body>\n</html>\n",
-        escape_html(&e.to_string())
-    )
+/// A refusal: the shell with the alert, the status of the error, the text the bare error
+/// page held.
+async fn refused_page(app: &AppState, person: &str, e: &ToolError) -> Response {
+    let viewer = Viewer::load(app, person).await;
+    app_shell::refusal(&viewer, Nav::Settings, status_of(e), &e.to_string())
 }
 
 async fn render(
@@ -122,9 +122,10 @@ async fn render(
     match read.await {
         Ok((sections, changes)) => {
             let token = s.csrf.issue(person);
-            html(status, page(person, &token, refused, &sections, &changes))
+            let viewer = Viewer::load(app, person).await;
+            html(status, page(&viewer, &token, refused, &sections, &changes))
         }
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(app, person, &e).await,
     }
 }
 
@@ -133,7 +134,7 @@ fn text(v: &Value, key: &str) -> String {
 }
 
 fn page(
-    person: &str,
+    viewer: &Viewer,
     token: &str,
     refused: Option<&ToolError>,
     sections: &[Value],
@@ -141,25 +142,23 @@ fn page(
 ) -> String {
     let csrf =
         format!("<input type=\"hidden\" name=\"csrf_token\" value=\"{}\">", escape_html(token));
-    let mut out = format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Settings</title></head>\n\
-         <body>\n<h1>Settings</h1>\n<p>Signed in as {}</p>\n",
-        escape_html(person)
-    );
-    if let Some(e) = refused {
-        out.push_str(&format!("<p class=\"error\">{}</p>\n", escape_html(&e.to_string())));
-    }
-    for sec in sections {
+    let mut tabs = String::new();
+    let mut panels = String::new();
+    for (i, sec) in sections.iter().enumerate() {
         let name = text(sec, "section");
+        let active = if i == 0 { " active" } else { "" };
+        tabs.push_str(&format!(
+            "<button type=\"button\" class=\"tab{active}\" data-tab=\"s-{name}\">{name}</button>"
+        ));
         let restart = if sec["restart_required"].as_bool() == Some(true) {
             "restart required"
         } else {
             "applied"
         };
-        out.push_str(&format!(
-            "<section data-section=\"{name}\">\n<h2>{name}</h2>\n<p>Source: {} ({restart})</p>\n",
+        let mut panel = format!(
+            "<section class=\"panel{active}\" id=\"s-{name}\" data-section=\"{name}\">\n<div class=\"card\"><div class=\"card-h\"><h2>{name}</h2></div><div class=\"card-b col\">\n<p class=\"muted\">Source: {} ({restart})</p>\n",
             text(sec, "source")
-        ));
+        );
         if let Some(secrets) = sec["secrets"].as_object() {
             for (path, s) in secrets {
                 let state = if s["has_value"].as_bool() == Some(true) {
@@ -167,25 +166,29 @@ fn page(
                 } else {
                     "not set".to_string()
                 };
-                out.push_str(&format!("<p>Secret {}: {state}</p>\n", escape_html(path)));
+                panel.push_str(&format!("<p>Secret {}: {state}</p>\n", escape_html(path)));
             }
         }
         let value = serde_json::to_string_pretty(&sec["value"]).unwrap_or_default();
-        out.push_str(&format!(
-            "<pre>{}</pre>\n<form method=\"post\" action=\"/app/settings/set\">{csrf}\
+        panel.push_str(&format!(
+            "<pre class=\"code\">{}</pre>\n<form class=\"col\" method=\"post\" action=\"/app/settings/set\">{csrf}\
              <input type=\"hidden\" name=\"section\" value=\"{name}\">\
-             <textarea name=\"value\" rows=\"4\" cols=\"60\">{{}}</textarea>\
-             <button type=\"submit\">Save</button></form>\n</section>\n",
+             <div class=\"field\"><label>Change</label><textarea class=\"textarea\" name=\"value\" rows=\"4\" cols=\"60\">{{}}</textarea></div>\
+             <div><button type=\"submit\" class=\"btn primary\">Save</button></div></form>\n</div></div></section>\n",
             escape_html(&value)
         ));
+        panels.push_str(&panel);
     }
-    out.push_str("<h2>Latest changes</h2>\n<table>\n<tbody>\n");
+    tabs.push_str(
+        "<button type=\"button\" class=\"tab\" data-tab=\"s-changes\">Latest changes</button>",
+    );
+    let mut rows = String::new();
     for c in changes.iter().take(CHANGES_SHOWN) {
         let fields: Vec<&str> = c["fields"]
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
-        out.push_str(&format!(
+        rows.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
             text(c, "at"),
             text(c, "person"),
@@ -194,6 +197,12 @@ fn page(
             escape_html(&fields.join(", ")),
         ));
     }
-    out.push_str("</tbody>\n</table>\n</body>\n</html>\n");
-    out
+    panels.push_str(&format!(
+        "<section class=\"panel\" id=\"s-changes\"><div class=\"card\"><div class=\"card-h\"><h2>Latest changes</h2></div><div class=\"table-wrap\"><table>\n<tbody>\n{rows}</tbody>\n</table></div></div></section>\n"
+    ));
+    let body = format!(
+        "<div class=\"vtabs\"><div class=\"tabs\" data-tabs=\"st\">{tabs}</div><div id=\"st\">{panels}</div></div>\n"
+    );
+    let alert = refused.map(|e| app_shell::alert(&e.to_string()));
+    app_shell::page(viewer, Page { screen: Nav::Settings, title: "Settings", body, alert })
 }

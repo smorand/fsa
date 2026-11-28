@@ -21,6 +21,7 @@
 //! `mcpfs_token` cookie; a bearer-authenticated request carries no ambient
 //! credential to forge and is exempt.
 
+use crate::app_shell::{self, Page, Screen, Viewer};
 use crate::errors::{Result, ToolError, code};
 use crate::identity::IdentityResolver;
 use crate::state::AppState;
@@ -109,11 +110,12 @@ async fn show(State(state): State<ScreenState>, headers: HeaderMap) -> Response 
             // Issued only once the page is actually about to render, so a failed
             // render never leaves an unusable token sitting in the store.
             let csrf_token = state.csrf.issue(&person);
-            let body = page_shell(&person, &rows, &csrf_token);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
-                .into_response()
+            let viewer = Viewer::load(&state.app, &person).await;
+            app_shell::html(StatusCode::OK, page_shell(&viewer, &rows, &csrf_token))
         }
-        Err(e) => error_response(&e),
+        Err(e) => {
+            app_shell::refuse(&state.app, &person, &headers, Screen::DeletedProjects, &e).await
+        }
     }
 }
 
@@ -154,9 +156,11 @@ async fn undelete(
     if let Some(resp) = check_csrf(&state.csrf, source, &person, form.csrf_token.as_deref()) {
         return resp;
     }
-    match undelete_project(&state.app, person, &form.project_id).await {
+    match undelete_project(&state.app, person.clone(), &form.project_id).await {
         Ok(()) => redirect_to_deleted_projects(),
-        Err(e) => error_response(&e),
+        Err(e) => {
+            app_shell::refuse(&state.app, &person, &headers, Screen::DeletedProjects, &e).await
+        }
     }
 }
 
@@ -229,45 +233,48 @@ fn unauthorized(err: &ToolError) -> Response {
         .into_response()
 }
 
-fn error_response(err: &ToolError) -> Response {
-    let status =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(json!({"error": err.code, "detail": err.message}))).into_response()
-}
-
 fn redirect_to_deleted_projects() -> Response {
     (StatusCode::SEE_OTHER, [(header::LOCATION, "/app/deleted-projects")]).into_response()
 }
 
 /// The page shell: every soft-deleted project visible to the caller, each
 /// with its own undelete form carrying the one shared `csrf_token`.
-fn page_shell(person: &str, rows: &[DeletedProjectRow], csrf_token: &str) -> String {
-    let person = escape_html(person);
+fn page_shell(viewer: &Viewer, rows: &[DeletedProjectRow], csrf_token: &str) -> String {
     let csrf_token = escape_html(csrf_token);
-    let table_rows: String = rows
-        .iter()
-        .map(|r| {
-            let project_id = escape_html(&r.project_id);
-            let owner = escape_html(&r.owner);
-            let deleted_at = escape_html(&r.deleted_at);
-            let days = r.days_until_permanent_removal;
-            format!(
-                "<tr data-project-id=\"{project_id}\"><td>{project_id}</td><td>{owner}</td>\
-                 <td>{deleted_at}</td><td>{days}</td><td>\
-                 <form method=\"post\" action=\"/app/deleted-projects/undelete\">\
-                 <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\
-                 <input type=\"hidden\" name=\"project_id\" value=\"{project_id}\">\
-                 <button type=\"submit\">Undelete</button></form></td></tr>\n"
-            )
-        })
-        .collect();
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\
-         <title>Deleted projects</title></head>\n<body>\n<h1>Deleted projects</h1>\n\
-         <p>Signed in as {person}</p>\n\
-         <table>\n<thead><tr><th>Project</th><th>Owner</th><th>Deleted at</th>\
-         <th>Days until permanent removal</th><th></th></tr></thead>\n\
-         <tbody>\n{table_rows}</tbody>\n</table>\n</body>\n</html>\n"
+    let body = if rows.is_empty() {
+        app_shell::empty_state(
+            "folder",
+            "No deleted project",
+            "Projects you delete stay here until their permanent removal.",
+        )
+    } else {
+        let table_rows: String = rows
+            .iter()
+            .map(|r| {
+                let project_id = escape_html(&r.project_id);
+                let owner = escape_html(&r.owner);
+                let deleted_at = escape_html(&r.deleted_at);
+                let days = r.days_until_permanent_removal;
+                format!(
+                    "<tr data-project-id=\"{project_id}\"><td>{project_id}</td><td>{owner}</td>\
+                     <td>{deleted_at}</td><td>{days}</td><td>\
+                     <form method=\"post\" action=\"/app/deleted-projects/undelete\">\
+                     <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\
+                     <input type=\"hidden\" name=\"project_id\" value=\"{project_id}\">\
+                     <button type=\"submit\" class=\"btn sm\">Undelete</button></form></td></tr>\n"
+                )
+            })
+            .collect();
+        format!(
+            "<div class=\"card\"><div class=\"table-wrap\"><table>\n\
+             <thead><tr><th>Project</th><th>Owner</th><th>Deleted at</th>\
+             <th>Days until permanent removal</th><th></th></tr></thead>\n\
+             <tbody>\n{table_rows}</tbody>\n</table></div></div>\n"
+        )
+    };
+    app_shell::page(
+        viewer,
+        Page { screen: Screen::DeletedProjects, title: "Deleted projects", body, alert: None },
     )
 }
 

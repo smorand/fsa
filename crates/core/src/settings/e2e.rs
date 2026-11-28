@@ -3003,7 +3003,7 @@ async fn e2e_0102_088_provider_and_model_actions_on_the_screen() {
     assert!(html.contains("No secret") && !html.contains("Secret stored"), "{html}");
     // provider/delete is refused while a model remains, then done.
     let (_, html) = fx.submit(&router, "provider/delete", &[("provider_id", &pid)]).await;
-    assert!(html.contains("class=\"error\""), "{html}");
+    assert!(html.contains("class=\"alert danger\""), "{html}");
     assert_eq!(fx.providers().await.len(), 1);
     fx.submit(&router, "model/delete", &[("model_id", &mid)]).await;
     let (s, _) = fx.submit(&router, "provider/delete", &[("provider_id", &pid)]).await;

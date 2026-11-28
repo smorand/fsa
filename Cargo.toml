@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/fsa", "crates/core", "crates/agent"]
 
 [workspace.package]
-version = "0.22.0"
+version = "0.23.0"
 edition = "2024"
 rust-version = "1.94.1"
 license = "MIT"
@@ -51,6 +51,7 @@ sha2 = "0.10"
 md-5 = "0.10"
 sha1 = { version = "0.10", features = ["compress"] }
 hex = "0.4"
+rust-embed = { version = "8.14", features = ["debug-embed"] }
 
 # ── identity ───────────────────────────────────────────────────────────────────
 jsonwebtoken = "9"

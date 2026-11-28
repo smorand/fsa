@@ -11,7 +11,7 @@ token store, a browser token screen at `/app/tokens`, and a browser screen at
 `/app/deleted-projects` listing soft-deleted projects with an undelete action. A browser screen at `/app/models` lets platform administrators manage the model registry (SPEC-0102). A browser screen at `/app/file-metadata` lets a member follow the metadata of one file and recalculate it (SPEC-0111). Git tags are
 supported: create (plain or annotated), delete, publish one tag, receive on fetch, pull and clone,
 each change audited in one line (SPEC-0052); every due tag can be previewed then
-published in one guarded push (`git.remote_push_tags`, SPEC-0054). Ships with `agent`, an
+published in one guarded push (`git.remote_push_tags`, SPEC-0054). The seven browser screens share one page shell drawn with the app-design system (SPEC-0118, `app_shell`, assets embedded with `rust-embed` and copied by `scripts/sync-design.sh`, served at `/app/assets/`; details in `.agent_docs/screens.md`). Ships with `agent`, an
 interactive CLI agent that drives the tools through an LLM (`./agent.sh`).
 
 Server state (metadata tree, ACL, git index, OAuth tokens) lives in a relational store:
@@ -377,5 +377,6 @@ The backlog is the `backlog/` directory: one `BL-NNNN_slug.md` file per item.
 - `.agent_docs/lineage.md` : the C# lineage, why it is no longer a reference, design decisions.
 - `.agent_docs/agent.md` : the CLI agent, its config, and the terminal invariants it depends on.
 - `.agent_docs/dependencies.md` : dependencies pinned off crates.io (datafusion git revision), why, and the exit condition (BL-0089).
+- `.agent_docs/screens.md` : the seven browser screens on the app-design system, the shared `app_shell`, the embedded assets and their sync.
 - `.agent_docs/search.md` : search tools, per-project index modes and auto indexing,
   BM25/RAG/reranking config, per-backend caveats.

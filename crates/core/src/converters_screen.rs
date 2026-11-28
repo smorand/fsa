@@ -12,6 +12,7 @@
 //! rendered: the answers carry `has_secret` only, the secret input has no
 //! value, and an empty secret on an edit keeps the stored one.
 
+use crate::app_shell::{self, Page, Screen as Nav, Viewer};
 use crate::errors::{Result, ToolError};
 use crate::settings::ConverterInput;
 use crate::state::AppState;
@@ -68,7 +69,7 @@ async fn act(
     // Identity, then the admin refusal, then the one time token: a non admin
     // cookie post is told it is not an admin, not that its token is wrong.
     if let Err(e) = s.app.require_admin(&person) {
-        return html(status_of(&e), error_page(&e));
+        return refused_page(&s.app, &person, &e).await;
     }
     let token = fields.remove("csrf_token");
     if let Some(refusal) = check_csrf(&s.csrf, source, &person, token.as_deref()) {
@@ -236,18 +237,18 @@ async fn render(
             // Issued once the page is about to render, so a refused read never
             // leaves a token behind.
             let token = s.csrf.issue(person);
-            html(status, page(person, &token, refused, &rows))
+            let viewer = Viewer::load(&s.app, person).await;
+            html(status, page(&viewer, &token, refused, &rows))
         }
-        Err(e) => html(status_of(&e), error_page(&e)),
+        Err(e) => refused_page(&s.app, person, &e).await,
     }
 }
 
-fn error_page(e: &ToolError) -> String {
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Converters</title></head>\n\
-         <body>\n<h1>Converters</h1>\n<p class=\"error\">{}</p>\n</body>\n</html>\n",
-        escape_html(&e.to_string())
-    )
+/// A refusal of the registry: the shell with the alert, the status of the error, the text
+/// the bare error page held.
+async fn refused_page(app: &AppState, person: &str, e: &ToolError) -> Response {
+    let viewer = Viewer::load(app, person).await;
+    app_shell::refusal(&viewer, Nav::Converters, status_of(e), &e.to_string())
 }
 
 fn text(v: &Value, key: &str) -> String {
@@ -262,46 +263,60 @@ fn list_of(v: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn page(person: &str, token: &str, refused: Option<&ToolError>, rows: &Rows) -> String {
+fn page(viewer: &Viewer, token: &str, refused: Option<&ToolError>, rows: &Rows) -> String {
     let csrf =
         format!("<input type=\"hidden\" name=\"csrf_token\" value=\"{}\">", escape_html(token));
-    let mut out = format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Converters</title></head>\n\
-         <body>\n<h1>Converters</h1>\n<p>Signed in as {}</p>\n",
-        escape_html(person)
-    );
-    if let Some(e) = refused {
-        out.push_str(&format!("<p class=\"error\">{}</p>\n", escape_html(&e.to_string())));
-    }
+    let mut out = String::new();
     let who = if rows.default.is_null() { "none".to_string() } else { text(&rows.default, "name") };
     out.push_str(&format!(
-        "<h2>Default</h2>\n<p data-default=\"converter\">{who}</p>\n\
-         <form method=\"post\" action=\"/app/converters/default/clear\">{csrf}<button type=\"submit\">Clear</button></form>\n\
-         <h2>Converters</h2>\n"
+        "<div class=\"card\"><div class=\"card-h\"><h2>Default</h2></div><div class=\"card-b row\"><span data-default=\"converter\">{who}</span>{}</div></div>\n\
+         <h2>Converters</h2>\n",
+        app_shell::confirm(
+            "m-default-clear",
+            "Clear",
+            "Clear this default?",
+            "The default converter is removed.",
+            "/app/converters/default/clear",
+            &csrf
+        )
     ));
+    if rows.converters.is_empty() {
+        out.push_str(&app_shell::empty_state(
+            "layers",
+            "No converter",
+            "Create a converter below to convert documents.",
+        ));
+    }
     for c in &rows.converters {
         converter_section(&mut out, &csrf, c);
     }
     out.push_str(&format!(
-        "<h2>New converter</h2>\n<form method=\"post\" action=\"/app/converters/converter/create\">{csrf}\
-         <input name=\"name\"><select name=\"form\"><option>program</option><option>http</option></select>\
-         <textarea name=\"command\"></textarea><input name=\"url\"><input name=\"auth_header\">\
-         <input name=\"secret\" type=\"password\" autocomplete=\"new-password\">\
-         <input name=\"file_field\"><input name=\"response_field\"><input name=\"extensions\">\
-         <input name=\"max_input_bytes\"><input name=\"timeout_seconds\">\
-         <button type=\"submit\">Create converter</button></form>\n<h2>Projects</h2>\n<ul>\n"
+        "<div class=\"card\"><div class=\"card-h\"><h2>New converter</h2></div><div class=\"card-b\"><form class=\"col\" method=\"post\" action=\"/app/converters/converter/create\">{csrf}\
+         <input class=\"input\" name=\"name\"><select class=\"select\" name=\"form\"><option>program</option><option>http</option></select>\
+         <textarea class=\"textarea\" name=\"command\"></textarea><input class=\"input\" name=\"url\"><input class=\"input\" name=\"auth_header\">\
+         <input class=\"input\" name=\"secret\" type=\"password\" autocomplete=\"new-password\">\
+         <input class=\"input\" name=\"file_field\"><input class=\"input\" name=\"response_field\"><input class=\"input\" name=\"extensions\">\
+         <input class=\"input\" name=\"max_input_bytes\"><input class=\"input\" name=\"timeout_seconds\">\
+         <button type=\"submit\" class=\"btn primary\">Create converter</button></form></div></div>\n<h2>Projects</h2>\n<ul>\n"
     ));
     for (id, c) in &rows.projects {
         let pid = escape_html(id);
         out.push_str(&format!(
-            "<li data-project=\"{pid}\">{pid}: {}\n<form method=\"post\" action=\"/app/converters/project/clear\">{csrf}\
-             <input type=\"hidden\" name=\"project_id\" value=\"{pid}\"><button type=\"submit\">Clear</button></form></li>\n",
+            "<li data-project=\"{pid}\">{pid}: {}\n{}</li>\n",
             text(c, "name"),
+            app_shell::confirm(
+                &format!("m-project-{pid}"),
+                "Clear",
+                "Clear this project converter?",
+                &format!("The converter of project {id} is removed."),
+                "/app/converters/project/clear",
+                &format!("{csrf}<input type=\"hidden\" name=\"project_id\" value=\"{pid}\">"),
+            ),
         ));
     }
     out.push_str(&format!(
         "</ul>\n<form method=\"post\" action=\"/app/converters/project/set\">{csrf}\
-         <input name=\"project_id\"><select name=\"converter_id\">"
+         <input class=\"input\" name=\"project_id\"><select class=\"select\" name=\"converter_id\">"
     ));
     for c in &rows.converters {
         out.push_str(&format!(
@@ -310,8 +325,10 @@ fn page(person: &str, token: &str, refused: Option<&ToolError>, rows: &Rows) -> 
             text(c, "name")
         ));
     }
-    out.push_str("</select><button type=\"submit\">Set project converter</button></form>\n");
-    out.push_str("<h2>Latest changes</h2>\n<table>\n<tbody>\n");
+    out.push_str(
+        "</select><button type=\"submit\" class=\"btn\">Set project converter</button></form>\n",
+    );
+    out.push_str("<div class=\"card\"><div class=\"card-h\"><h2>Latest changes</h2></div><div class=\"table-wrap\"><table>\n<tbody>\n");
     for c in &rows.changes {
         out.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n",
@@ -323,8 +340,9 @@ fn page(person: &str, token: &str, refused: Option<&ToolError>, rows: &Rows) -> 
             escape_html(&c.fields.join(", ")),
         ));
     }
-    out.push_str("</tbody>\n</table>\n</body>\n</html>\n");
-    out
+    out.push_str("</tbody>\n</table></div></div>\n");
+    let alert = refused.map(|e| app_shell::alert(&e.to_string()));
+    app_shell::page(viewer, Page { screen: Nav::Converters, title: "Converters", body: out, alert })
 }
 
 /// One converter: its summary, its edit form (the fields of its own form
@@ -338,19 +356,19 @@ fn converter_section(out: &mut String, csrf: &str, c: &Value) {
         ""
     };
     out.push_str(&format!(
-        "<section data-converter=\"{id}\">\n<h3>{}</h3>\n<p>{}{secret}</p>\n\
-         <form method=\"post\" action=\"/app/converters/converter/update\">{csrf}\
-         <input type=\"hidden\" name=\"converter_id\" value=\"{id}\"><input name=\"name\" value=\"{}\">",
+        "<section class=\"card\" data-converter=\"{id}\">\n<div class=\"card-h\"><h3>{}</h3></div><div class=\"card-b col\"><p class=\"muted\">{}{secret}</p>\n\
+         <form class=\"col\" method=\"post\" action=\"/app/converters/converter/update\">{csrf}\
+         <input type=\"hidden\" name=\"converter_id\" value=\"{id}\"><input class=\"input\" name=\"name\" value=\"{}\">",
         text(c, "name"),
         text(c, "form"),
         text(c, "name"),
     ));
     if http {
         out.push_str(&format!(
-            "<input name=\"url\" value=\"{}\"><input name=\"auth_header\" value=\"{}\">\
-             <input name=\"secret\" type=\"password\" autocomplete=\"new-password\">\
+            "<input class=\"input\" name=\"url\" value=\"{}\"><input class=\"input\" name=\"auth_header\" value=\"{}\">\
+             <input class=\"input\" name=\"secret\" type=\"password\" autocomplete=\"new-password\">\
              <label><input type=\"checkbox\" name=\"clear_secret\">Clear the secret</label>\
-             <input name=\"file_field\" value=\"{}\"><input name=\"response_field\" value=\"{}\">",
+             <input class=\"input\" name=\"file_field\" value=\"{}\"><input class=\"input\" name=\"response_field\" value=\"{}\">",
             text(c, "url"),
             text(c, "auth_header"),
             text(c, "file_field"),
@@ -358,17 +376,24 @@ fn converter_section(out: &mut String, csrf: &str, c: &Value) {
         ));
     } else {
         out.push_str(&format!(
-            "<textarea name=\"command\">{}</textarea>",
+            "<textarea class=\"textarea\" name=\"command\">{}</textarea>",
             escape_html(&list_of(c, "command").join("\n"))
         ));
     }
     out.push_str(&format!(
-        "<input name=\"extensions\" value=\"{}\"><input name=\"max_input_bytes\" value=\"{}\">\
-         <input name=\"timeout_seconds\" value=\"{}\"><button type=\"submit\">Save</button></form>\n\
-         <form method=\"post\" action=\"/app/converters/converter/delete\">{csrf}<input type=\"hidden\" name=\"converter_id\" value=\"{id}\"><button type=\"submit\">Delete converter</button></form>\n\
-         <form method=\"post\" action=\"/app/converters/default/set\">{csrf}<input type=\"hidden\" name=\"converter_id\" value=\"{id}\"><button type=\"submit\">Make default</button></form>\n</section>\n",
+        "<input class=\"input\" name=\"extensions\" value=\"{}\"><input class=\"input\" name=\"max_input_bytes\" value=\"{}\">\
+         <input class=\"input\" name=\"timeout_seconds\" value=\"{}\"><div class=\"row\"><button type=\"submit\" class=\"btn\">Save</button></div></form>\n<div class=\"row\">{delete}</div>\n\
+         <form method=\"post\" action=\"/app/converters/default/set\">{csrf}<input type=\"hidden\" name=\"converter_id\" value=\"{id}\"><button type=\"submit\" class=\"btn sm\">Make default</button></form>\n</div></section>\n",
         escape_html(&list_of(c, "extensions").join(", ")),
         c["max_input_bytes"],
         c["timeout_seconds"],
+        delete = app_shell::confirm(
+            &format!("m-converter-{id}"),
+            "Delete converter",
+            "Delete this converter?",
+            &format!("The converter {} is deleted.", c["name"].as_str().unwrap_or_default()),
+            "/app/converters/converter/delete",
+            &format!("{csrf}<input type=\"hidden\" name=\"converter_id\" value=\"{id}\">"),
+        ),
     ));
 }

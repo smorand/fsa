@@ -318,7 +318,7 @@ async fn e2e_0117_016_the_screen_lists_fourteen_sections_and_shows_the_secrets_a
     assert!(html.contains("Secret blob.secret_key: set, ends with cdef"), "{html}");
     assert!(html.contains("Secret blob.access_key: set, ends with 0001"), "{html}");
     assert!(!html.contains(ACCESS) && !html.contains(SECRET));
-    assert!(html.contains("<textarea name=\"value\" rows=\"4\" cols=\"60\">{}</textarea>"));
+    assert!(html.contains("<textarea class=\"textarea\" name=\"value\" rows=\"4\" cols=\"60\">{}</textarea>"));
     let token = token_of(&html);
     let (st, _) = fx
         .page(

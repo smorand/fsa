@@ -357,3 +357,7 @@
 | US-0355 | SPEC-0117 | probes and data checks | US-0354 | 1 | landed |  |  |
 | US-0356 | SPEC-0117 | the start, the seed and migrate | US-0355 | 1 | landed |  |  |
 | US-0357 | SPEC-0117 | PostgreSQL, docs and contract | US-0356 | 1 | landed |  |  |
+| US-0358 | SPEC-0118 | embedded assets and sync | main | 1 | landed |  |  |
+| US-0359 | SPEC-0118 | the shell and the tokens, trash, deleted projects screens | US-0358 | 1 | landed |  |  |
+| US-0360 | SPEC-0118 | models, converters, settings screens | US-0359 | 1 | landed |  |  |
+| US-0361 | SPEC-0118 | file metadata screen and docs | US-0360 | 1 | landed |  |  |

@@ -24,6 +24,7 @@
 //! ambient `mcpfs_token` cookie; a bearer-authenticated request carries no
 //! ambient credential to forge and is exempt.
 
+use crate::app_shell::{self, Page, Screen, Viewer};
 use crate::errors::{Result, ToolError, code};
 use crate::identity::IdentityResolver;
 use crate::state::AppState;
@@ -118,34 +119,38 @@ async fn show(
         Err(e) => return unauthorized(&e),
     };
     match query.mount_id {
-        Some(mount_id) => show_trash(&state, &person, &mount_id).await,
-        None => show_picker(&state, &person).await,
+        Some(mount_id) => show_trash(&state, &person, &mount_id, &headers).await,
+        None => show_picker(&state, &person, &headers).await,
     }
 }
 
-async fn show_trash(state: &ScreenState, person: &str, mount_id: &str) -> Response {
+async fn show_trash(
+    state: &ScreenState,
+    person: &str,
+    mount_id: &str,
+    headers: &HeaderMap,
+) -> Response {
     match list_trash(&state.app, person, mount_id).await {
         Ok(rows) => {
             // Issued only once the page is actually about to render, so a failed
             // render never leaves an unusable token sitting in the store.
             let csrf_token = state.csrf.issue(person);
-            let body = trash_page(person, mount_id, &rows, &csrf_token);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
-                .into_response()
+            let viewer = Viewer::load(&state.app, person).await;
+            let body = trash_page(&viewer, mount_id, &rows, &csrf_token);
+            app_shell::html(StatusCode::OK, body)
         }
-        Err(e) => error_response(&e),
+        Err(e) => refuse(&state.app, person, headers, &e).await,
     }
 }
 
-async fn show_picker(state: &ScreenState, person: &str) -> Response {
+async fn show_picker(state: &ScreenState, person: &str, headers: &HeaderMap) -> Response {
     match state.app.admin.list_projects_for(person).await {
         Ok(projects) => {
             let ids: Vec<String> = projects.into_iter().map(|p| p.id).collect();
-            let body = picker_page(person, &ids);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
-                .into_response()
+            let viewer = Viewer::load(&state.app, person).await;
+            app_shell::html(StatusCode::OK, picker_page(&viewer, &ids))
         }
-        Err(e) => error_response(&e),
+        Err(e) => refuse(&state.app, person, headers, &e).await,
     }
 }
 
@@ -184,7 +189,7 @@ async fn restore(
     }
     match restore_entry(&state.app, &person, &form.mount_id, &form.trash_path).await {
         Ok(()) => redirect_to_trash(&form.mount_id),
-        Err(e) => error_response(&e),
+        Err(e) => refuse(&state.app, &person, &headers, &e).await,
     }
 }
 
@@ -262,12 +267,6 @@ fn unauthorized(err: &ToolError) -> Response {
         .into_response()
 }
 
-fn error_response(err: &ToolError) -> Response {
-    let status =
-        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(json!({"error": err.code, "detail": err.message}))).into_response()
-}
-
 fn redirect_to_trash(mount_id: &str) -> Response {
     let location = format!("/app/trash?mount_id={}", urlencode(mount_id));
     (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
@@ -288,15 +287,28 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+/// A refusal for the caller: JSON as before, the shell with an alert for a browser.
+async fn refuse(
+    state: &Arc<AppState>,
+    person: &str,
+    headers: &HeaderMap,
+    err: &ToolError,
+) -> Response {
+    app_shell::refuse(state, person, headers, Screen::Trash, err).await
+}
+
 /// The trash listing page for one project: every trashed entry visible to
 /// the caller, each with its own restore form carrying the shared
 /// `csrf_token`.
-fn trash_page(person: &str, mount_id: &str, rows: &[TrashRow], csrf_token: &str) -> String {
-    let person = escape_html(person);
+fn trash_page(viewer: &Viewer, mount_id: &str, rows: &[TrashRow], csrf_token: &str) -> String {
     let mount_id_escaped = escape_html(mount_id);
     let csrf_token = escape_html(csrf_token);
     let body = if rows.is_empty() {
-        "<p>No trashed files.</p>\n".to_string()
+        app_shell::empty_state(
+            "trash",
+            "No trashed files",
+            "Deleted files of this project appear here.",
+        )
     } else {
         let table_rows: String = rows
             .iter()
@@ -309,28 +321,25 @@ fn trash_page(person: &str, mount_id: &str, rows: &[TrashRow], csrf_token: &str)
                      <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\
                      <input type=\"hidden\" name=\"mount_id\" value=\"{mount_id_escaped}\">\
                      <input type=\"hidden\" name=\"trash_path\" value=\"{trash_path}\">\
-                     <button type=\"submit\">Restore</button></form></td></tr>\n"
+                     <button type=\"submit\" class=\"btn sm\">Restore</button></form></td></tr>\n"
                 )
             })
             .collect();
         format!(
-            "<table>\n<thead><tr><th>Original path</th><th></th></tr></thead>\n\
-             <tbody>\n{table_rows}</tbody>\n</table>\n"
+            "<div class=\"card\"><div class=\"table-wrap\"><table>\n\
+             <thead><tr><th>Original path</th><th></th></tr></thead>\n\
+             <tbody>\n{table_rows}</tbody>\n</table></div></div>\n"
         )
     };
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\
-         <title>Trash: {mount_id_escaped}</title></head>\n<body>\n\
-         <h1>Trash: {mount_id_escaped}</h1>\n<p>Signed in as {person}</p>\n{body}</body>\n</html>\n"
-    )
+    let title = format!("Trash: {mount_id}");
+    app_shell::page(viewer, Page { screen: Screen::Trash, title: &title, body, alert: None })
 }
 
 /// The project picker rendered when no `mount_id` is given: one link per
 /// project the viewer is a member of.
-fn picker_page(person: &str, project_ids: &[String]) -> String {
-    let person = escape_html(person);
+fn picker_page(viewer: &Viewer, project_ids: &[String]) -> String {
     let body = if project_ids.is_empty() {
-        "<p>You are not a member of any project.</p>\n".to_string()
+        app_shell::empty_state("folder", "No project", "You are not a member of any project.")
     } else {
         let links: String = project_ids
             .iter()
@@ -342,13 +351,9 @@ fn picker_page(person: &str, project_ids: &[String]) -> String {
                 )
             })
             .collect();
-        format!("<ul>\n{links}</ul>\n")
+        format!("<div class=\"card\"><div class=\"card-b\"><ul>\n{links}</ul></div></div>\n")
     };
-    format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">\
-         <title>Trash</title></head>\n<body>\n<h1>Trash</h1>\n<p>Signed in as {person}</p>\n\
-         {body}</body>\n</html>\n"
-    )
+    app_shell::page(viewer, Page { screen: Screen::Trash, title: "Trash", body, alert: None })
 }
 
 /// Minimal HTML escaping: both the identity claim and listed paths are

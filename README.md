@@ -699,6 +699,21 @@ as proof. With `boost` 0 a single input ranks by best passage. A document is jud
 (the pool of `search.chunks`). If the keyword list fails, `search.chunks` and `search.documents` answer from the vector
 list, say `mode_used: rag` and add a `warning`. Tests: `cargo test -p fsa-core --lib --features rag -- e2e_0110_ reconcile`.
 
+## Browser screens and the design system
+
+The seven browser screens (`/app/tokens`, `/app/trash`, `/app/deleted-projects`, `/app/file-metadata`, `/app/models`,
+`/app/converters`, `/app/settings`) share one page shell drawn with the design system of
+`~/projects/perso/app-design/`: a sidebar that lists only the screens the person can open (tokens when git is on, file
+metadata for a member of a project, models, converters and settings for a platform administrator), a top bar with the
+person, light and dark themes chosen with the floating bar and kept by the browser, and design components (cards,
+tables, buttons, alerts, empty states). A delete or remove asks for a confirmation in a modal; the form it posts is the
+same one, with the same one time token. The design files are copied into `crates/core/web/assets/` by
+`scripts/sync-design.sh`, embedded in the binary with `rust-embed` and served without authentication at
+`/app/assets/...` (nothing is fetched from a CDN, nothing is built at install). To take a new version of the design:
+run `scripts/sync-design.sh`, then `cargo test -p fsa-core --lib -- e2e_0118_`, which fails while an embedded copy
+differs from `MANIFEST.sha256` or from the design folder. Routes, cookie, one time token, authorization and the tools the
+screens call are unchanged. Details in `.agent_docs/screens.md`.
+
 ## The file metadata screen
 
 `/app/file-metadata` is a browser page (always mounted, session cookie, as `/app/tokens`) where a member follows

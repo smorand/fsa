@@ -198,6 +198,7 @@ pub(crate) async fn build_with_env(
         .route("/health", get(health))
         .merge(mcp_router)
         .with_state(state.clone())
+        .merge(crate::app_shell::assets::router())
         .merge(crate::deleted_projects_screen::router(state.clone()))
         .merge(crate::models_screen::router(state.clone()))
         .merge(crate::settings_screen::router(state.clone()))
